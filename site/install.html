@@ -16,7 +16,7 @@
 <nav class="side">
   <a class="brand" href="index.html">
     <span class="mark">P</span>
-    <span><b>PushBox</b><span>1.0.0 · 自托管推送</span></span>
+    <span><b>PushBox</b><span>1.1.0 · 自托管推送</span></span>
   </a>
   <h3>文档</h3>
   <ul>
@@ -95,7 +95,7 @@ SELECT @@ngram_token_size;              -- 期望 2</code></pre>
 
   <h3>④ 构建与运行</h3>
   <pre class="code" data-code="bash"><code>export JAVA_HOME=/path/to/jdk-21        # 机器默认 JAVA_HOME 常常是 JDK 8
-mvn -B -DskipTests package              # server/target/pushbox-server-1.0.0.jar
+mvn -B -DskipTests package              # server/target/pushbox-server-1.1.0.jar
 bash deploy/run-dev.sh                  # 默认 8080；脚本自己 source deploy/env/local.env</code></pre>
   <p>换端口、改配置一律往后加参数即可（Spring 的命令行覆盖比改 YAML 更适合联调）：</p>
   <pre class="code" data-code="bash"><code>bash deploy/run-dev.sh --server.port=8081 \
@@ -105,13 +105,13 @@ bash deploy/run-dev.sh                  # 默认 8080；脚本自己 source depl
   <h3>⑤ 自检</h3>
   <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:8080/healthz
 cd deploy/probe &amp;&amp; npm install          # 只需一次（依赖 ws）
-node p0-e2e.mjs                         # 默认打 127.0.0.1:8080；23/23 才算这套装对了
+node p0-e2e.mjs                         # 默认打 127.0.0.1:8080；末行 N/N 且 0 失败才算这套装对了
 PB_BASE=http://127.0.0.1:8081 node p0-e2e.mjs</code></pre>
   <p>探针是一个"软件版 Android 设备"：自己生成两把密钥，逐字节复刻握手、签名、帧加密、补拉与频道接入过滤。它跑通之后，客户端侧只剩 UI 与存储，不会再有协议层意外。</p>
 
   <h3>⑥ 单元测试的跑法与两个坑</h3>
   <pre class="code" data-code="bash"><code>source deploy/env/local.env
-mvn -B -pl core,server test             # 197/197（core 26 + server 171）</code></pre>
+mvn -B -pl core,server test             # 260/260（core 38 + server 222）</code></pre>
   <ul>
     <li><b>必须 <code>-pl core,server</code> 同 reactor</b>：单跑 <code>server</code> 会用本地仓库里的旧 <code>core</code> jar，新加的类报 <code>NoClassDefFoundError</code>。</li>
     <li>碰库/碰桶的用例挂 <code>@EnabledIfEnvironmentVariable(named="PB_S3_ACCESS_KEY")</code>，忘了 source 就是<b>静默 skip</b>。看到用例总数变小先查环境变量，不要改测试。</li>
@@ -124,16 +124,18 @@ mvn -B -pl core,server test             # 197/197（core 26 + server 171）</cod
   <table>
     <thead><tr><th>拓扑</th><th>起什么</th><th>怎么切</th></tr></thead>
     <tbody>
-      <tr><td>A（默认）</td><td><code>pushbox-server</code> + <code>caddy</code></td><td>把 <code>SPRING_DATASOURCE_URL</code> / <code>PB_S3_ENDPOINT</code> 指到已有的那台 MySQL / 桶</td></tr>
-      <tr><td>B（完全独立）</td><td>再加上 <code>mysql:8.4</code>（带 <code>--ngram_token_size=2</code>）与 <code>rustfs</code></td><td>取消 compose 里那两段的注释，地址改回 service-name</td></tr>
+      <tr><td>A（默认）</td><td><code>pushbox-server</code> + <code>caddy</code></td><td>把 <code>PB_DB_URL</code> / <code>PB_S3_ENDPOINT</code> 指到已有的那台 MySQL / 桶。<b>不要写 <code>SPRING_DATASOURCE_URL</code></b>：prod  profile 里唯一的映射点是 <code>application-prod.yml</code>，两个名字各声称拥有同一个键时，排查盯 yml 会看不出真实取值来自哪</td></tr>
+      <tr><td>B（完全独立）</td><td>再加上 <code>mysql:8.4</code>（带 <code>--ngram_token_size=2</code>）与 <code>rustfs</code></td><td>取消 compose 里那两段的注释，地址改回 service-name；嫌手写麻烦可以直接用现成的 <code>docker-compose-wsl.yml</code></td></tr>
     </tbody>
   </table>
   <pre class="code" data-code="bash"><code>cd deploy
 cp env/prod.env.example .env            # 填真值；.env 不提交
-docker build -t pushbox/server:1.0.0 -f Dockerfile ..
-docker compose up -d
-docker compose --profile monitoring up -d   # 另起 Prometheus + Grafana（指标只绑 127.0.0.1）</code></pre>
-  <div class="callout warn"><b>诚实说明</b><p>这套资产做过 Dockerfile/compose/Caddyfile 的语法与 YAML 解析校验，但<b>没有在本机 <code>docker compose up</code> 实跑过</b>（本机不在 PATH 里装 Docker）。第一次上生产请留一次现场验证的余量。</p></div>
+docker compose up -d                    # 拉 CI 推到 Docker Hub 的镜像
+# 想跑自己的代码（fork、离线、改了服务端）：本地构建走本文件的 build: 段，context 是仓库根
+docker compose up -d --build
+# 监控栈（Prometheus + Grafana）在另一本文件里，要监控才多传一个 -f：
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d</code></pre>
+  <div class="callout warn"><b>诚实说明</b><p>生产这套资产在 2026-10-20 用隔离 project <b>真起过一次</b> <code>docker compose up</code>（MySQL / RustFS 复用测试栈），一轮下来撞出并修掉五个"配置里写了、进程不消费"的缺陷——完整清单见 <code>RELEASE-CHECKLIST.md</code> 与 CHANGELOG。<b>还没验过的是另一件事</b>：从 Docker Hub 拉 CI 产物那条路（镜像要等首次 tag 才推），以及真实 TLS/反代前置。第一次上生产仍然请留一次现场验证的余量。</p></div>
 
   <h3>HTTPS 与自签 CA</h3>
   <p>当前联调走的是裸 HTTP（内网）。生产要么用 Caddy 的 Let's Encrypt，要么走自签根 CA。<b>两端接证书的方式完全不同</b>：</p>

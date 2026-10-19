@@ -16,7 +16,7 @@
 <nav class="side">
   <a class="brand" href="index.html">
     <span class="mark">P</span>
-    <span><b>PushBox</b><span>1.0.0 · 自托管推送</span></span>
+    <span><b>PushBox</b><span>1.1.0 · 自托管推送</span></span>
   </a>
   <h3>文档</h3>
   <ul>
@@ -126,7 +126,7 @@
 
   <h2 id="quickstart">三分钟跑起来</h2>
   <pre class="code" data-code="bash"><code>cp deploy/env/prod.env.example deploy/env/local.env     # 填 PB_DB_PASSWORD / PB_S3_*
-JAVA_HOME=/path/to/jdk-21 mvn -B -DskipTests package    # 产出 server/target/pushbox-server-1.0.0.jar
+JAVA_HOME=/path/to/jdk-21 mvn -B -DskipTests package    # 产出 server/target/pushbox-server-1.1.0.jar
 bash deploy/run-dev.sh                                  # 默认 8080，脚本自己 source local.env
 node deploy/probe/p0-e2e.mjs                            # 端到端验收：23/23</code></pre>
   <p>然后发第一条消息（入站接口是 <code>POST {base}/message</code>，<b>不在</b> <code>/api/v1</code> 下，凭据在 body 里）：</p>
@@ -139,11 +139,11 @@ node deploy/probe/p0-e2e.mjs                            # 端到端验收：23/2
   <table>
     <thead><tr><th>跑法</th><th>判什么</th><th>当前</th></tr></thead>
     <tbody>
-      <tr><td><code>mvn -B -pl core,server test</code></td><td>加密库 + 服务端逻辑（含碰库碰桶用例）</td><td>197 / 197</td></tr>
-      <tr><td><code>node deploy/probe/p0-e2e.mjs</code></td><td>逐字节复刻握手、签名、帧加密、补拉与<b>频道接入过滤</b>的端到端验收</td><td>23 / 23</td></tr>
-      <tr><td><code>dotnet test windows/PushBox.sln</code></td><td>C# 与 Java 的协议向量对齐 + PC 端每一层逻辑</td><td>553 / 553</td></tr>
+      <tr><td><code>mvn -B -pl core,server test</code></td><td>加密库 + 服务端逻辑（含碰库碰桶用例）</td><td>260 / 260</td></tr>
+      <tr><td><code>node deploy/probe/p0-e2e.mjs</code></td><td>逐字节复刻握手、签名、帧加密、补拉与<b>频道接入过滤</b>的端到端验收</td><td>末行 N/N、0 失败</td></tr>
+      <tr><td><code>dotnet test windows/PushBox.sln</code></td><td>C# 与 Java 的协议向量对齐 + PC 端每一层逻辑</td><td>556 / 556</td></tr>
       <tr><td><code>dotnet run --project windows/PushBox.LiveCheck</code></td><td>真 WebSocket + 真服务端上的十二条判据</td><td>12 / 12</td></tr>
-      <tr><td>Android 模拟器走查</td><td>通知、角标、头像、图片九宫格、断网重连补齐</td><td>逐条已验</td></tr>
+      <tr><td>Android 走查</td><td>通知、角标、头像、图片九宫格、断网重连补齐</td><td>发布前逐项走查，判据见 <code>RELEASE-CHECKLIST.md</code></td></tr>
     </tbody>
   </table>
   <div class="callout warn"><b>还没测的</b><p>小米 / 华为 / OPPO / vivo 的保活与被杀率矩阵只能真机逐品牌跑，模拟器代替不了；深色与字体放大 200% 的系统走查也还没做。</p></div>

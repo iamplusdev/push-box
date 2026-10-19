@@ -103,10 +103,26 @@ for COMPOSE in "$ROOT_DIR/deploy/docker-compose.yml" "$ROOT_DIR/deploy/docker-co
     fi
 done
 
-# 8. 输出总结
+# 8. 更新官网 site/ 页面里写死的版本
+#    站点的顶栏徽章、产物文件名都是手写的 X.Y.Z，不归本脚本管时每次发版都会留一处假数字
+#    （1.1.0 这轮就漂成了：构建配置全对，site 七个页面还挂着 1.0.0）。
+echo "🌐 官网 site/"
+for HTML in "$ROOT_DIR"/site/*.html; do
+    [ -f "$HTML" ] || continue
+    sed -i.bak -E \
+        -e "s#[0-9]+\.[0-9]+\.[0-9]+( · 自托管推送)#$VERSION\1#" \
+        -e "s#(<span class=\"ver\">)[^<]*(</span>)#\1$VERSION\2#" \
+        -e "s#pushbox-server-[0-9]+\.[0-9]+\.[0-9]+\.jar#pushbox-server-$VERSION.jar#" \
+        "$HTML"
+    rm -f "${HTML}.bak"
+done
+echo "✅ site/*.html: 徽章与 jar 文件名 = $VERSION"
+
+# 9. 输出总结
 echo ""
 echo "🎉 版本号已同步到所有平台: $VERSION"
 echo "   - Android: versionCode=$VERSION_CODE, versionName=$VERSION"
 echo "   - Windows: Version=$VERSION"
 echo "   - Maven: pushbox-parent=$VERSION（root/core/server）"
 echo "   - Docker: docker.io/iamplusdev/push-box:$VERSION（生产 compose）/ pushbox/server:$VERSION（WSL 本地构建）"
+echo "   - 官网: site/*.html 徽章与产物文件名"

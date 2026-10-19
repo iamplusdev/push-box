@@ -3,16 +3,18 @@
 本文档定义每次正式发布前必须完成的验证步骤。自动化能覆盖的部分写在 `scripts/release-verify.sh`（先跑它，再动手查剩下的）。
 
 > 下面的勾选状态是 **v1.1.0 这一轮**（截至 2026-10-20）的实况：勾上的每一项都对应一条真跑过的命令，没勾的就是还没做或做不了。发下一版时先把复选框清干净。
-> 本轮刻意留空的：CI 门禁的真实运行（要等 push 到远端）、Prometheus/Grafana 起栈（`age` 与监控栈没在这台 WSL 上装/起）、Android 与 Windows 两端复跑、镜像标签与 Docker Hub 推送、`max_level` 拦截用例。
+> 本轮刻意留空的：CI 门禁的真实运行（要等 push 到远端）、Prometheus/Grafana 起栈（`age` 与监控栈没在这台 WSL 上装/起）、镜像标签与 Docker Hub 推送、`max_level` 拦截用例。
 
 ---
 
 ## 前置条件
 
-- [ ] 三端本地全量复跑通过：
-  - 服务端 `mvn -B -q -pl server -am test`（凭据来自 `deploy/env/local.env`，只走环境变量）。**要真的 source 它**：111 个用例带 `@EnabledIfEnvironmentVariable(PB_S3_ACCESS_KEY)`，没有桶凭据时它们整批 skip，而 `mvn test` 的退出码仍然是 0——反应堆收集 260 条（server 222 + core 38）看着像全绿，实际只执行了 149 条。`.github/workflows/ci.yml` 的服务端 job 就是为这一条建的：真 MySQL + 真 RustFS，末尾把 surefire 汇总的 `skipped` 断成必须为 0。另外 `mvn` 必须跑在 JDK 21 上（`server/pom.xml` 要 `release=21`），Windows 上 `JAVA_HOME` 若指向 JDK 8 会在 `pushbox-core` 直接炸 `class file version 61.0 ... only recognizes up to 52.0`
-  - Windows `dotnet test PushBox.Crypto.Tests`（当前基线 556 条，只许涨不许跌；这个测试工程引用 WPF 主工程，只能在 Windows runner 上跑）
-  - Android `./gradlew :app:assembleDebug` 与 `:app:assembleRelease`
+- [x] 三端本地全量复跑通过（2026-10-20 实跑，下面每条都写了真判据）：
+  - 服务端 `mvn -B -pl server -am test`（凭据来自 `deploy/env/local.env`，只走环境变量）→ BUILD SUCCESS，surefire 汇总 **260 条 / 跳过 0**（server 222 + core 38），与 `.github/workflows/ci.yml` 末尾的基线断言同口径。**要真的 source 它**：111 个用例带 `@EnabledIfEnvironmentVariable(PB_S3_ACCESS_KEY)`，没有桶凭据时它们整批 skip，而 `mvn test` 的退出码仍然是 0——260 条看着像全绿，实际只执行了 149 条。另外 `mvn` 必须跑在 JDK 21 上（`server/pom.xml` 要 `release=21`），Windows 上 `JAVA_HOME` 若指向 JDK 8 会在 `pushbox-core` 直接炸 `class file version 61.0 ... only recognizes up to 52.0`
+    - 本机复跑要先绕开一个环境坑：`127.0.0.1:3306` 现在是另一套 `--network host` 的 `mysql8`（mysql:8.0）容器在听，`pushbox` 用户对 `pushbox` 库没权限，Flyway 报 `Access denied for user 'pushbox'@'%' to database 'pushbox'`，106 条 DB 用例整批红——这是拓扑不是缺陷。本项目那套 `pushbox-test-mysql-1` 不发布 3306，Windows 也路由不到 docker 网桥（`172.18.0.3:3306` 不通）。可用的复现法：临时起一个一次性容器（`-p 13306:3306`，带上 `--ngram_token_size=2`，否则 FULLTEXT 的 ngram 索引按默认 3 建，和 CI 不是同一份 schema），用 `SPRING_DATASOURCE_URL` 环境变量指过去（**不动 `application-dev.yml`**），跑完 `docker rm -f`；桶沿用 `local.env` 那台存储机，因为本机 WSL 和镜像加速器都取不到 `minio/mc`
+  - 管理台 `cd web-admin && npm ci && npm run build` → `vue-tsc -b` 无报错，`dist/index.html` 非空、25 个产物文件（CI 断言的正是这两条）
+  - Windows `dotnet test PushBox.Crypto.Tests -c Release` → **556/556、退出码 0**（此前 `BubbleView` 的视觉树定位器过时挂着 8 条红；判分要把全量日志落盘再看退出码，`| tail` 会把失败压成"看着像绿"）
+  - Android `./gradlew :app:assembleDebug` 与 `:app:assembleRelease` 均 BUILD SUCCESSFUL：debug 包 26.6 MB、release 包 12.7 MB，`apksigner verify --print-certs` 出 V2 签名（`CN=iamplus`，证书 SHA-256 `99071932aa9084636ba7f5769b818d43903f4cc124f464073e47c35fc38dec4e` —— 换 key 就比对这一串）。同一次构建顺带证明 `outputs/mapping/release/mapping.txt` 确实落在 CI artifact 归档的路径上，**它实测 205 MB**，比直觉里的"几 MB"大两个数量级，配额按这个体量算
 - [x] `bash scripts/release-verify.sh` 零 FAIL
 - [x] CHANGELOG.md 已更新并标注发布日期
 - [x] 版本号一致（Android `versionName` / Windows `<Version>` 与 `MyAppVersion` / Docker 镜像 tag / 四个 pom / `web-admin/package.json`，一次由 `scripts/set-version.sh` 写全），且 `versionCode` = `major*10000 + minor*100 + patch` 且**严格大于上一版**（写小了装不上：`INSTALL_FAILED_VERSION_DOWNGRADED`）
@@ -70,10 +72,10 @@
 ## Android 发布
 
 ### 签名验证
-- [ ] CI 上四个 keystore secrets 都已配置（缺任何一个 `assembleRelease` 直接失败，不会悄悄出未签名包）
-- [ ] 签名验证通过：`apksigner verify --print-certs dist-apk/pushbox-release-*.apk`
-- [ ] **签名证书与上一版一致**（换 key 等于老用户必须卸载重装，历史消息全丢）
-- [ ] Keystore 与 `mapping.txt` 备份到安全位置（不在 Git 中；R8 崩溃栈全靠 mapping）
+- [x] CI 上四个 keystore secrets 都已配置（缺任何一个 `assembleRelease` 直接失败，不会悄悄出未签名包）。2026-10-20 配的是 `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` —— 这条只算"配好了"，门禁还没真跑过（见前置条件），首次 push 后要看 job 日志里签名那段
+- [x] 签名验证通过：`build-tools/37.0.0/apksigner.bat verify --print-certs app/build/outputs/apk/release/app-release.apk` → V2 签名，`CN=iamplus, OU=iamplus, O=iamplus, L=ZhengZhou, ST=HeNan, C=CN`（本机 `assembleRelease` 走的是 `android/local.properties` + `android/dev/pushbox-release.jks`；CI 走 secrets，两边必须是同一把 key）
+- [x] **签名证书与上一版一致**（换 key 等于老用户必须卸载重装，历史消息全丢）：v1.1.0 是首个公开版本，没有上一版可比，所以这一轮把基线钉成指纹 —— 证书 SHA-256 `99071932aa9084636ba7f5769b818d43903f4cc124f464073e47c35fc38dec4e`，以后每版比对这一串
+- [ ] Keystore 与 `mapping.txt` 备份到安全位置（不在 Git 中；R8 崩溃栈全靠 mapping）。**这轮两处都是欠的**：keystore 备份被明确推迟；`mapping.txt` 现在只进 workflow artifact，公开仓的保留期上限是 90 天，过期就再也 retrace 不了 —— 真要长期可回溯得自己存一份
 
 ### 兼容性测试
 - [ ] 在 API 26（Android 8.0）真机/模拟器上安装成功
@@ -161,7 +163,10 @@
 - [x] `README.md` / `deploy/QUICK-START.md` 的安装步骤与实际流程一致（尤其 env 变量清单与密钥生成命令）
 - [x] `CHANGELOG.md` 包含本次发布的所有重要变更
 - [x] `docs/PushBox-软件设计方案.md` 的决策与实现一致（安全口径、限速阈值、判死阈值两端差异）
-- [ ] 三份端侧 README 与官网 `site/` 页面（API、安装、使用说明）已更新新端点
+- [x] 官网 `site/` 七个页面的版本徽章、`pushbox-server-*.jar` 文件名与测试计数已跟本次版本对齐。根因也堵了：`scripts/set-version.sh` 现在会一起改 `site/*.html`，`scripts/release-verify.sh` 多了一条"站点徽章必须只有一种取值且等于 pom"的断言（v1.1.0 这轮就是它抓出来的：构建配置全对，站点还挂着 1.0.0）
+- [x] 文档里的测试计数改成实测值：**Java 260（core 38 + server 222，跳过 0）**、**C# 556**。以前 README / 开发指南 / 测试指南 / `site/` 四处都写 197 与 553，是两版之前的数字
+- [ ] 管理台那组 `/api/admin/scheduled-tasks` 只在 `docs/PushBox-软件设计方案.md` 与 CHANGELOG 里有描述，官网没有管理 API 页（站点口径是公开入口 `/message` + 客户端协议）。要给出站用户提供 curl 级参考，得新建一页——本轮没做
+- [x] "三份端侧 README"这个说法本身是假的：`android/README.md` 与 `windows/README.md` 都不存在，端侧说明在 `docs/用户使用手册.md` 与 `docs/开发指南.md`（这条判据已按实际文件改口）
 - [x] 故障排查指南补充了新发现的常见问题
 - [x] 提交前扫一遍真实地址/凭据泄漏：`grep -rInE '\b(192\.168\.[0-9]+\.[0-9]+|100\.94\.[0-9]+\.[0-9]+)\b' --include='*' .`（文档与代码只用占位符，测试夹具用 RFC 保留段）
 

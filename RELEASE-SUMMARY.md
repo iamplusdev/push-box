@@ -58,12 +58,13 @@
 | 项 | 结果 |
 |----|------|
 | Android `:app:assembleDebug` | BUILD SUCCESSFUL（仅遗留 deprecation 警告） |
-| Android `:app:assembleRelease` | 12.7 MB（debug 26.7 MB），R8 + `mapping.txt` 产出正常；无 keystore 时被 `requireReleaseSigning` 拦下 |
-| 服务端 `mvn -B -pl server -am test` | 187 条，0 失败 0 错误，111 条跳过（依赖外部 MySQL/RustFS 的那批） |
+| Android `:app:assembleRelease` | BUILD SUCCESSFUL，12.7 MB（debug 26.7 MB），`apksigner verify` 出 V2 签名；无 keystore 时被 `requireReleaseSigning` 拦下。R8 的 `mapping/release/mapping.txt` **实测 205 MB** —— CI 把它归档成 workflow artifact（公开仓保留期上限 90 天），别按"几 MB"估配额 |
+| 服务端 `mvn -B -pl server -am test` | 2026-10-20 带齐凭据复跑：**260 条全执行（core 38 + server 222），0 失败 0 错误 0 跳过**，BUILD SUCCESSFUL。没 source `deploy/env/local.env` 时是 149 执行 + 111 跳过、退出码照样 0，所以"跳过必须为 0"才是判据（`ci.yml` 末尾的断言与此同口径） |
 | Windows `dotnet test PushBox.Crypto.Tests` | 556/556（Debug 与 Release 各一遍） |
 | Windows `dotnet build` | 0 警告 0 错误 |
 | `bash scripts/release-verify.sh` | 见下方"发布前动作"，跑通即零 FAIL |
-| Docker 镜像构建 | **未实跑**（本机无 docker），compose/Caddyfile/Dockerfile 只做过语法与静态校验 |
+| Docker 镜像构建 | 2026-10-20 用隔离 project **真起过一次** `docker compose up`（MySQL / RustFS 复用 WSL 测试栈），`deploy/Dockerfile` 的多阶段构建与容器 healthcheck 都过了，一轮撞出五个"配置写了、进程不消费"的缺陷（见 commit 3dd95d5）。**仍未验**的是从 Docker Hub 拉 CI 产物那条路：镜像还没推过，要等首次 `v*` tag |
+| 管理台 `cd web-admin && npm ci && npm run build` | `vue-tsc -b` 无报错，`dist/index.html` 非空 + 25 个产物文件 |
 
 ---
 
