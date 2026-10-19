@@ -295,7 +295,8 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 ## 持续集成（GitHub Actions）
 
-推到 `main` 自动出各端产物、推 Docker Hub；打 `v*` 标签额外发布 GitHub Release。四个工作流都在 `.github/workflows/`。
+推到 `main` 自动出各端产物、推 Docker Hub；打 `v*` 标签额外发布 GitHub Release。五个工作流都在
+`.github/workflows/`，其中 `ci.yml` 是 PR 门禁（真 MySQL + 真对象存储，末尾断言"闸门用例一条都没被跳过"）。
 
 | 工作流 | 触发 | 产出 |
 |--------|------|------|
@@ -326,13 +327,17 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 - **明文 HTTP 是可选项而不是默认护栏**：客户端允许 `http://IP:端口`（内网/Tailscale 场景），是否上 TLS 由部署者决定；密文只保证「服务端 → 客户端」这一跳，端到端不在设计范围内。
 - **消息永久保留**：没有自动过期；容量治理靠报表 + 手动清理。
 
+## 安全
+
+漏洞请不要开公开 issue，走 [SECURITY.md](SECURITY.md) 里的私密渠道；GitHub 仓已开启私密安全报告。
+
 ## License
 
 [MIT](LICENSE)
 
 ---
 
-**文档版本**：v1.0.2  
-**最后更新**：2026-10-19  
+**文档版本**：v1.1.0  
+**最后更新**：2026-10-20  
 **主分支**：main  
-**仓库**：[GitHub](https://github.com/iamplusdev/push-box.git) | [Gitee](https://gitee.com/iamplus/push-box.git) | [Gitea](https://gitea.iamplus.cn/iamplus/push-box.git)
+**仓库**：[GitHub](https://github.com/iamplusdev/push-box.git)（主仓）| [Gitee](https://gitee.com/iamplus/push-box.git) | [Gitea](https://gitea.iamplus.cn/iamplus/push-box.git)（镜像，暂未同步）

@@ -132,13 +132,20 @@ cn.iamplus.pushbox.data.MessageRow -> a.b.c:
 ```
 
 ### Q: 如何还原混淆前的堆栈？
-**A**: 使用 `retrace.sh` 工具：
+**A**: 用 SDK 自带的 `retrace`。它由 **Android SDK Command-line Tools** 提供，不在 `build-tools` 里：
+
 ```bash
-# Android SDK 自带
-$ANDROID_HOME/tools/proguard/bin/retrace.sh \
-    app/build/outputs/mapping/release/mapping.txt \
+# 先装组件（本机若只有 build-tools，retrace 是不存在的）
+sdkmanager "cmdline-tools;latest"
+
+# 路径是 cmdline-tools/latest/bin（旧文档写的 tools/proguard/bin 在 SDK 36 上已不存在）
+$ANDROID_HOME/cmdline-tools/latest/bin/retrace \
+    mapping.txt \
     crash_stacktrace.txt
 ```
+
+`mapping.txt` 从哪来：CI 每次构建都把它存成 workflow run 的 artifact `mapping-<tag>`（见
+`.github/workflows/build-apk.yml`），需要仓库读权限、公开仓 90 天过期。
 
 ---
 
