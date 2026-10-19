@@ -344,31 +344,23 @@ public class BubbleViewTest
         new("01HXYZ", 7, "ch", "sender", text, level, typeLabel, 1_700_000_000_000, mediaCount, null, link);
 
     /// <summary>
+    /// Build 返回外层三列 Grid（头像 / 间距 / 气泡），第三列是 BubbleView 内部那个两行 wrapper：
+    /// 第一行放气泡主体，第二行放时间戳。按 Grid.GetColumn==2 定位而不是 OfType&lt;Grid&gt;()——
+    /// 头像 AvatarBox 自己也是 Grid，按类型取会撞上它。
+    /// </summary>
+    private static Grid Wrapper(FrameworkElement bubble) =>
+        ((Grid)bubble).Children.OfType<Grid>().Single(w => Grid.GetColumn(w) == 2);
+
+    /// <summary>气泡内容列：类型标签、竖条+气泡那一行、打开链接都在这一个 StackPanel 里（时间戳不在）。</summary>
+    private static StackPanel BubbleContent(FrameworkElement bubble) =>
+        Wrapper(bubble).Children.OfType<StackPanel>().Single();
+
+    /// <summary>
     /// 气泡外面那一层：竖条占第 0 列，气泡本身占第 1 列。按类型找而不是按序号——
     /// 没有类型标签时它才是 Children[0]，写死下标等于把"有没有标签"这件事焊进测试。
     /// </summary>
-    /// <summary>
-    /// 新版 BubbleView.Build 返回的是外层三列 Grid（头像 + 间距 + 气泡内容），
-    /// BarRow 在第三列的 StackPanel 里。
-    /// </summary>
-    private static Grid BarRow(FrameworkElement bubble)
-    {
-        // bubble 是外层 Grid，第三列是气泡内容的 StackPanel
-        var outer = bubble as Grid;
-        if (outer is null) throw new InvalidCastException("BubbleView.Build must return a Grid");
-        var bubbleContent = outer.Children.OfType<StackPanel>().FirstOrDefault();
-        if (bubbleContent is null) throw new InvalidOperationException("No bubble content StackPanel found");
-        // 从气泡内容里找 BarRow Grid
-        return bubbleContent.Children.OfType<Grid>().Single();
-    }
-
-    /// <summary>从外层 Grid 取出气泡内容的 StackPanel（第三列）。方便那些直接遍历 children 的测试。</summary>
-    private static StackPanel BubbleContent(FrameworkElement bubble)
-    {
-        var outer = bubble as Grid;
-        if (outer is null) throw new InvalidCastException("BubbleView.Build must return a Grid");
-        return outer.Children.OfType<StackPanel>().First();
-    }
+    private static Grid BarRow(FrameworkElement bubble) =>
+        BubbleContent(bubble).Children.OfType<Grid>().Single();
 
     private static Border Surface(FrameworkElement bubble) =>
         BarRow(bubble).Children.OfType<Border>().First(b => Grid.GetColumn(b) == 1);
@@ -433,7 +425,8 @@ public class BubbleViewTest
             // 正文是拼进 Inlines 的，TextBlock.Text 那个 getter 在这种写法下回空串，所以断言读 Run
             Assert.Equal("正文", string.Concat(Tree.First<TextBlock>(Body(built)).Inlines
                 .OfType<Run>().Select(r => r.Text)));
-            Assert.Equal(TimeFormat.Stamp(1_700_000_000_000), ((TextBlock)column.Children[^1]).Text);
+            // 时间戳在 wrapper 的第二行，不在气泡内容列里（那样它才不会把气泡顶偏）
+            Assert.Equal(TimeFormat.Stamp(1_700_000_000_000), ((TextBlock)Wrapper(built).Children[^1]).Text);
         });
     }
 
@@ -478,7 +471,8 @@ public class BubbleViewTest
     {
         Sta.Run(() =>
         {
-            var label = (TextBlock)BubbleView.Divider("今天", Style);
+            // Divider 现在返回的是"全宽居中的 Grid 容器"，字号/对齐/颜色落在内层 TextBlock 上
+            var label = Tree.First<TextBlock>(BubbleView.Divider("今天", Style));
             Assert.Equal(12d, label.FontSize);
             Assert.Equal(TextAlignment.Center, label.TextAlignment);
             Assert.Same(Style.Muted, label.Foreground);
