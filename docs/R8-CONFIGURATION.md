@@ -157,7 +157,7 @@ $ANDROID_HOME/tools/proguard/bin/retrace.sh \
 
 ## 安全建议
 
-1. **保留 mapping.txt** - 每次发布都备份到安全位置（用于还原崩溃堆栈）
+1. **保留 mapping.txt** - 每次发布都备份到安全位置（用于还原崩溃堆栈）。CI 把每次构建的 mapping 存成 workflow run 的 artifact `mapping-<tag>`，需要仓库读权限、**公开仓 90 天过期**；超过这个窗口的老版本崩溃，只能靠当时另存的副本，所以重要版本的 mapping 仍要手工归档一份。
 2. **定期更新规则** - 新增反射调用类时及时添加到 proguard-rules.pro
 3. **监控混淆警告** - 构建时的 `Warning` 可能预示运行时问题
 4. **测试真机** - 模拟器可能掩盖某些混淆导致的兼容性问题

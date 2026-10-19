@@ -126,30 +126,15 @@ jobs:
             echo "value=未生成" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload mapping.txt to S3 (tag push only)
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-          AWS_ENDPOINT: https://s3.iamplus.cn
-          S3_BUCKET: pushbox
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -uo pipefail
-          MAPPING_FILE="android/app/build/outputs/mapping/release/mapping.txt"
-          if [ ! -f "$MAPPING_FILE" ]; then
-            echo "⚠️  mapping.txt 不存在，跳过上传"
-            exit 0
-          fi
-
-          # 上传到 S3
-          aws s3 cp "$MAPPING_FILE" \
-            "${AWS_ENDPOINT}/${S3_BUCKET}/mapping/mapping-${TAG}.txt" \
-            --endpoint-url "${AWS_ENDPOINT}" \
-            --acl private
-
-          echo "✅ mapping.txt 已上传到 S3: ${S3_BUCKET}/mapping/mapping-${TAG}.txt"
-          echo "🔐 访问需要 Tailscale 密钥认证"
+      - name: Archive mapping.txt (retrace 用)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mapping-${{ github.ref_name }}
+          path: android/app/build/outputs/mapping/release/mapping.txt
+          # 缺 mapping 不该拖垮整条发布：没有 minify 的构建就没有这个文件。
+          if-no-files-found: warn
+          # 不写 retention-days：upload-artifact 的声明上限是 90 天，公开仓也是 90 天封顶，
+          # 写 400 只会被判非法输入而把步骤跑红。要长期留存得走"加密后作 Release 资产"。
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -173,8 +158,7 @@ jobs:
             --notes "自动构建产物：Android APK / Windows 安装包 / Docker 镜像 iamplusdev/push-box:$TAG
         
           ## Mapping File（用于还原线上崩溃堆栈）
-          - 位置：S3 pushbox/mapping/mapping-${TAG}.txt
-          - 访问：需要 Tailscale 密钥认证
+          - 归档：本 tag 对应 workflow run 的 artifact \`mapping-${TAG}\`（需要仓库读权限，不进公开 Release）
           - SHA256: ${MAPPING_SHA256:-未计算}
           - 工具：retrace.sh mapping.txt crash_stacktrace.txt" \
             --verify-tag 2>/dev/null || true
