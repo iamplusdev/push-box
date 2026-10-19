@@ -1,0 +1,12 @@
+# §10.1 观测：Spring Actuator + Micrometer /prometheus。
+# 抓取走容器网络直连 pushbox-server:7404，不经 Caddy（Caddy 上 /actuator 已被 respond 403 挡公网）。
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: pushbox
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["pushbox-server:7404"]

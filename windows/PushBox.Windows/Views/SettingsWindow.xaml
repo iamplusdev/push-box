@@ -1,0 +1,445 @@
+<Window x:Class="PushBox.Windows.Views.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PushBox 设置" Width="900" Height="640" MinWidth="680" MinHeight="460"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource Bg.Page}"
+        FontFamily="Segoe UI, Microsoft YaHei UI"
+        TextOptions.TextFormattingMode="Display"
+        UseLayoutRounding="True">
+    <!-- §8.4 W16：PC 端的控制台，把 Android 的 ChannelsTab / DeviceRow / SettingsTab 对齐过来。
+         左边一列窄导航、右边一屏内容（微信 PC 设置那一屏的形状），三块面板叠在同一格靠 Visibility 切换。
+         这里只放控件与文案：留空算不算提交、按钮该不该出现在这一行、这段话怎么说，全在 SettingsModel。 -->
+    <Window.Resources>
+        <!-- 导航项样式：增加圆角和过渡效果 -->
+        <Style x:Key="NavItemStyle" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="Medium" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="Shell" Background="Transparent" Padding="16,12" Cursor="Hand"
+                                CornerRadius="8" Margin="8,2">
+                            <ContentPresenter VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Shell" Property="Background" Value="{DynamicResource Bg.Page}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Shell" Property="Background">
+                                    <Setter.Value>
+                                        <SolidColorBrush Color="#0ABF5E" Opacity="0.1"/>
+                                    </Setter.Value>
+                                </Setter>
+                                <Setter Property="Foreground" Value="#0ABF5E" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        
+        <!-- 字段标签样式 -->
+        <Style x:Key="FieldLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,0,12,0" />
+            <Setter Property="Foreground" Value="{DynamicResource Fg.Secondary}" />
+        </Style>
+        
+        <!-- 输入框样式：增加圆角和内边距 -->
+        <Style TargetType="TextBox">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Padding" Value="10,0" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Divider}" />
+        </Style>
+        
+        <!-- 按钮样式：增加圆角和主色 -->
+        <Style TargetType="Button">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Padding" Value="16,0" />
+            <Setter Property="Background" Value="#0ABF5E" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        
+        <!-- 卡片样式 -->
+        <Style x:Key="CardStyle" TargetType="Border">
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Background" Value="{DynamicResource Bg.Elevated}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Divider}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="16" />
+            <Setter Property="Margin" Value="0,12,0,0" />
+        </Style>
+        
+        <!-- Section 标题样式 -->
+        <Style x:Key="SectionTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
+            <Setter Property="Margin" Value="0,16,0,8" />
+        </Style>
+        
+        <!-- Description 样式 -->
+        <Style x:Key="DescriptionStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{DynamicResource Fg.Secondary}" />
+            <Setter Property="Margin" Value="0,4,0,0" />
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="132" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Background="{DynamicResource Bg.Elevated}"
+                BorderBrush="{DynamicResource Divider}" BorderThickness="0,0,1,0">
+            <StackPanel Margin="0,16,0,16">
+                <!-- 标题 -->
+                <TextBlock Text="设置" FontSize="18" FontWeight="SemiBold" 
+                           Foreground="{DynamicResource Fg.Primary}"
+                           Margin="16,0,16,16"/>
+                
+                <RadioButton x:Name="NavChannels" Content="频道" GroupName="nav" IsChecked="True" Tag="channels"
+                             Style="{StaticResource NavItemStyle}" Checked="OnNavChanged" />
+                <RadioButton x:Name="NavDevices" Content="设备" GroupName="nav" Tag="devices"
+                             Style="{StaticResource NavItemStyle}" Checked="OnNavChanged" />
+                <RadioButton x:Name="NavNotify" Content="通知与外观" GroupName="nav" Tag="notify"
+                             Style="{StaticResource NavItemStyle}" Checked="OnNavChanged" />
+                <RadioButton x:Name="NavAbout" Content="关于与更新" GroupName="nav" Tag="about"
+                             Style="{StaticResource NavItemStyle}" Checked="OnNavChanged" />
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Column="1" Margin="24,20">
+            <ScrollViewer x:Name="ChannelsPanel" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <!-- 新建频道 Section -->
+                    <TextBlock Text="新建频道" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Text="创建一个新频道来接收消息，名称留空则使用设备名" 
+                               Style="{StaticResource DescriptionStyle}"/>
+                    
+                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                        <TextBox x:Name="NewChannelName" Width="280" />
+                        <Button Content="新建频道" Margin="10,0,0,0" Click="OnCreateChannel" />
+                        <Button Content="刷新列表" Margin="10,0,0,0" Click="OnReloadChannels" 
+                                Background="Transparent" Foreground="#0ABF5E" BorderThickness="1" BorderBrush="#0ABF5E"/>
+                    </StackPanel>
+
+                    <!-- 接入信息卡片 -->
+                    <Border x:Name="IssuedCard" Visibility="Collapsed" Style="{StaticResource CardStyle}">
+                        <StackPanel>
+                            <TextBlock Text="✅ 接入信息（密钥只显示这一次）" FontSize="14" FontWeight="SemiBold"
+                                       Foreground="#0ABF5E" />
+                            <TextBlock x:Name="IssuedNo" FontSize="13" Margin="0,10,0,0"
+                                       FontFamily="Consolas, Microsoft YaHei UI"
+                                       Foreground="{DynamicResource Fg.Primary}" />
+                            <TextBlock x:Name="IssuedSecret" FontSize="13" Margin="0,6,0,0"
+                                       FontFamily="Consolas, Microsoft YaHei UI"
+                                       Foreground="{DynamicResource Fg.Primary}" />
+                            <TextBlock x:Name="IssuedCurl" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       FontFamily="Consolas, Microsoft YaHei UI"
+                                       Foreground="{DynamicResource Fg.Secondary}" />
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <Button Content="复制频道号" Height="30" Click="OnCopyChannelNo" />
+                                <Button Content="复制密钥" Margin="10,0,0,0" Height="30" Click="OnCopySecret" />
+                                <Button Content="复制 curl" Margin="10,0,0,0" Height="30" Click="OnCopyCurl" />
+                                <Button Content="收起来" Margin="10,0,0,0" Height="30" Click="OnDismissIssued"
+                                        Background="Transparent" Foreground="{DynamicResource Fg.Secondary}" 
+                                        BorderThickness="1" BorderBrush="{DynamicResource Divider}"/>
+                            </StackPanel>
+                            <TextBlock Text="⚠️ 密钥只显示这一次，请立即复制保存。" FontSize="12" Margin="0,10,0,0"
+                                       Foreground="{DynamicResource Level.Error}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 加入频道 Section -->
+                    <TextBlock Text="加入频道" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap"
+                               Text="填别人给你的频道号与密钥即可接收该频道的消息。密钥只用来确认号码写对了，它不是读取凭据；跨 Space 的频道号服务端一律回 404。"
+                               Foreground="{DynamicResource Fg.Secondary}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                        <TextBox x:Name="JoinNo" Width="140" />
+                        <TextBox x:Name="JoinSecret" Width="240" Margin="10,0,0,0" />
+                        <Button Content="加入" Margin="10,0,0,0" Click="OnJoinChannel" />
+                        <Button Content="用选中频道号" Margin="10,0,0,0" Click="OnUseSelectedNo"
+                                Background="Transparent" Foreground="#0ABF5E" BorderThickness="1" BorderBrush="#0ABF5E"/>
+                    </StackPanel>
+                    
+                    <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                        <CheckBox x:Name="FilterOnly" Content="只接收已接入的频道" FontSize="13"
+                                  Foreground="{DynamicResource Fg.Primary}"
+                                  Checked="OnToggleFilterOnly" Unchecked="OnToggleFilterOnly" />
+                        <TextBlock x:Name="FilterOnlyLabel" FontSize="12" Margin="12,0,0,0"
+                                   VerticalAlignment="Center" Text="未开启"
+                                   Foreground="{DynamicResource Fg.Secondary}" />
+                    </StackPanel>
+                    <TextBlock Text="开启后这台电脑只收已接入频道的消息；其余频道仍在服务器上好着，只是这台不弹。关掉即恢复全收，接入关系不会丢。"
+                               FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Fg.Secondary}" />
+                    <TextBlock x:Name="FilterWarning" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Level.Error}" />
+
+                    <TextBlock x:Name="ChannelNotice" FontSize="12" Margin="0,12,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Level.Error}" />
+
+                    <!-- 我的频道列表 -->
+                    <TextBlock Text="我的频道" Style="{StaticResource SectionTitleStyle}" />
+                    <ListBox x:Name="ChannelList" Height="160" Margin="0,10,0,0" Background="Transparent"
+                             BorderBrush="{DynamicResource Divider}" SelectionChanged="OnChannelSelected"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Padding="10,8" Margin="0,4" CornerRadius="6"
+                                        Background="{DynamicResource Bg.Page}">
+                                    <StackPanel Margin="4,2">
+                                        <TextBlock Text="{Binding TitleText}" FontSize="13" FontWeight="Medium"
+                                                   Foreground="{DynamicResource Fg.Primary}" />
+                                        <TextBlock Text="{Binding ChannelNo}" FontSize="12"
+                                                   FontFamily="Consolas, Microsoft YaHei UI"
+                                                   Foreground="{DynamicResource Fg.Secondary}" />
+                                        <TextBlock Text="{Binding SummaryText}" FontSize="12" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource Fg.Secondary}" />
+                                        <!-- 接入状态是本机这一台的事，另一台设备上同一张列表可以全是"未接入" -->
+                                        <TextBlock Text="{Binding SubscriptionBadge}" FontSize="12"
+                                                   Foreground="{DynamicResource Level.Highlight}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock x:Name="ChannelEmpty" FontSize="13" Margin="0,10,0,0" Visibility="Collapsed"
+                               Text="还没有频道，点上方「新建频道」创建，或用频道号+密钥「加入频道」"
+                               Foreground="{DynamicResource Fg.Secondary}" />
+
+                    <!-- 选中一条才出现：治理位、白名单、容量都在"这一条频道"的作用域里 -->
+                    <Border x:Name="GovernanceCard" Visibility="Collapsed" Style="{StaticResource CardStyle}">
+                        <StackPanel>
+                            <TextBlock Text="频道治理" FontSize="15" FontWeight="SemiBold" 
+                                       Foreground="{DynamicResource Fg.Primary}" />
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="160" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="160" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="38" />
+                                    <RowDefinition Height="38" />
+                                    <RowDefinition Height="38" />
+                                    <RowDefinition Height="38" />
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="频道名称"
+                                           Style="{StaticResource FieldLabelStyle}" />
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="GovName" />
+                                <TextBlock Grid.Row="0" Grid.Column="2" Text="提醒强度上限" Margin="20,0,12,0"
+                                           Style="{StaticResource FieldLabelStyle}" />
+                                <ComboBox Grid.Row="0" Grid.Column="3" x:Name="GovLevel" Height="32" FontSize="13" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="单次最多图片数"
+                                           Style="{StaticResource FieldLabelStyle}" />
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="GovMaxImages" />
+                                <TextBlock Grid.Row="1" Grid.Column="2" Text="每分钟条数上限" Margin="20,0,12,0"
+                                           Style="{StaticResource FieldLabelStyle}" />
+                                <TextBox Grid.Row="1" Grid.Column="3" x:Name="GovRateLimit" />
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="单条正文最大字节"
+                                           Style="{StaticResource FieldLabelStyle}" />
+                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="GovBodyBytes" />
+                                <TextBlock Grid.Row="2" Grid.Column="2" Text="每日条数上限" Margin="20,0,12,0"
+                                           Style="{StaticResource FieldLabelStyle}" />
+                                <TextBox Grid.Row="2" Grid.Column="3" x:Name="GovDailyMsg" />
+                                <TextBlock Grid.Row="3" Grid.Column="0" Text="每日图片上限"
+                                           Style="{StaticResource FieldLabelStyle}" />
+                                <TextBox Grid.Row="3" Grid.Column="1" x:Name="GovDailyImage" />
+                                <TextBlock Grid.Row="3" Grid.Column="2" Text="每日字节上限" Margin="20,0,12,0"
+                                           Style="{StaticResource FieldLabelStyle}" />
+                                <TextBox Grid.Row="3" Grid.Column="3" x:Name="GovDailyBytes" />
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <CheckBox x:Name="GovStrict" Content="强制校验 sender" FontSize="13"
+                                          Foreground="{DynamicResource Fg.Primary}" />
+                                <CheckBox x:Name="GovMuted" Content="频道静默（不再弹通知）" FontSize="13"
+                                          Margin="20,0,0,0" Foreground="{DynamicResource Fg.Primary}" />
+                                <CheckBox x:Name="GovWhitelist" Content="只允许白名单发送者" FontSize="13"
+                                          Margin="20,0,0,0" Foreground="{DynamicResource Fg.Primary}" />
+                            </StackPanel>
+                            <TextBlock Text="填 0 表示沿用服务端默认值；留空表示这一项不动。" FontSize="12"
+                                       Margin="0,8,0,0" Foreground="{DynamicResource Fg.Secondary}" />
+                            <TextBlock x:Name="GovSubscriptionLine" FontSize="12" Margin="0,6,0,0"
+                                       TextWrapping="Wrap" Foreground="{DynamicResource Fg.Secondary}" />
+                            <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                                <Button Content="保存" Click="OnSaveGovernance" />
+                                <Button Content="发送者白名单" Margin="10,0,0,0" Click="OnOpenSenders" />
+                                <Button Content="重置密钥" Margin="10,0,0,0" Click="OnRotateSecret" />
+                                <Button Content="换发新频道号" Margin="10,0,0,0" Click="OnResetChannelNo" />
+                                <Button Content="容量报表" Margin="10,0,0,0" Click="OnCapacity" />
+                                <Button Content="清空" Margin="10,0,0,0" Click="OnClearChannel"
+                                        Background="Transparent" BorderBrush="{DynamicResource Level.Error}"
+                                        Foreground="{DynamicResource Level.Error}" />
+                                <!-- 取消接入不需要密钥（这台设备本来就接进来过），所以它留在治理区而不是上面那格表单里 -->
+                                <Button x:Name="LeaveButton" Content="取消接入" Margin="10,0,0,0"
+                                        Visibility="Collapsed" Click="OnLeaveChannel"
+                                        Background="Transparent" BorderBrush="{DynamicResource Level.Error}"
+                                        Foreground="{DynamicResource Level.Error}" />
+                                <Button Content="归档" Margin="10,0,0,0" Click="OnArchiveChannel"
+                                        Background="Transparent" BorderBrush="{DynamicResource Level.Error}"
+                                        Foreground="{DynamicResource Level.Error}" />
+                            </StackPanel>
+
+                            <!-- 白名单就地展开：它只管这一条频道，弹一层窗口只会让人找不到刚点了什么 -->
+                            <Border x:Name="SendersCard" Visibility="Collapsed" Margin="0,16,0,0" Padding="14"
+                                    CornerRadius="8" BorderBrush="{DynamicResource Divider}" BorderThickness="1"
+                                    Background="{DynamicResource Bg.Page}">
+                                <StackPanel>
+                                    <TextBlock Text="白名单发送者" FontSize="14" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource Fg.Primary}" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <TextBox x:Name="SenderIdInput" Width="240" />
+                                        <Button Content="添加" Margin="10,0,0,0" Height="32" Click="OnAddSender" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="SendersHint" FontSize="12" Margin="0,8,0,0"
+                                               TextWrapping="Wrap" Foreground="{DynamicResource Level.Error}" />
+                                    <ItemsControl x:Name="SenderList" Margin="0,10,0,0">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Padding="10,8" Margin="0,3" CornerRadius="6"
+                                                        Background="{DynamicResource Bg.Elevated}">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="{Binding SenderId}" FontSize="13" Width="240"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   FontFamily="Consolas, Microsoft YaHei UI"
+                                                                   Foreground="{DynamicResource Fg.Primary}" />
+                                                        <TextBlock Text="{Binding StatusText}" FontSize="12" Width="80"
+                                                                   VerticalAlignment="Center"
+                                                                   Foreground="{DynamicResource Fg.Secondary}" />
+                                                        <!-- Tag 交的是这一行那个对象本身：停用与启用是同一个动作的两个方向 -->
+                                                        <Button Content="切换状态" Tag="{Binding}" Height="28"
+                                                                Padding="12,0" Click="OnSenderToggle"
+                                                                Background="Transparent" Foreground="#0ABF5E"
+                                                                BorderThickness="1" BorderBrush="#0ABF5E"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <ScrollViewer x:Name="DevicesPanel" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="设备" FontSize="16" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource Fg.Primary}" />
+                        <Button Content="刷新" Margin="12,0,0,0" Click="OnReloadDevices" />
+                    </StackPanel>
+                    <TextBlock x:Name="DeviceNotice" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Level.Error}" />
+                    <ListBox x:Name="DeviceList" Height="220" Margin="0,8,0,0" Background="Transparent"
+                             BorderBrush="{DynamicResource Divider}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Margin="4,3">
+                                    <TextBlock Text="{Binding Name}" FontSize="13" Width="170"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{DynamicResource Fg.Primary}" />
+                                    <TextBlock Text="{Binding DeviceId}" FontSize="12" Width="190"
+                                               FontFamily="Consolas, Microsoft YaHei UI"
+                                               Foreground="{DynamicResource Fg.Secondary}" />
+                                    <TextBlock Text="{Binding Platform}" FontSize="12" Width="80"
+                                               Foreground="{DynamicResource Fg.Secondary}" />
+                                    <TextBlock Text="{Binding LastSeenText}" FontSize="12" Width="80"
+                                               Foreground="{DynamicResource Fg.Secondary}" />
+                                    <TextBlock Text="{Binding StatusText}" FontSize="12"
+                                               Foreground="{DynamicResource Accent}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                        <Button Content="吊销这台" Click="OnRevokeDevice"
+                                Background="Transparent" BorderBrush="{DynamicResource Level.Error}"
+                                Foreground="{DynamicResource Level.Error}" />
+                    </StackPanel>
+                    <TextBlock x:Name="DeviceEmpty" FontSize="13" Margin="0,8,0,0" Visibility="Collapsed"
+                               Text="没有其他设备" Foreground="{DynamicResource Fg.Secondary}" />
+
+                    <TextBlock Text="恢复码" FontSize="16" Margin="0,22,0,0"
+                               Foreground="{DynamicResource Fg.Primary}" />
+                    <TextBlock x:Name="RecoveryText" FontSize="13" Margin="0,8,0,0" TextWrapping="Wrap"
+                               FontFamily="Consolas, Microsoft YaHei UI"
+                               Foreground="{DynamicResource Fg.Primary}" />
+                    <TextBlock Text="它是找回全部历史与设备的唯一凭据，泄露等于任何人可读你的消息。"
+                               FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Fg.Secondary}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="轮换恢复码" Click="OnRotateRecovery" />
+                        <Button Content="复制" Margin="8,0,0,0" Click="OnCopyRecovery" />
+                    </StackPanel>
+                    <TextBlock x:Name="RecoveryHint" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Visibility="Collapsed" Foreground="{DynamicResource Level.Error}" />
+                    <!-- §7.3 退出空间：清空所有数据回到首启，与 Android "更换服务器"同效 -->
+                    <Button Content="退出空间（清空数据）" Margin="0,16,0,0" Click="OnLogout"
+                            Background="Transparent" BorderBrush="{DynamicResource Level.Error}"
+                            Foreground="{DynamicResource Level.Error}" />
+                </StackPanel>
+            </ScrollViewer>
+
+            <StackPanel x:Name="NotifyPanel" Visibility="Collapsed">
+                <TextBlock Text="通知" FontSize="16" Foreground="{DynamicResource Fg.Primary}" />
+                <CheckBox x:Name="NotifyOn" Content="新消息通知" FontSize="13" Margin="0,14,0,0"
+                          Foreground="{DynamicResource Fg.Primary}" Click="OnToggleNotifications" />
+                <CheckBox x:Name="QuietOn" Content="静默时段" FontSize="13" Margin="0,10,0,0"
+                          Foreground="{DynamicResource Fg.Primary}" Click="OnToggleQuiet" />
+                <StackPanel Orientation="Horizontal" Margin="24,8,0,0">
+                    <TextBox x:Name="QuietStart" Width="70" LostFocus="OnQuietWindowEdited" />
+                    <TextBlock Text="—" FontSize="13" Margin="6,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Fg.Secondary}" />
+                    <TextBox x:Name="QuietEnd" Width="70" LostFocus="OnQuietWindowEdited" />
+                    <TextBlock x:Name="QuietLabel" FontSize="12" Margin="10,0,0,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Fg.Secondary}" />
+                </StackPanel>
+                <CheckBox x:Name="AutoStartOn" Content="开机自启" FontSize="13" Margin="0,14,0,0"
+                          Foreground="{DynamicResource Fg.Primary}" Click="OnToggleAutoStart" />
+                <CheckBox x:Name="CloseToTrayOn" Content="关闭窗口时最小化到托盘" FontSize="13" Margin="0,10,0,0"
+                          Foreground="{DynamicResource Fg.Primary}" Click="OnToggleCloseToTray" />
+                <TextBlock Text="这几项与托盘菜单上的是同一份设置，改哪边都一样。静默时段内只有 error 还会出声。"
+                           FontSize="12" Margin="0,14,0,0" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Fg.Secondary}" />
+            </StackPanel>
+
+            <ScrollViewer x:Name="AboutPanel" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Text="关于" FontSize="16" Foreground="{DynamicResource Fg.Primary}" />
+                    <TextBlock x:Name="AboutVersion" FontSize="13" Margin="0,12,0,0"
+                               Foreground="{DynamicResource Fg.Primary}" />
+                    <TextBlock Text="更新检查走 GitHub Releases 的公开接口，与你在「通知」之外配置的业务服务器无关；未登录限额 60 次/小时，所以下载这一步要你亲手点。发现新版会先弹确认框，点「下载并安装」才会取包，装完再点一次系统安装。"
+                               FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Fg.Secondary}" />
+                    <CheckBox x:Name="AutoCheckOn" Content="启动时自动检查更新" Margin="0,12,0,0"
+                              Click="OnToggleAutoCheck" Foreground="{DynamicResource Fg.Primary}" />
+                    <Button x:Name="CheckUpdateButton" Content="检查更新" Margin="0,10,0,0"
+                            HorizontalAlignment="Left" Click="OnCheckUpdate" />
+                    <TextBlock x:Name="UpdateStatus" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Fg.Primary}" />
+                    <TextBlock x:Name="UpdateHint" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Level.Error}" />
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>

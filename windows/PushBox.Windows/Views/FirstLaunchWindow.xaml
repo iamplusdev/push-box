@@ -1,0 +1,70 @@
+<Window x:Class="PushBox.Windows.Views.FirstLaunchWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="接入 PushBox"
+        Width="560" Height="470"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="CanMinimize">
+    <Grid Margin="28,24,28,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 第 1 屏：注册 / 加入 -->
+        <StackPanel x:Name="EnrollPanel" Grid.Row="0">
+            <TextBlock Text="这是这台电脑第一次连接 PushBox。" FontSize="16" Margin="0,0,0,4" />
+            <TextBlock TextWrapping="Wrap" Foreground="#666"
+                       Text="密钥在本机生成，私钥不会离开这台电脑；服务器只知道它的公钥。" Margin="0,0,0,18" />
+
+            <TextBlock Text="服务器地址" Margin="0,0,0,4" />
+            <TextBox x:Name="ServerBox" Margin="0,0,0,14"
+                     Text="https://" />
+            <TextBlock Text="设备名称（在手机的设备列表里会看到它）" Margin="0,0,0,4" />
+            <TextBox x:Name="NameBox" Margin="0,0,0,18" />
+
+            <StackPanel x:Name="RecoveryPanel" Visibility="Collapsed">
+                <TextBlock Text="恢复码" Margin="0,0,0,4" />
+                <TextBox x:Name="CodeBox" Margin="0,0,0,6" />
+                <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11"
+                           Text="在手机的「我的 → 备份与恢复」里能看到恢复码和二维码。加入之后这里不会再次显示它。"
+                           Margin="0,0,0,14" />
+                <Button x:Name="JoinConfirmButton" Content="加入" Padding="14,7" HorizontalAlignment="Left"
+                        Click="OnJoinConfirmClick" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal">
+                <Button x:Name="CreateButton" Content="创建新的个人空间" Padding="14,7" Click="OnCreateClick" />
+                <Button x:Name="JoinButton" Content="我有恢复码，加入已有空间" Padding="14,7" Margin="10,0,0,0"
+                        Click="OnJoinClick" />
+            </StackPanel>
+        </StackPanel>
+
+        <!-- 第 2 屏：新空间的恢复码只在这里出现一次 -->
+        <StackPanel x:Name="BackupPanel" Grid.Row="0" Visibility="Collapsed">
+            <TextBlock Text="请抄下这台空间的恢复码" FontSize="16" Margin="0,0,0,4" />
+            <TextBlock TextWrapping="Wrap" Foreground="#666"
+                       Text="它是唯一的「账号」：换机、加第二台设备都靠它。服务端只存它的哈希，所以丢了没法找回。"
+                       Margin="0,0,0,16" />
+            <TextBox x:Name="CodeShowBox" IsReadOnly="True" FontFamily="Consolas" FontSize="18"
+                     TextAlignment="Center" Padding="8" Margin="0,0,0,10" />
+            <TextBlock TextWrapping="Wrap" Foreground="#B00020" FontSize="11" Margin="0,0,0,16"
+                       Text="抄好之前不要退出。下一次只有已登录的设备能重新导出它。" />
+            <StackPanel Orientation="Horizontal">
+                <Button Content="复制到剪贴板" Padding="14,7" Click="OnCopyCodeClick" />
+                <Button x:Name="EnterButton" Content="我已抄好，进入" Padding="14,7" Margin="10,0,0,0"
+                        Click="OnEnterClick" FontWeight="Bold" />
+            </StackPanel>
+        </StackPanel>
+
+        <TextBlock x:Name="ErrorBox" Grid.Row="2" TextWrapping="Wrap" Foreground="#B00020"
+                   Visibility="Collapsed" Margin="0,12,0,0" />
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,14,0,0">
+            <ProgressBar x:Name="BusyBar" Width="90" Height="6" Visibility="Collapsed" IsIndeterminate="True" />
+            <TextBlock x:Name="StatusBox" Foreground="#666" Margin="10,0,0,0" VerticalAlignment="Center" />
+        </StackPanel>
+    </Grid>
+</Window>

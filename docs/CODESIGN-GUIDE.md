@@ -1,0 +1,179 @@
+# Windows 代码签名证书配置指南
+
+本文档说明如何为 PushBox Windows 安装包配置代码签名证书，以消除 SmartScreen 警告。
+
+---
+
+## 为什么需要代码签名？
+
+未签名的 `.exe` 文件在 Windows 10/11 上会触发 **SmartScreen** 警告：
+
+```
+⚠️ Windows 已保护你的电脑
+Windows Defender SmartScreen 阻止了无法识别的应用启动。
+运行此应用可能会导致你的 PC 面临风险。
+```
+
+用户必须手动点击"更多信息" → "仍要运行"才能安装，严重影响转化率。
+
+签名后的安装包会显示发布者名称，SmartScreen 信任度大幅提升。
+
+---
+
+## 方案对比
+
+| 方案 | 成本 | 信任度 | 适用场景 |
+|------|------|--------|----------|
+| **自签名证书** | 免费 | 低（仍触发警告，但可导入受信任根） | 内部测试、企业内网部署 |
+| **标准代码签名证书** | $50-200/年 | 中（需积累声誉，初期仍可能警告） | 个人开发者、小团队 |
+| **EV 代码签名证书** | $300-600/年 | 高（立即通过 SmartScreen） | 商业产品、企业级应用 |
+
+### 推荐供应商
+- **Sectigo (Comodo)** - 标准证书 ~$79/年
+- **DigiCert** - EV 证书 ~$499/年（含 Microsoft SmartScreen 快速通道）
+- **GlobalSign** - 标准证书 ~$149/年
+
+---
+
+## 步骤 1: 获取代码签名证书
+
+### 选项 A: 购买商业证书（推荐生产环境）
+
+1. 访问 [Sectigo Code Signing](https://www.sectigo.com/code-signing/) 或 [DigiCert](https://www.digicert.com/code-signing)
+2. 提交组织验证材料（营业执照、域名所有权等）
+3. 收到 PFX 格式的证书文件和密码
+
+### 选项 B: 创建自签名证书（仅测试用）
+
+```powershell
+# 以管理员身份运行 PowerShell
+$cert = New-SelfSignedCertificate `
+    -Subject "CN=PushBox Developer" `
+    -Type CodeSigningCert `
+    -KeyExportPolicy Exportable `
+    -KeyLength 2048 `
+    -KeyAlgorithm RSA `
+    -HashAlgorithm SHA256 `
+    -NotAfter (Get-Date).AddYears(2)
+
+# 导出为 PFX
+$pwd = ConvertTo-SecureString -String "YourPassword123" -Force -AsPlainText
+Export-PfxCertificate -Cert $cert -FilePath "C:\temp\pushbox-test.pfx" -Password $pwd
+
+# 将证书添加到受信任的根证书颁发机构（本机测试用）
+Import-Certificate -FilePath "C:\temp\pushbox-test.cer" -CertStoreLocation Cert:\LocalMachine\Root
+```
+
+⚠️ **注意**: 自签名证书只在手动导入到目标机器后才有效，不适合公开发布。
+
+---
+
+## 步骤 2: 转换证书为 Base64
+
+GitHub Actions 需要将 PFX 证书存储为 Secret，因此需要转换为 base64：
+
+```bash
+# Linux/macOS
+base64 -w0 pushbox-codesign.pfx > pushbox-codesign.b64
+
+# Windows PowerShell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("pushbox-codesign.pfx")) | Out-File -Encoding ASCII pushbox-codesign.b64
+```
+
+复制生成的 base64 字符串（非常长，约几千字符）。
+
+---
+
+## 步骤 3: 配置 GitHub Secrets
+
+进入仓库设置 → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+
+添加以下两个 Secret：
+
+| Secret 名称 | 值 | 说明 |
+|------------|-----|------|
+| `CODESIGN_CERT_BASE64` | 上一步生成的 base64 字符串 | PFX 证书的 base64 编码 |
+| `CODESIGN_PASSWORD` | 导出 PFX 时设置的密码 | 证书私钥保护密码 |
+
+---
+
+## 步骤 4: 验证签名
+
+本地测试签名（需要安装 [Windows SDK](https://developer.microsoft.com/windows/downloads/windows-sdk/)）：
+
+```powershell
+# 找到 signtool.exe
+$signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -First 1
+
+# 签名
+& $signtool.FullName sign `
+    /f pushbox-codesign.pfx `
+    /p YourPassword123 `
+    /tr http://timestamp.digicert.com `
+    /td sha256 `
+    /fd sha256 `
+    /d "PushBox" `
+    dist-msi\PushBox-Setup-1.26.0-win-x64.exe
+
+# 验证
+& $signtool.FullName verify /pa dist-msi\PushBox-Setup-1.26.0-win-x64.exe
+```
+
+预期输出：
+```
+Successfully signed: dist-msi\PushBox-Setup-1.26.0-win-x64.exe
+
+Number of files successfully Verified: 1
+Number of warnings: 0
+Number of errors: 0
+```
+
+---
+
+## CI/CD 自动化签名
+
+配置好 Secrets 后，每次推送 main 分支或打 tag 时，`build-msi.yml` 会自动：
+
+1. 构建 Inno Setup 安装包
+2. 使用提供的证书签名 `.exe` 文件
+3. 添加时间戳（确保证书过期后签名仍有效）
+4. 验证签名完整性
+5. 上传到 GitHub Release
+
+如果未配置 `CODESIGN_CERT_BASE64`，签名步骤会被跳过，安装包仍可发布但会触发 SmartScreen。
+
+---
+
+## 常见问题
+
+### Q: 签名后仍然触发 SmartScreen？
+**A**: 新证书需要"积累声誉"。解决方案：
+1. 购买 EV 证书（立即信任）
+2. 让用户通过 Microsoft [SmartScreen 反馈表单](https://msedgedev.microsoft.com/wls/smartscreen/report/)提交白名单申请
+3. 增加下载量和使用时长（微软算法会自动提升信任度）
+
+### Q: 证书过期怎么办？
+**A**: 
+1. 续费后重新导出 PFX
+2. 更新 GitHub Secret `CODESIGN_CERT_BASE64`
+3. 重新签名历史版本（可选，旧签名仍有效但显示"签名时间戳"）
+
+### Q: 可以同时使用多个证书吗？
+**A**: 可以，但建议统一使用一个主证书。多证书会导致：
+- 不同版本显示不同发布者
+- 密钥管理复杂度增加
+
+---
+
+## 安全最佳实践
+
+1. **永远不要将 PFX 文件提交到 Git**
+2. **定期轮换证书**（每年更换一次）
+3. **限制 Secret 访问权限**（仅维护者可查看）
+4. **使用强密码保护 PFX**（至少 16 位，包含大小写字母+数字+符号）
+5. **备份证书到离线存储**（加密的 USB 驱动器或硬件安全模块 HSM）
+
+---
+
+**最后更新**: 2026-10-18  
+**参考文档**: [Microsoft SignTool 文档](https://learn.microsoft.com/en-us/dotnet/framework/tools/signtool-exe)

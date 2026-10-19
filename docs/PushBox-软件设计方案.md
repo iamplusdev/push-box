@@ -1,0 +1,1643 @@
+﻿# PushBox 软件设计方案
+
+> **版本历史**：完整更新日志见 [CHANGELOG.md](../CHANGELOG.md)
+> 
+> **当前版本**：v1.22（2026-10-17）—— Android 数据库迁移修复
+> 
+> **定位**：自托管的**单向消息通知中枢** —— 第三方软件通过 HTTP API / Webhook 风格接口明文投递，服务端归档 + 生成摘要，再通过**端到传输加密的长连接**下发到 Android 与 Windows 客户端，客户端用系统原生通知提醒用户。
+
+---
+
+## 1. 设计决策汇总（已确认）
+
+| # | 决策项 | 结论 |
+|---|--------|------|
+| D1 | 账号模型 | **个人设备制，无注册登录**。设备凭密钥注册，服务端不存邮箱/手机号 |
+| D2 | 下发通道 | **自建长连接（WebSocket）** + REST 增量补拉，毫秒级到账 |
+| D3 | 存储 | **云端明文永久归档 + 客户端本地缓存**。卸载重装凭设备身份（或恢复码）重新拉取即可完整恢复消息与历史图片 |
+| D4 | 加密边界 | **推送链路加密（服务端 → 客户端）**：WebSocket/REST 下行载荷用设备密钥协商出的会话密钥做 AES-256-GCM 应用层加密 + TLS。第三方 → 服务端为**明文 HTTPS + 凭据写在请求体**（`channel` + `secret`），消息**明文存库**，因此服务端可做摘要、搜索、删除 |
+| D5 | 消息类型 | 文本 / Markdown / 链接 / 文件（未知类型降级纯文本）。图片不占类型，而是任意类型都可带 `images[]` 附图（D12） |
+| D6 | Webhook 方向 | **仅入站**（外部软件调用我方 API），不做出站事件回调 |
+| D7 | 会话粒度 | **1 频道 = N 发送方**，客户端会话列表按 `sender_id` 拆分（微信式一行一会话） |
+| D8 | 发送方鉴权 | **凭据写在请求体内**：`channel`（频道号码）+ `secret`（频道密钥）随消息一起 POST；发送方身份由 `sender_id`/`sender_name` 自报，客户端首次见某 `sender_id` 时自动建会话并可改名/设头像 |
+| D9 | 已读语义 | 打开会话 → 该会话全部置已读；已读标记**多端同步** |
+| D10 | 反向能力 | **纯单向接收**，除已读上报外客户端不发消息 |
+| D11 | 通知内容 | 通知栏显示"发送方名 + 服务端下发的内容摘要"，提供"锁屏仅提示"开关 |
+| D12 | 附件 | 第三方在 `POST /message` 里给 **`images: string[]` 图片外链**，**服务端抓取后转存 RustFS**（S3 兼容对象存储，私有桶 + 服务端代理下载，桶里可按 §4.5 落 SSE-C 密文）；对象归服务端所有 ⇒ 删除时能真正清掉 S3。文字为主、图片很少 |
+| D12b | 媒体接口 | **不提供 `POST /media` multipart 直传**，第三方 API 只有 `/message` 一个入口（D22）；客户端取图走 `GET /api/v1/media/{msg_id}/{idx}` |
+| D13 | 删除 | 客户端可删消息 → 服务端 tombstone + S3 对象删除 + 多端 tombstone 同步 |
+| D14 | 部署 | **自托管**，docker-compose 一键起（服务端 + MySQL + RustFS + Caddy 反代） |
+| D15 | 视觉 | 微信式中性色体系，跟随系统深色模式 |
+| D16 | 文档深度 | 三端完整方案 + 分阶段实施路线 |
+| D17 | 已读筛选位置 | 对话页 **仅右上角 `⋮` 菜单**内提供 `全部 / 未读 / 已读`，不常驻 Tab、不加第二行控件 |
+| D18 | Android 保活 | **以后台常驻为目标**：引导关闭电池优化 + 允许自启 + 最近任务锁定；前台服务通知压到最低优先级（可折叠、可在系统层关闭显示）；WorkManager 兜底重连与补拉 |
+| D19 | 搜索 | 服务端全文搜索（明文库优势，跨会话、跨历史）+ 本地缓存即时搜索，结果合并展示 |
+| D20 | 服务端语言 | **Java 方向**：Java 21 + Spring Boot 3 + MySQL 8 + aws-sdk-java-v2（S3 协议） + **Bouncy Castle（只用 lightweight API，不注册 JCA Provider；Tink 已不引入，见 §10.1）**；加密、协议、同步逻辑放进**纯 JVM 库 `pushbox-core`**，被服务端与 Android 同时依赖 → 服务端与手机之间**不存在跨语言实现风险** |
+| D21 | 端优先级 | **P0/P1 = 服务端（Java） + Android**；P2 = 服务端与 Android 的加固与运维（指标、备份、抓取加固；**Web 管理台已单独落地，见 D28**）；**P3 = Windows 客户端**（协议已定义清楚，届时按 §13 跨语言向量对齐即可，不影响前两阶段） |
+| D22 | 消息 API 形态 | **`POST /message`**（根路径，无版本前缀、频道号不进 URL）；请求体字段按用户口径命名：`channel` 频道号码、`secret` 密钥、`type` 消息类型、`content` 消息体，其余字段可选（见 §5.1） |
+| D23 | 联调环境 | 服务端连接外部 RustFS（S3 兼容对象存储）与 MySQL 8（`ngram_token_size=2`）。P0 阶段服务端不进容器，直接 IDE/`java -jar` 跑，只依赖这两个远端服务。**库与账号已创建、能力已实测**（§11.1、§4.5） |
+| D24 | 通知时机 | **图文同步推送**：带 `images` 的消息在服务端等抓取到齐（合并窗口默认 3s）后再下发一帧，Android 收到即可带图发通知；纯文字不受影响。第三方 → 服务端的 200 仍然立即返回 |
+| D25 | 提醒强度 | `level` 由第三方自报，但服务端按**频道级 `max_level` 上限截断**后才下发（默认上限 `error`＝不限），防止外部软件用 `error` 穿透免打扰 |
+| D26 | 设备上限 | 单个恢复码（`group_id`）**最多 5 台活动设备**，超出 `device_limit_reached`，需先吊销旧设备 |
+| D27 | 持久层/构建 | **MyBatis-Flex**（不用 JPA/JdbcTemplate/jOOQ）。构建按语言分治：**Java 侧（`core` + `server`）用 Maven**（根 `pom.xml` 聚合 + 父 POM 统一版本），**Android 侧用 Gradle Kotlin DSL + Version Catalog**；`pushbox-core` **只有一份源码**，Maven/Gradle 在同一目录各挂一份构建脚本、Gradle 直接编译源码（不中转 jar） |
+| D28 | 管理面 | **推翻原"不做"**：新增独立 **Web 管理台**（`web-admin/`，Vue 3 + TypeScript + Vite + Element Plus；构建产物烘进服务端 jar 的 `static/`，同源部署、Caddy 反代无需改）。定位为**跨空间运维台**：概览（频道/设备/消息计数 + 近 14 天趋势）、消息全文搜索、频道/设备列表与详情。**刻意边界**：登录用 `pb.admin.secret`（环境变量 `PB_ADMIN_SECRET` 注入，prod 必填且入口脚本校验长度）换 HS256 JWT（24h；`validateToken` 校验签名后再校验 `exp`）。**签名钥是独立的一项** `pb.admin.jwt-secret`（`PB_ADMIN_JWT_SECRET`）：早期两者共用一个值，等于"改口令就作废全部已发 token、换签名钥就是改口令"，结果是两个都长期不换；现在 prod 要求两个都填、长度达标且必须不同，短了或相同直接拒绝启动。口令连续失败按来源 IP 记数，达 `pb.ingest.credential-fail-lock`（默认 5）在 `lock-window`（默认 5m）内返回 429 并带 `Retry-After`——Caddy 在前面时服务端看到的是代理地址，要按 IP 锁定就得让管理台不套反代，或在反代上限速；鉴权走 DeviceGuard 的 admin 分支，**不加密、不带 group 作用域**（响应不做密封盒）；**提供新建频道与密钥重置**——创建接口 `POST /api/v1/admin/channels` 返回明文 secret（可复制），重置接口 `POST /api/v1/admin/channels/{channelNo}/rotate-secret` 立即轮换密钥并解除锁定；已有频道的 secret 不在列表中回显（只有创建/重置时返回一次）。频道/密钥/设备的日常管理与运维 CLI（§11）保留不变 |
+| D29 | 语言 | **仅中文**，不预留 i18n；但用户可见串一律进 `strings.xml`，禁止硬编码 |
+| D30 | App 锁 | 可选 **PIN/生物识别**，**默认关闭**；开启后通知内容降级为"收到 1 条消息" |
+| D31 | Windows 技术栈 | **正式拍板 .NET 8 + WPF**（§10.1、§8.3）。否决 **Compose Desktop**：虽然能直接复用 `pushbox-core` 免掉跨语言对齐，但托盘靠 AWT、原生 Toast 必须自写 JNI + C++/Rust 桥接 DLL——那是全场唯一"没有向量可把关"的难点；否决 **Tauri 2**：Rust 仍要重写四原语（第四个独立实现，与 D20 动机相悖）且引入第三门语言。代价（C# 重写四原语）可接受，因为 §13 的 `vectors.json` 给了明确验收（含 W6 的整条握手） |
+| D32 | 客户端版本更新 | Android 与 Windows **以 GitHub Releases 为更新源**（`api.github.com/repos/iamplusdev/push-box/releases/latest`），比对 `versionName`/tag 的 semver。发现新版只弹一只**确认框**（"发现新版本 X，是否下载并安装？→更新/稍后"），**下载这一步要用户当场点确认**，之后**各再留一次安装确认**（Windows `/VERYSILENT` 覆盖安装 + 提示重启；Android 拉系统安装面板，OS 不允许静默自装）。冷启动与手动检查两处发现都汇到同一只确认框，体验一致。触发只有两处：**冷启动静默查一次**（每进程一次，受设置里「启动时自动检查更新」开关门控，默认开）+ 设置里**手动「检查更新」**，绝不进 15 分钟兜底轮询——未认证限额 60 次/小时/IP 会把额度烧光。这条链走公开 https，与用户配置的业务服务器、密封盒、签名**完全独立**（对 api.github.com 加任何 `X-PB-*`/token 只会换来 401）；`versionCode` 暂不动，比较只用三段 semver，预发布后缀取段时只留前导数字。留痕只记版本号与异常类型名 |
+| D33 | 管理台定时推送 | **运维在 Web 管理台自建定时推送**（v1.1.0）：挑一条已有频道 + 一段 cron，服务端按点把消息灌进那条频道。**不引入外部调度组件**（Quartz/cron4j/系统 crontab 都要么带集群表要么带进程状态），走**扫表轮询**：`scheduled_tasks.next_fire_at` 是游标，`@Scheduled` 每 15s（`pb.scheduled.sweep-interval`）捞一轮 `enabled=1 AND next_fire_at<=now`，抢占用 `UPDATE ... WHERE task_id=? AND next_fire_at=<旧值> AND enabled=1` 的 CAS——两个实例扫到同一行也只有一个改得动，所以不需要 `SELECT ... FOR UPDATE`，重启不丢排程，也不需要在内存里维护触发器注册表。**幂等按整分钟分桶**：`client_msg_id = sched:<task_id>:<floor(now/60000)>`，撞 `messages.uk_msg_idem` 即被吃掉，因此亚分钟 cron 的净效果是每分钟一条（这个语义写进服务类注释，不靠使用者猜）。**凭据侧**：库里只有 `secret_hash`，定时任务永远拿不到明文密钥，所以它不重放 secret，而是走 `IngestService.ingestInternal` 这条内部入口、由管理台 JWT 那一侧授权，§4.4 的 ts/nonce/sign 闸门整层跳过（HMAC 无从计算），但**频道上限照常生效**（`max_level`/`max_body_bytes`/`max_images` 与抓取转存链路复用同一条 `ingestAccepted`）。cron 采用 Spring `CronExpression`，**必须 6 段**（秒 分 时 日 月 周），5 段 unix 写法当场 400 |
+
+### 架构性后果（必须理解）
+
+服务端可见明文带来两个核心影响：
+
+**优势**：
+- **摘要、搜索、Markdown 预览、通知文案都由服务端计算并下发**
+- 客户端只负责渲染与发系统通知
+- 实现复杂度显著低于端到端方案
+
+**代价**：
+- **服务器与数据库成为明文暴露面**，处置见 §14
+
+**应用层帧加密的价值**：
+即使 TLS 被企业中间设备拆解、被抓包、或服务端访问日志/CDN 缓存泄漏，传输与离线日志中的历史内容仍不可读。
+
+---
+
+## 2. 总体架构
+
+```
+  ┌────────────┐  HTTPS POST /message                           ┌─────────────────────┐
+  │ 第三方软件 │  (channel 频道号 + secret 密钥 + type + content │      服务端          │
+  │ 监控/CI/   │   等业务字段全部写在 JSON 请求体里)             │  Ingest API         │
+  │ 脚本/Bot   │ ─────────────────────────────────────────────► │  ├ 校验密钥/限流    │
+  └────────────┘                                               │  ├ 幂等去重         │
+                                                               │  ├ 归档 + 生成摘要  │
+  ┌────────────┐  S3 PutObject（服务端抓取转存）                │  ├ 全文索引(ngram)  │
+  │   RustFS   │ ◄─────────────────────────────────────────────┤  └ 路由: channel→   │
+  │ 100.94:7101│                                                │     sender 会话     │
+  └────────────┘                                               └───────┬─────┬───────┘
+                                                                       │     │
+                     WebSocket /ws  下行帧 AES-256-GCM 加密 ◄──────────┘     │
+              帧: message / read / tombstone / heartbeat                      │
+              服务端按 group 订阅，多端同时收到                 REST 增量补拉 │
+                     已读上报 / 删除 / 搜索（设备签名）  ◄────────────────────┘
+                                  ┌──────────────────────────────┐
+                                  │ Android 客户端                │ Windows 客户端
+                                  │ 后台服务+WS+Room+解密渲染     │ 托盘+WS+SQLite
+                                  │ → 系统通知（Notification）      │ → 系统通知（Toast）
+                                  └──────────────────────────────┘
+```
+
+三端职责：
+
+- **服务端**：校验请求体里的 `channel + secret`、限流、幂等去重、seq 分配、明文归档 + 摘要生成 + 全文索引、RustFS 读写与对象加解密、WebSocket 订阅分发（下行帧加密）、已读状态存储、tombstone 传播、服务端搜索。
+- **Android / Windows**：设备身份密钥管理、长连接与重连补拉、下行帧解密、本地缓存与渲染、会话列表与对话页 UI、发系统通知、上报已读、删除同步。
+- **第三方软件**：**一次普通 POST 即完成接入** —— 请求体里带上频道号码与密钥即可（"接入信息"页一键复制整段可直接跑的 curl）；不需要 SDK、不需要加密库、不需要理解签名算法。
+
+---
+
+## 3. 核心概念与数据模型
+
+### 3.1 概念层级
+
+```
+Space（个人空间，无账号，由一个 group_id + 恢复码代表"我"）
+  ├─ Device（设备，可多台：手机 + PC；扫码/导码加入同一 Space）
+  │      └─ 每台设备有自己的签名密钥对 + 传输密钥对
+  │           └─ 订阅集（这台设备"接入"了哪些频道：§5.2 的投递过滤器，同 Space 内凭频道号 + 密钥接入）
+  └─ Channel（频道，用户创建，接入地址与 API Secret 的载体）
+        └─ Conversation（会话，服务端按 sender_id 逻辑切分，客户端展示为一行）
+             └─ Message（消息，单调 seq，明文正文 + 预生成摘要，归档在 DB）
+Sender（发送方软件，自报身份，客户端首次出现时自动建档并可改名/设头像）
+```
+
+### "我是谁"的替代物 = 恢复码（Recovery Code）
+
+无账号体系下，用恢复码代替传统账号：
+
+**生成与使用**：
+1. 首台设备本地随机生成 16 字节 `group_secret`
+2. 显示为 base64 + 二维码（即恢复码）
+3. 随注册上传，服务端返回 `group_id`
+
+**新设备加入**：
+- PC 或换机凭这串码调用 `/devices/join` 加入同一 Space
+- 共享频道、已读游标与历史归档
+
+**卸载重装**：
+- 只要留有恢复码即可重新拉全部消息与图片
+- 丢失则需服务器管理员用 CLI 按 `device_id` 手工认领或吊销（§11）
+
+---
+
+```sql
+-- 设备：无口令，公钥即身份；同 group_id 视为同一个"我"
+devices(
+  device_id     TEXT PRIMARY KEY,      -- 服务端分配，如 dev_7f3a…
+  group_id      TEXT NOT NULL,         -- 所属个人空间（多端同步的分组键）
+  device_pubkey TEXT NOT NULL,         -- Ed25519，校验设备请求签名
+  enc_pubkey    TEXT NOT NULL,         -- X25519，用于下行帧密钥协商
+  name          TEXT,                  -- "Pixel 8" / "工作机"
+  platform      TEXT,                  -- android | windows
+  token         TEXT NOT NULL UNIQUE,  -- 长期 bearer（WS/REST 通用），可吊销
+  subscribed_only TINYINT NOT NULL DEFAULT 0, -- §5.2 投递过滤器：1=这台设备只收已接入频道的内容
+  created_at    INTEGER, last_seen_at INTEGER, revoked_at INTEGER
+)
+CREATE INDEX idx_dev_group ON devices(group_id);
+-- D26：register/join 时按 group_id 统计 revoked_at IS NULL 的行数，>5 拒绝（device_limit_reached）
+
+channels(
+  id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+  channel_no    CHAR(8) NOT NULL UNIQUE,   -- 对外"频道号码"，如 83271504（随机、可重置、可直接口述）
+  secret_hash   CHAR(64) NOT NULL,         -- sha256(secret)，明文 secret 仅创建/重置时回显一次
+  group_id      VARCHAR(32) NOT NULL,
+  name          VARCHAR(64),               -- 频道展示名
+  max_level     VARCHAR(8) DEFAULT 'error',-- D25：提醒强度上限 info|warning|error；下发的 level 被截断到这里
+  rate_limit    INT DEFAULT 60,            -- 条/分钟（按 channel_no 计）
+  max_body_bytes INT DEFAULT 32768,
+  max_images    TINYINT DEFAULT 4,         -- images[] 条数上限（频道级可调）
+  strict_auth   TINYINT DEFAULT 0,         -- 1=额外要求请求体里的 ts/nonce/sign（§4.4 加固）
+  fail_count    INT DEFAULT 0, locked_until BIGINT DEFAULT 0,  -- 密钥错误计数与锁定，防枚举
+  muted         TINYINT DEFAULT 0,
+  created_at BIGINT, archived_at BIGINT
+)
+
+channel_subscriptions(                -- §5.2「接入频道」：一台设备 × 一条频道一行，只是投递过滤器
+  device_id   VARCHAR(64) NOT NULL,   -- FK devices，ON DELETE CASCADE
+  channel_no  CHAR(8)     NOT NULL,   -- FK channels，ON DELETE CASCADE + ON UPDATE CASCADE（换发新号码时订阅随迁）
+  created_at  BIGINT NOT NULL,
+  PRIMARY KEY(device_id, channel_no)
+)
+-- 它不是权限边界：读凭据始终是设备 token（§4.1），所以这行的有无只决定"推不推、让不让读"，
+-- 接入之后再拉历史会连接入前那条一起放开（过滤按频道，不按接入时刻）。
+-- subscribed_only 也**不从"有没有订阅行"推导**：默认全收（0）才是可预期的行为，
+-- 一台接入了三条频道的设备不该因为接入了就突然收不到其余频道。
+-- 建频道的那台设备由服务端默认写一行，否则一开过滤就把自己刚建的频道静默掐断。
+
+senders(                              -- 会话主体，服务端按此路由
+  channel_no    TEXT, sender_id TEXT,
+  display_name  TEXT, avatar_url TEXT, avatar_seed TEXT,  -- 自报，客户端可本地覆盖
+  avatar_key    TEXT,  -- 服务端转存成功后的对象键，NULL=还没存成（§4.5）
+  avatar_token  TEXT,  -- sha256hex(sender_id)，URL 与对象键都用它，不用任意 sender_id 原文
+  sse_key_wrapped VARBINARY(128),  -- 头像对象的封装客户钥（同 media_objects，覆盖写时延用旧钥）
+  enc_mode VARCHAR(12) NOT NULL DEFAULT 'none',    -- 该头像当时是明文还是密文（V3__sender_avatar_encryption.sql）
+  msg_count INTEGER DEFAULT 0, last_msg_at INTEGER,      -- 供列表排序与摘要
+  PRIMARY KEY(channel_no, sender_id)
+)
+
+messages(
+  seq           BIGINT AUTO_INCREMENT PRIMARY KEY,  -- 全局单调，用于增量补拉与游标
+  msg_id        TEXT UNIQUE,          -- 服务端分配 ULID，供已读/删除/搜索引用
+  channel_no    TEXT NOT NULL,
+  sender_id     TEXT NOT NULL,
+  msg_type      TEXT NOT NULL,        -- text | markdown | link | file（未知类型降级 text；图片不再占类型，见下方 media_*）
+  title         TEXT,                 -- 可选标题（告警类常用）
+  body          TEXT NOT NULL,        -- 明文正文（Markdown 原文存这里）
+  summary       TEXT,                 -- 服务端预生成：去语法 + 截断 60 字，直接下发给通知
+  link_url TEXT, link_title TEXT, link_desc TEXT,        -- msg_type=link 时抽取
+  media_keys    TEXT,                 -- JSON 数组：["media/{msg_id}/0", …]，抓取成功后回填
+  media_status  TEXT NOT NULL DEFAULT 'none',  -- none|pending|ready|partial|failed（外链抓取是异步的）
+  level         TEXT,                 -- info|warning|error，发送方可带，影响提醒强度
+  created_at    INTEGER NOT NULL,
+  client_msg_id TEXT UNIQUE,          -- 幂等键，来自 API 的 msg_key（按 channel 维度唯一）
+  deleted_at    INTEGER               -- tombstone，非空则对所有端不可见
+)
+-- API 字段 ↔ 数据库列：channel→channel_no, type→msg_type, content→body,
+--                      msg_key→client_msg_id, sender_name→senders.display_name,
+--                      images[]→media_objects.source_url（抓取成功后进 media_keys）；
+--                      响应里的 id→msg_id
+CREATE INDEX idx_msg_chan_sender ON messages(channel_no, sender_id, seq);
+CREATE INDEX idx_msg_created ON messages(created_at DESC);
+-- MySQL：表引擎 InnoDB，seq 用 BIGINT AUTO_INCREMENT PRIMARY KEY；字符集 utf8mb4_0900_ai_ci
+-- 中文全文索引（MySQL 8 内置 ngram，需 my.cnf 设 ngram_token_size=2）：
+ALTER TABLE messages ADD FULLTEXT INDEX ft_msg (title, summary, body) WITH PARSER ngram;
+-- PostgreSQL 等价：ALTER TABLE messages ADD COLUMN tsv tsvector
+--   GENERATED ALWAYS AS (to_tsvector('simple', coalesce(title,'')||' '||body)) STORED; CREATE INDEX USING GIN(tsv);
+--   中文分词建议 pg_trgm ILIKE 或 zhparser 扩展。
+
+-- 每条外链一行：抓取任务队列 + 对象生命周期都记在这里
+media_objects(
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  msg_id VARCHAR(32) NOT NULL,        -- 关联 messages.msg_id
+  idx TINYINT NOT NULL,               -- images[] 里的下标，决定展示顺序
+  source_url VARCHAR(1024) NOT NULL,  -- 第三方给的原始外链（仅排错/重试，永不下发给客户端）
+  object_key VARCHAR(128),            -- 抓取成功后的 RustFS key：media/{msg_id}/{idx}
+  thumb_key VARCHAR(128),             -- 服务端生成的缩略图 key
+  status VARCHAR(12) NOT NULL DEFAULT 'pending',  -- pending|ready|failed|deleted|purged（purged 只在 DeleteObject 成功后写）
+  sse_key_wrapped VARBINARY(128),     -- 该槽位 SSE-C 随机客户钥的封装字节（0x01‖iv12‖ct32‖tag16=61B，主钥 AES-256-GCM）；原图与缩略图共用；none 模式与真删后为 NULL
+  enc_mode VARCHAR(12) NOT NULL DEFAULT 'none',    -- none|sse-c（只支持这两值，读侧只认这一列 ⇒ 开关切换不影响历史对象）
+  mime VARCHAR(64), width INT, height INT, size BIGINT, sha256 CHAR(64),
+  error VARCHAR(255),                 -- 失败原因（timeout/ssrf_blocked/too_large/http_404/…）
+  fetch_attempts TINYINT DEFAULT 0,
+  channel_no VARCHAR(32) NOT NULL, group_id VARCHAR(32) NOT NULL,
+  created_at BIGINT, ready_at BIGINT, deleted_at BIGINT
+)
+CREATE INDEX idx_media_msg ON media_objects(msg_id, idx);
+CREATE INDEX idx_media_status ON media_objects(status, created_at);  -- 抓取重试 + media sweep
+
+-- D33 管理台定时推送（V8__scheduled_push_tasks.sql）：运维在 Web 管理台建任务，服务端按 cron 把消息灌进指定频道
+scheduled_tasks(
+  task_id      VARCHAR(32) PRIMARY KEY,   -- 服务端分配 ULID
+  group_id     VARCHAR(32) NOT NULL,      -- 冗余自频道，列表按 Space 分组用
+  channel_no   CHAR(8) NOT NULL,          -- 目标频道；创建时校验存在且未归档
+  name         VARCHAR(64),               -- 运维自己看的任务名
+  title        VARCHAR(512),
+  content      TEXT NOT NULL,             -- 与 messages.body 同一个 TEXT 上限，字节数另受频道 max_body_bytes 约束
+  level        VARCHAR(8) NOT NULL DEFAULT 'info',  -- 存前归一化成 Level 的 wire 值（info|warning|error）
+  sender_name  VARCHAR(64),
+  images_json  TEXT,                      -- 图片外链数组的 JSON；抓取转存复用 §4.5 那条链路
+  cron_expr    VARCHAR(64) NOT NULL,      -- Spring CronExpression，必须 6 段（秒 分 时 日 月 周）
+  enabled      TINYINT NOT NULL DEFAULT 1,
+  next_fire_at BIGINT NOT NULL,           -- 轮询游标：到期即触发，触发后按 cron 重算，CAS 更新防双发
+  last_fire_at BIGINT,
+  last_result  VARCHAR(16),               -- ok|failed，只记上一次结论，不建执行历史表（D33 的范围刻意收在这）
+  last_error   VARCHAR(255),
+  last_msg_id  VARCHAR(32),               -- 上次真正落库的那条消息，便于从列表直接跳到消息详情
+  created_at   BIGINT NOT NULL,
+  updated_at   BIGINT NOT NULL
+)
+CREATE INDEX idx_sched_due ON scheduled_tasks(enabled, next_fire_at);  -- 扫描就是这条索引的 range scan
+CREATE INDEX idx_sched_channel ON scheduled_tasks(channel_no);
+```
+
+要点：
+- **已读用游标而非逐条标记**，因此加一张小表：
+  ```sql
+  read_state(group_id TEXT, channel_no TEXT, sender_id TEXT,
+             last_read_seq INTEGER NOT NULL, updated_at INTEGER,
+             PRIMARY KEY(channel_no, sender_id, group_id))
+  ```
+  一次 PUT 即把会话全部置已读（D9），多端同步代价 O(会话数)。
+- **全文搜索走服务端**（D19）：MySQL 8 用 `FULLTEXT (title, summary, body) WITH PARSER ngram` + `ngram_token_size=2`（中文分词靠 ngram 切片，单字检索需同时走 `LIKE` 兜底），查询用 `MATCH…AGAINST` + `snippet()` 返回命中片段；PostgreSQL 走 `tsvector('simple')` + GIN，或 `pg_trgm` ILIKE。
+- 消息**永不自动清理**（D3 要求），只提供手动"清空频道"与按会话删除。
+- **定时任务没有执行历史表**（D33）：`last_*` 四列只回答"上一次成没成、错在哪、产出了哪条消息"，要看历史直接查 `messages WHERE client_msg_id LIKE 'sched:<task_id>:%'` —— 每次触发本来就落一条真实消息，再存一份 run 表等于把同一份正文写两遍。触发时 `sender_id` 固定 `scheduled`（不占 `senders` 的自报名），`level` 仍按目标频道 `max_level` 截断，正文按**字节**过频道 `max_body_bytes`（与投递时同一把尺子，按字符判会放行"32K 个汉字"这种每分钟必失败的任务）。
+
+### 3.3 客户端本地表（Android Room / Windows SQLite）
+
+```
+conversations(channel_no, sender_id, name, avatar_path, pinned, muted,
+              unread_count, last_seq, last_msg_at, last_summary_cached)
+messages(msg_id, seq, channel_no, sender_id, msg_type, title, body, level,
+         link_url, link_title, media_keys, media_status, read_state, deleted_at)
+message_media(msg_id, idx, object_key, thumb_key, local_path, mime, size, status)
+media_cache(object_key, local_path, sha256, size, last_access_at)  -- 按 object_key 去重，LRU 清理
+sync_state(channel_no, last_applied_seq, last_sync_at)
+fts_messages  -- 本地 FTS，对已缓存消息即时搜索；历史全量搜索走服务端 /search
+```
+
+`body` 为本机明文副本（服务端已明文归档，本地不再承担保密职责）：
+- Android 存应用私有目录并标记 `noBackupFiles`，避免被系统云备份二次复制到不可控位置；提供"锁定 App 需 PIN/生物识别"的可选项。**正文是明文**（Room 要按内容搜索），但身份私钥、token、恢复码与 PIN 散列这四类机密由 AndroidKeyStore 里一把**不可导出**的 AES-256-GCM 密钥密封（`v1:<iv>:<密文>`），首启把旧版裸明文的值就地补封一次。
+- Windows 存 `%LOCALAPPDATA%\PushBox\pushbox.db`（SQLite + FTS5，**正文明文**，同上理由）；`identity.json` 里的四段机密用 DPAPI（`CurrentUser` + 应用熵）封装。**没有接 SQLCipher**：库明文可搜索是本项目的核心取舍，不是待办。
+- `unread_count` 由 `last_read_seq` 与消息 `seq` 比较得出，与服务端游标一致，避免逐条状态表。
+
+---
+
+## 4. 加密与身份体系
+
+### 4.1 三条信任边界
+
+```
+第三方软件 ──(A)──► 服务端 ──(B)──► Android / Windows
+(A) 入站：HTTPS + 请求体内的 channel_no/secret 口令式鉴权（POST /message，字段全在 body）
+(B) 下行：TLS（wss/https）之上再加应用层帧加密 AES-256-GCM，密钥由设备 X25519 协商
+(C) 存储：消息明文存 MySQL，图片进 RustFS（S3 兼容对象存储，对象级加密见 §4.5）
+```
+
+设计上把"能不能发消息"与"能不能读消息"彻底分开：
+
+**写入权限**（给运维/脚本/监控）：
+- 只需 `channel_no + secret`
+- 一次普通 POST 即可
+
+**读取权限**（只存在于用户自己的手机/PC）：
+- 必须持有注册设备的 `token + 签名私钥`
+
+**密钥泄露的最坏后果**：
+- "被人往你的频道里塞垃圾消息"，而不是"被人读走历史"
+- 这条边界是整个安全模型的地基
+
+### 4.2 设备身份与密钥
+
+```
+设备首启:  本地生成 Ed25519(签名) + X25519(传输加密) 密钥对，私钥永不离开设备
+           → POST /api/v1/devices/register {pubkeys, name, platform, group_secret?}
+           → 返回 {device_id, group_id, token}
+           → 若为首台设备：group_secret 由本地随机生成（= 恢复码），服务端只存其哈希
+新设备加入: 扫描/粘贴恢复码 → POST /api/v1/devices/join {group_secret, pubkeys…}
+           → 服务端比对哈希 → 发同 group_id 的 token → 立刻可 since_seq=0 全量拉历史
+```
+
+### 恢复码说明
+
+**恢复码是唯一的"账号"**：
+- 一串 base64（16 字节随机）+ 显示为二维码
+- "我的 → 备份与恢复"可查看/重新生成
+- 它只能授予新设备读取权，不能删除既有设备（需已有设备签名确认）
+
+**重装恢复流程**：
+1. 输入恢复码
+2. 新密钥对注册
+3. `GET /api/v1/messages?since_seq=0`
+4. 文字与图片完整回来（D3）
+
+**设备管理**：
+- 可在"我的 → 设备与同步"里查看与远程吊销
+- 吊销后 WS 立即断开、token 失效
+
+### 4.3 下行帧加密（B 边界）
+
+```
+WS 建连后 key_exchange 握手（一次性）：
+  server → {t:"hello", nonce}                     // nonce 既是签名挑战，也是下面 HKDF 的 salt
+  client → {t:"auth", device_id, token, ts, sig}  // token 不进 URL：sig=Ed25519("pushbox-ws-auth-v1\n{device}\n{b64(nonce)}\n{ts}")
+  server → {t:"kx", server_pub, eph_pub, sig: Ed25519(server_eph||nonce)}
+           // server_pub（静态签名公钥）必须随 kx 一起下发，否则客户端没法验 sig：
+           // 先核 sha256(server_pub) 前 16 位 == hello.server_pub_fp（首连 TOFU 固定），再验 sig
+  client → shared = X25519(device_enc_priv, server_eph_pub)
+          → K = HKDF-SHA256(shared, info="pushbox-frame-v1", salt=nonce)
+  之后所有下行帧: {t:"enc", n, data: AES-256-GCM(K, nonce=8B大端序号‖4B零, plaintext=帧JSON, AAD=8B大端序号)}
+  每 24h 或每 2^32 帧轮换（ratchet），轮换帧仍用旧密钥保护
+  // 序号状态是**每条连接独立**的：断线即丢弃，重连后从 0 重新开始。
+  // 所以接收端的抗重放窗口也必须按连接重置，不能跨连接累计，否则重连后第一帧就被自己判成重放
+```
+
+### REST 响应密封盒
+
+REST 响应**全部**走一次性 sealed box：
+
+**适用范围**：
+- `register`/`join` 也不例外（它们的响应里就是 token 与恢复码）
+
+**格式**：`{v, eph_pub, salt, data, n}`
+- `salt = sha256(server_eph_pub)`
+- 帧序号固定 `0`
+- `K` 用**设备的静态 enc 公钥**协商（此刻 WS 会话密钥还不存在）
+
+**安全保证**：
+- 客户端解出明文再入库
+- 服务端进程内存里出现明文，但**过网与客户端落盘之外没有任何明文副本被第三方基础设施（CDN、代理、日志）拿到**
+
+**唯一例外**：第三方的 `POST /message`
+- 它的请求与响应都不含设备凭据
+- 对端是 curl 而不是我们的客户端，保持明文好接入
+
+### 4.4 入站鉴权与滥用防护（A 边界）
+
+#### 默认模式（P0 实现，即用户指定的形态）
+
+凭据全在请求体，一次普通 POST。
+
+| 请求体字段 | 例 | 校验 |
+|-----------|----|------|
+| `channel` | `"83271504"` | 8 位频道号码，不存在 → 统一返回 `401 invalid_credential`（不区分"频道不存在"与"密钥错"，防枚举） |
+| `secret` | `"4f9c…e21"` | 与 `sha256(secret_hash)` 常量时间比较；错 5 次/分钟 → 该 `channel` 锁定 5 分钟（`fail_count/locked_until`） |
+| `msg_key` | `"build-1287"` | 可选幂等键；命中已存在则直接返回原结果，不重复入库 |
+| `ts` | `1765500000` | 可选；带 `strict_auth=1` 的频道必填且 ±300s 内，超窗 `400 clock_skew` |
+
+#### 必须遵守的实现约束
+
+写进服务端代码规范与部署检查：
+
+**HTTPS 要求**：
+- **只接受 HTTPS**（HTTP 下 secret 与正文等同明文）
+- 只接受 `POST` + `application/json`
+- 禁止把 `channel/secret` 放 URL query（避免进 access log、Referer、代理日志）
+
+**日志安全**：
+- **禁止记录请求体**：Tomcat/Caddy 默认不记 body，但要在 logback 里加一条"入站 body 不落日志"的断言测试
+- 错误响应也不回显任何输入字段
+
+**密钥管理**：
+- `secret` **可一键重置**（"我的 → 频道管理 → 重置密钥"）
+- 重置即让旧凭据失效
+
+**频率限制**：
+- 按 `channel` + 来源 IP 双维度
+- 默认 60 条/分钟/频道
+- 429 带 `Retry-After`
+
+#### 可选加固模式（P2，按频道 `strict_auth=1` 开启）
+
+仍走同一个 `POST /message`，只是额外要求在 body 里带 `ts` / `nonce` / `sign`：
+
+**签名算法**：
+- `sign = hex(HMAC-SHA256(secret, canonical))`
+- `canonical = channel\n ts\n nonce\n sha256(content)`
+
+**重放防护**：
+- 服务端缓存 nonce 10 分钟
+- 重复即 `409 replay`
+
+这样既保住"一次普通 POST 就能接入"的默认体验，又给需要防重放/防伪造的场景留了口子。
+
+### 4.5 媒体（图片）链路：外链抓取 → 转存 RustFS → 图文同帧下发
+
+第三方**只给 URL**（`images: string[]`），服务端负责把图拉回来存进我们自己的桶 —— 这样对象归属清晰，删除消息时才能真正删掉 S3 内容（D13），也不会因为外链失效/防盗链而破坏 D3 的"重装可恢复历史图片"。按 **D24**，抓取结果要和正文**一起下发**，客户端收到就是图文齐的一条消息。
+
+```
+第三方: POST /message  { …, "images": ["https://…/a.png", "https://…/b.jpg"] }
+     → 立即阶段（毫秒级）：校验凭据/限流/长度/images 条数与 scheme（只收 http/https，data: 直接 400）
+        → 落 messages(media_status='pending') + 每条 URL 一行 media_objects(status='pending')
+        → 入内存队列（有界）+ 开一个"合并窗口"（见下）
+        → 立即返回 200 {ok,id,seq,summary,media_status:"queued"}   ← 不等抓取，避免第三方超时
+     → 抓取阶段（MediaFetchService，全局池 concurrency=4 + 有界等待位 queue-capacity，非按频道分池）：
+        1) SSRF 校验（见下）→ 通过才发请求
+        2) GET，超时 10s、最多 2 次重定向（每跳重新校验）、单张 ≤10MB、总 ≤32MB
+        3) Content-Type 白名单(image/jpeg|png|webp|gif) + 魔数复验；拒 SVG（可嵌脚本）
+        4) 计算 sha256；同 group 已存在相同 sha256 → 直接复用旧 object_key 与旧加密形态，不重复存
+        5) Thumbnailator 生成缩略图（WebP，长边 512）→ thumb_key
+        6) S3 PutObject 到 media/{msg_id}/{idx}（私有桶、Content-Type 写 MIME）；
+           object-encrypt=sse-c 时，这一个槽位先随机生成一把 32 字节客户钥，
+           原图与缩略图**共用它**（所以库里一列 sse_key_wrapped 就够）
+        7) media_objects(status='ready', object_key, thumb_key, mime, w/h, size, sha256,
+           enc_mode, sse_key_wrapped)
+     → 合并窗口（NotifyCoordinator，pb.notify.media-wait 默认 3s）：
+        · 该消息全部 URL 到达终态(ready|failed) → 立刻写 messages.media_keys + media_status，
+          并把 level 按频道 max_level 截断（D25）→ 向 group 广播**一条** message 帧（media[] 已带真图）
+        · 窗口到期仍有 pending → 用已有结果广播 message 帧（缺的标 status:"pending"），
+          后续完成的图再以 media_ready 帧原地补齐（不重复发通知）
+        · 无 images 的消息不进窗口，直接广播（纯文字仍是毫秒级到账，D24 不影响 P0 验收①）
+失败:   status='failed' + error(timeout/ssrf_blocked/too_large/bad_type/http_4xx)，
+        对**这条消息的下发**而言就是终态 ⇒ 消息绝不会因抓不到图而不发；客户端该图位显"图片已失效"占位。
+        但对**存储**而言不是终点：MediaRetryService 定时把还能救的槽位放回 pending 再抓一次
+        （见下"抓取重试"），救回来的图以 media_ready 帧原地补齐（同 id 同 seq，不重复通知）
+
+客户端: GET /api/v1/media/{msg_id}/{idx}?size=thumb|full
+     → 校验设备归属（token + 签名）→ 服务端自己 GetObject（enc_mode=sse-c 时先从库里取出封装钥、
+       解封出客户钥再解密）→ **200 直接回图片字节**（Cache-Control: no-store），设备不需要能连到桶地址
+     → 写 media_cache/（按 object_key 存、sha256 去重，LRU 清理可配）
+删除:   tombstone → media_objects.status='deleted' 记账 → 延迟 7 天（可配）真删 RustFS 对象
+        （SSE-C 对象**不需要带客户钥就能删**，DeleteObject 无钥返回 204；删成功才写
+         status='purged' 并把 sse_key_wrapped 抹成 NULL —— 读侧看到 purged 就知道字节回不来了）
+        （宽限期用于误删回滚与多端 tombstone 传播；由 `media sweep` 定时任务或桶生命周期规则执行）
+```
+
+> **对象加密的落地形态**（`core/KeyWrap` + `server/MediaObjects`）：`pb.s3.object-encrypt` 只有 `none|sse-c` 两态，默认 `none`（历史桶与本机 dev 的既有对象都是明文，读侧按每行 `enc_mode` 各走各的，**切换开关只影响新写入的对象**）。开 `sse-c` 的前提是 `pb.s3.master-key` 能解出 32 字节（标准或 URL-safe base64 都收）；解不出来时 `MediaObjects` 构造阶段直接抛 `IllegalStateException` 让进程起不来 —— 静默退回明文是最坏结果，运维会以为桶里是密文。主钥只存在于服务端进程内存，每对象客户钥以 **定长 61 字节**形态入库：`0x01（版本）‖ iv(12) ‖ AES-256-GCM ct(32) ‖ tag(16)`，P3 的 Windows 端要按同一格式对齐。
+> 为什么是 SSE-C 而不是预签名：**SSE-C 写的对象不能用预签名 URL 读**（带钥写成功后，预签名 GET 直接 400 `InvalidRequest`），所以媒体读接口从 302 改为服务端代理；`x-amz-server-side-encryption-customer-{algorithm,key,key-md5}` 三件套必须齐，且 **KeyMD5 要自己算**（base64(md5(原始钥))，SDK 不代劳）。代价是图片字节过一道服务端，收益是桶里落密文、不依赖 RustFS 侧配置（SSE-S3 需要 RustFS 进程先配 `RUSTFS_SSE_S3_MASTER_KEY`，本期未接线），顺带解决"设备在 Tailscale 之外够不到 RustFS"的可达性问题。头像与图片同桶同机制，`senders` 表由 `V3__sender_avatar_encryption.sql` 补上同样的两列；覆盖写头像时用 `reuseKey()` 延用旧封装钥，避免出现"新字节 + 库里旧钥"的读侧空窗。
+> 用例：`KeyWrapTest`（封装格式/篡改全拒/两种 base64）、`MediaObjectsTest`（无钥读 400、覆盖写、无钥删除）、`MediaObjectsConfigTest`（缺主钥/未知取值拒绝启动）、`MediaSsePipelineTest`（抓取即密文 → 代理读回明文 → 去重带钥 → 头像 → 覆盖写 → 历史明文行照样可读 → deleted/purged 提示）、验收探针（`none` 与 `sse-c` 两种配置各跑一遍）。
+
+> **抓取队列的有界语义**：池子是 `pb.media.concurrency` 个 worker + `pb.media.queue-capacity`（默认 256）个**等待位**，一个任务＝一条消息的全部图片。排不进去时**绝不把 `RejectedExecutionException` 抛回受理线程**——那等于让一条已入库的消息永远没有第一帧。`MediaFetchService.submit(task, onRejected)` 的降级分支按调用方各不相同，且每一支都必须自己收尾干净：
+> - 合并窗口（`NotifyCoordinator.accept`）：取消定时器 → 把该消息还挂着的槽位当场记成 `failed`/`error=queue_full` → 走正常的第一帧下发；已经发过第一帧的情况合并成**一条** `media_ready`，不逐槽打库。
+> - 重试 sweep：只放开 `running` 闸。漏了这一步就是"一次排不上队 ⇒ 重试永久关掉"。
+> - 头像转存：回收 `avatarInFlight` 标记。漏了这一步就是"该 sender 以后再也提交不了头像"。
+> `queue_full` 与抓取失败在客户端语义完全一致（图位显示"图片已失效"，正文不受影响），所以不新增帧类型。用例见 `MediaFetchServiceTest` ⑪⑫、`AvatarFetchTest` ⑤、`NotifyCoordinatorQueueFullTest`。
+
+**SSRF 是这条链路的头号风险**（服务端会替第三方访问任意 URL），`MediaFetchService` 硬性要求：
+- 协议只允许 `http` / `https`；URL 必须能解析出主机名，拒绝 userinfo（`http://host@evil/`）。
+- **先解析 DNS，再校验 IP**，拒绝回环/私网/链路本地/组播与运营商级 NAT 段：`127.0.0.0/8`、`10.0.0.0/8`、`192.168.0.0/16`、`172.16.0.0/12`、`169.254.0.0/16`、`100.64.0.0/10`（⚠ 我们自己的 `<存储机>` 正落在这个段里，所以 RustFS 走服务端 SDK 直连，**抓取器必须默认封禁该段**）、`0.0.0.0/8`、`::1`、`fc00::/7`、`fe80::/10`。
+- **用已校验的 IP 发起连接**（把连接目标钉成解析出的 IP，同时保留原 Host 头），避免校验后 DNS 重绑定（TOCTOU）。
+- 每一跳重定向都重复上述校验；连接池与 HttpClient 不复用内网 proxy。
+- 响应体用上限截断读取（超 10MB 立即断开），只接受图片 MIME 且魔数一致；不解析 HTML、不执行任何内容。
+- **当前部署的图片来源全部为公网可访问地址**，因此 `pb.media.allow-hosts` 保持空列表、`allow-private=false`，私网/CGNAT 段无一处例外 —— 这是本设计里 SSRF 面最小的一种配置。
+- `allow-hosts` 保留为**逃生阀**而非默认路径：将来若要接内网图床/渲染服务，运维必须填**完整 `host[:port]` 字面量**（精确等值匹配，端口不同即不同条目；禁止写域名父段或后缀，`img.internal.lan` 绝不匹配 `img.internal.lan.evil.com`），且**白名单判断必须在 IP 校验之前**执行，否则内网 host 解析出的私有 IP 会先把请求拦下，白名单永远不生效。命中白名单的 host 不跟随跳转到非白名单 host。
+- `sender_avatar`（§5.1 可选字段）：第三方给的头像也走**同一个抓取器与同一套校验**（SSRF、Content-Type+魔数双重），只是上限单独收到 512KB —— 头像只用在 44dp 的圆里，为它保留 10MB 的预算没有意义。规则：
+  - **只认两种写法**：http(s) URL 与 `data:image/*;base64,…`。其余（相对路径、`javascript:`、非图片 mime、超长）一律当成"没给头像"，绝不因为一个坏头像把整条消息 400 掉。
+  - **对象键 `media/avatar/{channel_no}/{sha256hex(sender_id)}`**：`sender_id` 是第三方自报的任意字符串（可以含 `/`、`..`、中文），拼进桶的目录结构等于把桶交给外部输入，拼进 REST 路径就要指望客户端正确转义、服务端不把 `%2F` 再拆开，两头都不可控，所以键与 URL 里都只出现它的 sha256（客户端本地也能算）。按 (频道, 发送者) **覆盖写**，换头像不留孤儿对象，因此头像**不进** §5.2 的宽限期巡检。
+  - **内联 base64 绝不落库**：`senders.avatar_url` 只有 1024 字符，一张正常头像的 base64 就装不下，截断后是个取不到的地址；库里只留 `data:sha256:{摘要}` 指纹，字节走同一条转存路径直接进桶。`avatar_url` 因此始终叫"来源"，它才是"来源变了没"的判据。
+  - 列分工：`avatar_token` 与 `sender_id` 一一对应，每次都写；`avatar_url` 只在自报非空时覆盖（这条没带就保住上次的来源）；`avatar_key` **只有转存成功才写**。
+  - 下发列 `sender_avatar` 由 SQL 现算：`avatar_key IS NULL → NULL`，否则 `/api/v1/avatars/{avatar_token}`。**第三方的头像 URL 一律不出现在任何下行数据里**（探针 ⑳ 逐帧检查），否则客户端直连外部头像等于把用户 IP 与设备信息交给别人的服务器。没转存成功时这一列是 NULL，客户端用 `sender_id` 首字生成占位头像。
+  - 同一个 (频道, 发送者) 同时只允许一个转存任务（一条 webhook 打过来十条消息不该抓十次同一张图）；失败只 `log.warn` 且**只留 host**（§14 脱敏），不影响消息受理，也不进抓取重试的账本。
+  - **转存是异步的，首帧通常带不到头像**（探针 ⑳ 里三条消息的 `sender_avatar` 全是 `null`）：客户端按 token 本地缓存，进会话或下次补拉时自然拿到，不要把"这一帧没头像"当成错误去重试。
+
+**抓取重试（`MediaRetryService`）**：入站那一次抓取失败多半是远端抖动（5xx、超时、DNS），不代表这张图永远拿不到；但重试绝不能挡住主链路，所以它只跑在定时任务里，规则如下。
+- **资格**：`status='failed' AND fetch_attempts < pb.media.retry-max` 且 `error` 不是 `bad_type`/`too_large` —— 后两者是内容级终态（字节已经拿到且明确不可用），重试一百次也不会变好。消息或槽位已 tombstone 的直接排除。
+- **顺带回收僵尸**：`status='pending'` 且 `created_at` 老于"抓取预算 ×2"（且不低于 60s 下界）的行，是进程重启打断抓取留下的，同样重抓一次；下界是为了不和入站那条正在抓的线程抢同一行。
+- **退避就是巡检间隔本身**：`pb.media.retry-interval`（默认 5m）就是一张图两次尝试之间的最小距离，不逐槽位维护指数退避表 —— 为一张失效外链加一张表不值。
+- **每轮限量、单实例**：一轮最多 `BATCH=50` 条消息，按最老优先出队；整轮跑在抓取线程池上并用 in-process 标志去重，上一轮没完这一轮就让路（`fixedDelay` 只量定时器线程，量不到后台那一轮）。
+- **补帧只发结论变了的槽位**：抓取前的状态快照必须取在 `resetMediaForRetry` **之前**，否则 `failed→pending→failed` 会被读成"变化"，一张坏图每轮都被补发一帧直到次数用完（首跑日志就是这么刷屏的，已修）。
+- `fetch_attempts` 是唯一的账本，reset 时**不清零**；清零等于让一个坏链接被无限重试。
+
+对象存储支持两种后端（由 `pb.storage.type` 控制）：
+
+1. **S3 协议**（默认，`pb.storage.type=s3`）：走 `aws-sdk-java-v2` 的 `S3Client` + `S3Presigner`，endpoint 指向 RustFS/MinIO/OSS/AWS S3，**必须 `forcePathStyle(true)`**。RustFS / MinIO / 阿里云 OSS / AWS S3 只是配置项差异。
+
+2. **本地文件系统**（`pb.storage.type=local`）：零依赖单机部署方案，对象直接落盘到 `pb.storage.local-path` 指定目录（容器内默认 `/app/data/media`）。加密策略与 S3 模式完全一致（明文或 SSE-C），路径遍历攻击防护，元数据单独存 `.meta` 文件。适用于无对象存储服务的轻量级部署场景。
+
+### RustFS 能力验证结论（SigV4 path-style 全链路验证通过）
+
+| 能力 | 验证结果 | 对设计的影响 |
+|------|----------|--------------|
+| `PutObject`（含 5MB）、`GetObject`、`DeleteObject`(204)、`ListObjectsV2`、`GetBucketLocation`、`CreateMultipartUpload` | ✅ 全部正常 | §4.5 主链路成立，无需分片以外的特殊处理 |
+| 匿名 `GetObject` | ✅ 返回 403 | 私有桶默认安全，客户端只能经服务端鉴权取图 |
+| **预签名 URL** | ✅ 60s 内匿名可取；非法 `X-Amz-Expires`（如 `-5`）返回 400 被拒 | 桶能力没问题，但**本期不用它**：SSE-C 写的对象无法用预签名读（400 `InvalidRequest`），读侧统一走服务端代理（§4.5/§5.2）。留这一行是为回归时仍能确认桶的签名行为；**注意**：签名时 canonical request 的 payload 位必须写字面量 `UNSIGNED-PAYLOAD`（写 sha256 会 `SignatureDoesNotMatch`） |
+| **SSE-S3（`x-amz-server-side-encryption: AES256`）** | ❌ 400 `InvalidRequest: SSE-S3 requires RUSTFS_SSE_S3_MASTER_KEY to be set to a base64-encoded 32-byte key when KMS is not configured` | 能力存在但**服务端默认未开启**。要用必须先给 RustFS 进程配 32 字节主密钥（compose 加 env），属于运维动作，不作为 P1 前提 |
+| **SSE-C（客户自带密钥）** | ✅ 完整可用：PUT 200 且响应回显 `x-amz-server-side-encryption: AES256`；带钥 GET 内容一致；**不带钥 GET 明确被拒（400）**；错误密钥被 key-MD5 校验拒绝；**`DeleteObject` 不需要带钥**（204，删完回读 404） | **对象加密走 SSE-C**（§4.5）：一个槽位一把 32 字节随机客户钥（原图与缩略图共用），用 `pb.s3.master-key` 做 AES-256-GCM 封装成定长 61 字节存 `media_objects.sse_key_wrapped` / `senders.sse_key_wrapped`，桶里落盘即密文，不依赖 RustFS 配置；也正因为"带钥才能读"，媒体读接口改为服务端代理 |
+| **桶生命周期规则** | ✅ `PutBucketLifecycleConfiguration`（`Expiration.Days=7`）200、回读一致、`DeleteLifecycle` 204 | 宽限期可用**原生规则**按 prefix 兜底清理；服务端 `media sweep` 仍保留（tombstone 是对象粒度，比 prefix 精确），两者并存、以 `media sweep` 为准 |
+| 无 SSE 的对象 | 回读即原样明文 | 印证 §14"服务端/桶是明文暴露面"；开 SSE-C 后该结论对图片对象收敛为"密文 + 密钥在主密钥里" |
+
+因此 §4.5 的 `pb.s3.object-encrypt` 定为**三态**：`none`（默认，桶内明文）｜`sse-c`（**推荐**）｜`sse-s3`（需先在 RustFS 侧配 `RUSTFS_SSE_S3_MASTER_KEY`）。P1 先用 `none` 打通链路，P2 打开 `sse-c` —— 切换只影响新写入对象，历史对象仍按各自记录的密钥解密。
+
+---
+
+## 5. 协议与 API
+
+### 5.1 消息 API：`POST /message`（唯一入站写入接口）
+
+一个接口、一个 JSON 请求体，频道号码与密钥都写在 body 里；URL 不含任何标识。
+
+```http
+POST /message
+Content-Type: application/json
+
+{
+  "channel": "83271504",            // 必填：频道号码（"我的 → 频道管理 → 接入信息"里看）
+  "secret":  "4f9c1e…e21",          // 必填：频道密钥
+  "type":    "markdown",            // 必填：text | markdown | link | file
+  "content": "主机 **prod-03** 近 5 分钟均值 92%\n> 截图如下",   // 必填：消息体
+
+  "sender_id":   "grafana",         // 强烈建议：稳定标识，决定落到哪个会话（一个软件=一个会话）
+  "sender_name": "Grafana 告警",     // 可选：会话显示名（客户端首次见时建档，之后可本地改名）
+  "sender_avatar": "https…/g.png",  // 可选：头像 URL 或 data:image/*;base64,…；服务端转存后只下发自己的读路径（§4.5）
+  "title": "[严重] CPU 使用率 > 90%", // 可选：列表与通知首选展示行
+  "level": "error",                 // 可选：info | warning | error；服务端按频道 max_level 截断后下发（D25）
+  "url":   "https://grafana.example.com/d/abc",  // link 类型或"查看"跳转
+  "images": [                       // 可选：图片外链，服务端抓取转存进 RustFS（§4.5）
+    "https://grafana.example.com/render/panel-7.png",
+    "https://cdn.example.com/trace/01J…/flame.jpg"
+  ],                                //      1–4 张（频道 max_images 可调），单张 ≤10MB；只收 http/https，
+                                    //      给 data:image/…;base64 一律 400（D10 of §16：不支持内联图）
+  "msg_key": "alert-firiring-01",  // 可选幂等键：重复提交不会重复投递
+  "ts": 1765500000                  // 可选：事件发生时间；缺省用服务端接收时间
+}
+
+→ 200 { "ok": true, "id": "01J…", "seq": 18482, "summary": "[严重] CPU 使用率 > 90%",
+        "media_status": "queued", "media_count": 2, "level": "error" }
+        //  200 立即返回（第三方超时普遍 5–10s，不能被抓取拖黄）；
+        //  media_status: queued|none —— 图文到齐后由服务端一次性推给设备（§4.5 合并窗口，D24）
+        //  level 回显的是**截断后**的实际生效强度（频道 max_level 可能把 error 降为 warning）
+→ 400 { "ok": false, "error": "invalid_param", "hint": "images 最多 4 条 / 仅支持 http(s)" }  // 字段校验（不回显输入）
+→ 401 { "ok": false, "error": "invalid_credential" }                     // 频道不存在或密钥错，统一话术
+→ 403 { "ok": false, "error": "channel_locked" }                         // 密钥连续错误被锁定 / 频道已归档
+→ 413 { "ok": false, "error": "too_large" }                               // content 超 max_body_bytes(32KB)
+→ 429 { "ok": false, "error": "rate_limited" }  + Retry-After             // 超频道或 IP 频率
+```
+
+最小可用形式（4 个必填字段即可，其余全可省；`sender_id` 省略时服务端按 `unknown` 归到一个会话）：
+
+```json
+{ "channel":"83271504", "secret":"4f9c1e…e21", "type":"text",
+  "content":"服务 order-svc 发布成功，耗时 42s" }
+```
+
+响应码统一 200（不是 201），因为大量监控/CI 组件只把 2xx 当成功、且 200 兼容性最好；`ok` 字段与 HTTP 码同时表达结果，方便"只看 HTTP 码"的老工具判断。
+
+服务端在入库时同步生成 `summary`（去 Markdown 语法 + 截断 60 字符）并写入 ngram 全文索引，因此客户端**收到即可直接发系统通知**，历史搜索也不依赖本地缓存。
+
+**`images` 的语义要点（D24 定了图文同步）**：① `/message` 的 200 只代表**正文与抓取任务已受理**（`media_status:"queued"`），第三方**无需轮询**结果；② 服务端在合并窗口（默认 3s）内等图到齐，然后向设备推**一条图文齐全的 `message` 帧**，Android 收到即可直接带图发系统通知；③ 窗口到期仍没抓完的图，才走 `media_ready` 帧后补（不重复通知）；抓取失败计为终态并显占位，**正文与通知不受影响**；④ 第三方不需要（也无法）删除我们已转存的对象 —— 对象由服务端持有，删除只走客户端的 `DELETE /api/v1/messages/{id}`（→ tombstone → 宽限期后 `DeleteObject`）。
+
+**`level` 不是发送方说了算**（D25）：服务端读取该频道的 `max_level`，把请求里的 `level` 向下截断（`error > warning > info`），截断后的值才写库并下发；被降级的消息在响应里回显实际生效值，便于发送方自检。频道 `max_level` 在 Android"我的 → 频道管理"里改。
+
+### 5.2 其他接口
+
+| 方法/路径 | 用途 | 鉴权 |
+|----------|------|------|
+| `GET /api/v1/messages?channel_no=&after_seq=&limit=` | 重连/重装后增量拉取（含 tombstone 列表与 `media_status`），响应体经传输加密 | 设备 token + Ed25519 签名 |
+| `GET /api/v1/search?q=&channel_no=&sender_id=&type=&since=&limit=` | **服务端全文搜索**，返回 `id` + 命中片段（D19） | 设备 token + 签名 |
+| `GET /api/v1/media/{msg_id}/{idx}?size=thumb\|full` | 校验设备归属后**服务端代理取回对象并以 200 回字节**（`Cache-Control: no-store`；`enc_mode=sse-c` 时由服务端解封客户钥解密，设备无需连桶）；无缩略图时降级发原图，`pending`/`deleted`/`failed`/`purged` 回 404 + 该状态 | 设备 token + 签名 |
+| `GET /api/v1/avatars/{avatar_token}` | 头像读接口：`avatar_token = sha256hex(sender_id)`，同组内查最新一次转存成功的对象键并同样 200 代理回字节；跨组、没存成、token 不是 64 位十六进制都 404 | 设备 token + 签名 |
+| `PUT /api/v1/state/read` | `[{channel_no, sender_id, last_read_seq}]` 已读游标上报 | 设备 token + 签名 |
+| `DELETE /api/v1/messages/{id}` 或 `?channel_no=&sender_id=` | 删除 → tombstone + RustFS 对象删除 | 设备 token + 签名 |
+| `POST /api/v1/devices/register` | `{enc_pubkey, sign_pubkey, name, platform, group_secret?}` → `{device_id, group_id, token, recovery_code?}`；**同 `group_id` 活动设备满 5 台返回 `409 device_limit_reached`（D26）** | 首启开放（限流） |
+| `POST /api/v1/devices/join` | 用 `recovery_code` 让新设备（PC / 换机）加入同一 Space，同样受 5 台上限约束 | 恢复码 |
+| `GET /api/v1/devices` / `DELETE /api/v1/devices/{id}` | 设备列表与远程吊销 | 设备 token + 签名 |
+| `POST /api/v1/channels` · `PUT/DELETE /api/v1/channels/{no}` · `POST /api/v1/channels/{no}/rotate-secret` | 频道 CRUD、重置密钥/频道号码 | 设备 token + 签名 |
+| `POST /api/v1/channels/join` · `POST /api/v1/channels/leave` · `POST /api/v1/channels/subscription-mode` | **接入频道（同一 Space 内两台设备收到同样的消息那条）**。`join` 收 `{channel_no, secret}`：密钥只作"我有权往这条频道发"的二次确认，服务端把该频道记进**这台设备**的订阅集（`channel_subscriptions(device_id, channel_no)`）；`leave` 幂等，`removed:false` 就是本来没接入；`subscription-mode` 收 `{subscribed_only:0\|1}` 并**回显生效值**（客户端以此为准，不猜）。开=1 时这台设备的实时帧、WS 回放、REST 历史与搜索一律只走已接入的频道，开=0 全收 —— 它是**投递过滤器，不是权限边界**：读凭据始终是设备 token（§4.1），所以接入后再读会**回溯**放开接入前那条（过滤按频道，不按接入时刻）。只对同一 Space 生效：未知号码、别组频道、已归档频道一律 404（不给枚举频道号留缝），错密钥 401 且**不计入 `fail_count`**（那把锁保护的是公开入站路径，这一发本身已过设备签名）。`GET /api/v1/channels` 的每一项因此**恒带** `subscribed`（一条订阅都没有时全 false，不让客户端靠键缺失去猜），根上带 `subscribed_only`；**建频道的那台设备默认接入自己刚建的那条** —— 否则一开过滤就把自己新建的频道静默掐断，而界面上没有任何一处提示过这两件事有关联 | 设备 token + 签名 |
+| `GET`/`POST /api/v1/admin/scheduled-tasks` · `GET`/`PUT /api/v1/admin/scheduled-tasks/{id}` · `POST /{id}/enabled` · `DELETE /{id}` | **管理台定时推送（D33，v1.1.0）**：选一条已有频道 + 6 段 cron，服务端按点把消息灌进那条频道。请求体沿用管理台的驼峰风格（`channelNo`/`cronExpr`/`senderName`），响应才是下划线；**列表只回 `content_head`，`GET /{id}` 才带全文与 `images`**（编辑表单要能原样回填）。创建/更新在服务端就把 cron 解析一遍并算出首个 `next_fire_at`，解析不过直接 400，不会先存进去再靠触发时报错。启停只动 `enabled`/`next_fire_at`/`updated_at` 三列，载荷与 `last_*` 执行结果原样保留 —— 停用再启用不该丢历史。任务请求体上限单独放宽到 64KB：正文本身允许 32K 字符（`IngestRequest.MAX_CONTENT_CHARS`），套 8KB 的通用上限会把合法任务挡在门外 | 管理台 JWT（D28，不密封、不带 group 作用域） |
+| `GET /healthz` · `/actuator/prometheus` | 健康与指标 | **内网 only（2026-10-14 接通）**。`/healthz` 不鉴权、只做一次 `Connection.isValid(2)`：库通=200 `{ok,db,uptime_ms}`，不通=503，版本/连接池/SQL 一律不回。`/actuator/prometheus` 由 `micrometer-registry-prometheus` 提供，自定义指标 `pushbox_ws_online`、`pushbox_media_queue_depth`（gauge）+ `pushbox_ratelimit_rejected_total{dim=channel\|ip\|device}`、`pushbox_ingest_credential_locked_total`（counter）；`/actuator/health` 配 `show-details=never`。准入是 `InternalAccessFilter`（`FilterRegistrationBean` 挂 `/healthz` 与 `/actuator/*`），只看 `getRemoteAddr()`（**不信 `X-Forwarded-For`**，那个头客户端自己写）：**默认只放行环回**，其余地址必须落在显式配置的 `pb.security.internal-cidrs`（环境变量 `PB_SECURITY_INTERNAL_CIDRS`，逗号分隔 CIDR，主机位非 0 的写法当场拒绝启动）；`/actuator` 这一侧没有鉴权，所以每写进一段 CIDR 等于给它开一扇门。放行范围外 **404 而非 403**，不给扫描器确认端点存在 |
+
+> 命名规则：**第三方用到的接口只有根路径的 `POST /message` 一个**（不带版本、频道号不进 URL、无 multipart 上传口），保持 webhook 地址最短最好记、接入文档只有一页；**客户端与管理接口带 `/api/v1` 前缀**，因为它们会随协议演进。
+
+> **密封范围（实现阶段确认，别再当成可选项）**：`/api/v1` 的**全部响应**都是密封盒 `{v, eph_pub, salt, data, n}`，**包括 `register` 与 `join`** —— 这两个响应里装着 `token` 和 `recovery_code`，明文回出去等于把长期凭据和分组主密钥挂在 TLS 一层上。`salt = sha256(server_eph_pub)`、帧序号固定 0，用**设备自己的静态 enc 私钥**解（此时 WS 会话密钥还不存在）。只有第三方侧的 `POST /message` 是明文 JSON：它的请求体是频道 secret、响应体只有 `id/seq/summary`，不含任何设备凭据，而且第三方是 curl 而非我们的客户端，给它一套密封盒只会把接入文档撑成两页。
+
+> **REST 签名的 canonical（`pushbox-core/crypto/SignatureTargets.restAuth`，两端与 P3 的 C# 必须逐字节一致）**：
+>
+> ```
+> pushbox-rest-auth-v1
+> {device_id}
+> {METHOD 大写}
+> {path}
+> {原始 query 串，无 query 就是空行}
+> {sha256hex(请求体字节；无体就是 sha256("")= e3b0c442…b855)}
+> {ts 毫秒}
+> {b64(client nonce)}
+> ```
+>
+> 头：`Authorization: Bearer {token}` + `X-PB-Device` / `X-PB-Ts` / `X-PB-Nonce` / `X-PB-Sig`。
+> **两个最容易翻车的点**：① 签名里的 `query` 必须与服务端 `request.getQueryString()` **逐字节相同** —— 键序、编码、空值都算，客户端自己重新拼一遍 `Map` 顺序就会验签失败（本项目所有列表接口的 query 都按固定顺序拼，就是为了让这条唯一确定）；② `ts` 有 ±300s 窗口、`nonce` 进 Caffeine 去重缓存（10min），所以客户端时钟漂了是整片接口一起 401，而不是偶发。
+> 这两条已经不是"口头约定"：`vectors.json` 的 `rest_auth` 段把 GET（小写 method + 含空值参数的原始 query + 空 body）与 POST（中文 body + 空 query）各钉了一份 `canonical` 原文和期望签名，`sealed_box` 段再钉一份 REST 响应密封盒的完整信封；Java 侧 `CryptoVectorsTest` 导出、C# 侧 `RestCanonicalTest`/`RestSealTest` 对齐，Android 与 C# 谁改了规范化都会被判红。
+
+> **§5.2 表里的服务端接口现已全部挂上（2026-10-14）**，实现与判分口径：`GET /api/v1/search` 用 MySQL ngram FULLTEXT 命中 `title/summary/body`，短于 `ngram_token_size` 的词与零命中都落回组内 LIKE，响应只回命中片段（`SearchServiceTest` + 验收探针 ⑰）；`DELETE /api/v1/messages?channel_no=&sender_id=`（清空整会话/整频道）一条 UPDATE 标完整个会话并只广播**一条带 `scope` 的 tombstone 帧**，重复调用幂等回 `deleted:0`（`ConversationDeleteTest` + 探针 ⑱）；`GET /api/v1/media/{msg_id}/{idx}` 由服务端带客户钥取回对象后以 200 代理回字节，`MediaPurgeService` 负责宽限期后真删对象（探针 ⑮/⑯）；`GET /api/v1/avatars/{avatar_token}` 与 `sender_avatar` 转存链路（§4.5，探针 ⑳，`AvatarSourceTest`/`SenderAvatarStoreTest`/`AvatarFetchTest`）；`/healthz` 与 `/actuator/prometheus` 见上表（`HealthzControllerTest`/`InternalAccessFilterTest`/`ObservabilityEndpointTest`）。
+>
+> **观测这一对端点上有两个坑已经踩过，别回退**：① `application.yml` 的 `management.endpoints.web.exposure.include` **必须是带引号的单个字符串**（`"health,info,prometheus"`）—— flow 风格 `{ include: health, info }` 里的逗号是 YAML 条目分隔符，实际只绑到 `health`，多出来的名字变成值为 null 的键；② `ObservabilityEndpointTest` 上的 `@AutoConfigureObservability` **不能删**——Spring Boot 在测试上下文里把 `management.defaults.metrics.export.enabled` 判为 false，于是 `/actuator/prometheus` 在真实进程 200、在测试里 404，删掉注解这条用例就变成"断言一个不存在的端点"。
+> `server/pom.xml` 的实际依赖：持久层是 `spring-boot-starter-jdbc`（HikariCP 由它带入）+ `mybatis-flex-spring-boot3-starter`，**`aws-sdk-java-v2` 与 Thumbnailator 已随 P1 抓图转存引入**，观测是 `spring-boot-starter-actuator` + `micrometer-registry-prometheus`。
+
+### 5.3 长连接协议（WebSocket）
+
+```
+连接: wss://host/ws?since_seq=18482        // URL 只带 since_seq；device_id/token 绝不进 URL
+                                            // （URL 会落进反代与网关的访问日志，等于把凭据写进日志）
+鉴权: 建连后由客户端在 **auth 帧**里交齐 {t:"auth", device_id, token, ts, sig}，
+      sig = Ed25519(sign_priv, "pushbox-ws-auth-v1\n{device}\n{b64(hello.nonce)}\n{ts}")
+      —— 即签名把服务端的 hello nonce 吃进去，一次一签、不可跨连接重放
+帧(JSON, 一行一帧；除 hello/auth/kx 外均包在 {t:"enc", n, data} 内，见 §4.3):
+  {t:"hello",   server_time, heartbeat:25, server_pub_fp:"…", nonce:"…"}   // 建连即发，明文
+                //  nonce 是服务端给的一次性挑战值，同时是 §4.3 里 HKDF 的 salt
+  {t:"kx",      server_pub, eph_pub, sig}                                  // 密钥协商
+                //  server_pub（静态签名公钥）必须随 kx 下发：客户端拿它核对 hello.server_pub_fp
+                //  做首次信任（TOFU），再验 sig=Ed25519(server_sign_priv, eph_pub‖hello.nonce)。
+                //  没有 server_pub 就无法验证 sig，这条是握手能不能自证的关口
+  {t:"message", seq, channel_no, id, sender_id, type,
+                title, summary, content, level, url,
+                media:[{idx,status:"ready|failed|pending",key?,mime?,size?,w?,h?,thumb?}],
+                sender_name, sender_avatar, created_at, notify:true}
+                //  按 D24：带 images 的消息在服务端合并窗口（默认 3s）内等图到齐，
+                //  所以这一帧到达时 media[] 通常已是终态 ⇒ 客户端收到即可直接发通知，无需等补帧
+  {t:"media_ready", id, seq, media:[{idx,status,key,mime,size,w,h,thumb}], status}  // 兜底帧：
+                //  仅当合并窗口到期仍有 pending 或重试后状态变化时才出现；客户端按 id 原地更新图片位，
+                //  **不重复发通知、不推进已读游标**（帧不带新 seq，seq 只是指向原消息）。
+                //  slot.status 取值：ready/failed/deleted/purged；整体 status 是聚合值。
+  {t:"media_failed", id, seq, media:[...], status}  // 与 media_ready 同形状、同一条消息，只有 t 不同：
+                //  重试轮跑完后所有槽位都是 failed 时由 MediaRetryService 走 NotifyCoordinator.republishFailed 发这一条，
+                //  客户端据此把图片位从"还在转"翻成"已失效"（Android 在缺 status 时按 t 兜底成 failed，
+                //  Windows 的 Frames.cs 同样两型都接）。后面的重试若救回一张，会再发 media_ready 覆盖回来。
+  {t:"read",    channel_no, sender_id, last_read_seq, device_id} // 他端已读，反向同步红点
+  {t:"tombstone", id | scope, deleted_at}                // id 定位单条；scope={channel_no,sender_id}
+                //  定位整个会话（"清空会话"）。二者互斥且都不带 seq：客户端先看 id，没有 id 才按 scope
+                //  清会话。批量删除走一条 scope 帧而不是一批 id 帧，否则上千条会话会把帧流打爆。
+  {t:"ping"} / {t:"pong"}                                        // 心跳间隔由 hello 下发（默认 25s），两端各自主动 ping；40s 无息判死（见 §8.2 第 69 条）
+  {t:"resume_ok"} | {t:"resume_gap", missing_from:18483}         // 落后过多则转 REST 补拉
+```
+
+**补发保证**：服务端永久保留全部消息（D3），`since_seq` 落后即走 REST 回放；客户端以 `(channel_no, sender_id, seq)` 去重，重复帧幂等。单帧超 32KB 时服务端截断 `content` 并置 `truncated:true`，客户端按需调 `GET /api/v1/messages/{id}` 取全文。`media_ready` 帧**不带新的 seq**（挂在同一条消息上，按 `id` 合并更新），所以它不会推进已读游标、不会重复计数，离线设备重连后从 REST 响应里的 `media_status` 得到同一结果。
+
+**重放要循环到取空才回 `resume_ok`**（`PushboxWsHandler.replay`，每批 `pb.ws.replay-batch`，默认 500）：一批发完就回 `resume_ok` 是一个**静默丢消息**的 bug——落后条数落在"一批"与 `GAP_THRESHOLD`(2000) 之间的设备既收不满、也收不到 `resume_gap`，而客户端把 `resume_ok` 读成"已经追平"，剩下的只能等下一次断线重连，不重连就永远看不见。这条由验收探针 ㉑ 钉住（跑法：`--pb.ws.replay-batch=5` 起服务端，与 ⑬ 的 `rotate-after-frames` 同一套路），Android 侧的对应口径是 §8.2 第 21 条的"顶栏那句在线只认 `resume_ok`"。
+
+---
+
+## 6. 关键时序
+
+### 6.1 发送 → 通知
+
+```
+第三方: 组 JSON（channel + secret + type + content + sender… + images[]）→ POST /message
+服务端:  查频道 → 常量时间比 secret → 频率/长度/images 条数与 scheme 校验 → msg_key 幂等 → seq 分配
+        → 生成 summary、按频道 max_level 截断 level → INSERT(media_status=pending) + ngram 索引
+        → 200 {ok,id,seq,summary,media_status:"queued"}          ← 立即回执，不等抓图
+      → 无 images：直接查 group_id → 过一次逐设备订阅过滤 → 遍历该组每条在线连接，
+              各自用它自己的会话钥与帧序号封一份（多端同时收到：同一条明文、N 份互不相干的密文）
+      → 有 images：MediaFetchService 并发抓图（SSRF 校验→下载→缩略图→RustFS PutObject）
+              NotifyCoordinator 合并窗口（默认 3s）：全部到终态即广播**一条图文齐全的 message 帧**；
+              窗口到期仍未完成则先发已有结果，之后用 media_ready 帧原地补图（不重复通知）
+      → 离线设备不处理，等其重连补拉（REST 响应里带同一份 media 终态，保证图文一致）
+      → 写失败的连接当场摘掉会话再继续下一个设备；会话表按 device_id 唯一，
+              同一 device_id 的新连接会主动关掉旧的那条 ⇒ "多端"必须是多个 device_id（§8.2 第 67 条）
+客户端:  解密帧 → 落本地库 → 渲染正文 + 图片 → 发一条系统通知（图文同步，D24）
+```
+
+### 6.2 客户端接收 → 渲染（Android）
+
+```
+后台服务收到 enc 帧 → 会话密钥解密 → 按 (channel_no, sender_id, seq) 去重
+   → Room 事务写入 messages + 更新 conversations(unread_count, last_msg_at, last_summary)
+   → 若该会话正处于前台且用户可见 → 直接插入列表并立刻回写 read 游标，不发通知
+   → 否则 → NotificationManager.notify(MessagingStyle,
+              文本=summary(服务端已生成), Person=sender 名+头像, 组=channel)
+   → 本地 FTS 增量索引（历史全量搜索走 /search）
+```
+
+其余要点：
+- **重装/新设备恢复**：输入恢复码 → `/api/v1/devices/join` → 派生新密钥对 → `GET /api/v1/messages?since_seq=0` 分页拉全量 → 本地重建库与索引 → 历史文字与图片全部回来（图片凭 `media_objects.object_key` 重新下载，抓取时的转存让外链失效不再影响历史；原始 `source_url` 只存服务端，不下发）。
+- **已读多端同步**：本端上报游标 → 服务端写 `read_state` → 向他端广播 `read` 帧 → 他端红点即时消失，无需重启。
+- **删除**：本端立刻隐藏 → DELETE → 服务端 tombstone → 广播 `tombstone` 帧 → 他端同步隐藏 + 清 media_cache。
+
+---
+
+## 7. Android 端设计
+
+### 7.1 模块划分
+
+```
+app (UI: Jetpack Compose)
+ ├─ feature/conversation  消息页（会话列表）
+ ├─ feature/chat          对话页（右上菜单筛选 / 搜索）
+ ├─ feature/settings      "我的"页（设备/频道/恢复码/通知/外观）
+core/designsystem          微信式中性色 token、组件库、深浅色
+core/crypto                依赖纯 JVM 库 pushbox-core（Ed25519 签名 / X25519 协商 / HKDF / AES-GCM / HMAC），与服务端同一份实现
+core/model + protocol      同样来自 pushbox-core：消息模型、WS 帧、API DTO（与服务端字节级一致）
+core/data                  Room + DataStore + Repository + 同步引擎（游标/去重/tombstone）
+core/push                  后台服务、连接池、重连退避、补拉、通知发布、保活引导
+```
+
+> **P0 实际落地的是它的单模块扁平版**（`android/` 只有 `:app` + 源码直编的 `:pbcore`，没做 Gradle 多模块拆分——包结构已经按上面的层次切开，等 P1 真的要用 `:feature/chat` 独立编译时再拆，不提前付多模块的构建复杂度）：
+>
+> | 包 | 文件 | 对应上图 |
+> |----|------|----------|
+> | `cn.iamplus.pushbox` | `App.kt`（手写的依赖容器）、`MainActivity.kt`（注册页 + 会话列表，P0 只到这两屏） | `app` |
+> | `…ui` | `Theme.kt`（§9.1 token + `LocalPushBoxColors`） | `core/designsystem` |
+> | `…net` | `Wire.kt`（**帧编解码：只用 Jackson tree API，不绑定 `pushbox-core` 的 record**）、`PushBoxApi.kt`（REST 签名 + 密封盒解封）、`PushConnection.kt`（WS 握手/验签/TOFU/解密） | `core/crypto` + `core/protocol` |
+> | `…data` | `IdentityStore.kt`（DataStore：两把私钥/token/恢复码/游标）、`PushBoxDatabase.kt`（Room：消息/会话/游标，§3.3 的 P0 子集） | `core/data` |
+> | `…sync` | `SyncEngine.kt`（重连状态机 + 退避 + 补拉 + 全量恢复 + 入库去重） | `core/data` |
+> | `…push` | `PushService.kt`（前台服务，持有 `SyncEngine`） | `core/push` |
+> | `…notify` | `Notifier.kt`（§7.3 会话级渠道 + `MessagingStyle`） | `core/push` |
+>
+> 表里"protocol 来自 pushbox-core、字节级一致"这一条在 Android 侧**只覆盖加密与 canonical**：JSON 帧的字段名在客户端由 `Wire.kt` 自己维护，原因是 §10.1 记的 Jackson/record 陷阱（`Class.isRecord()` 在 API 34 以下不存在，直接绑定 record 会**静默**序列化成 `{}`）。代价是"改协议字段"必须三处同步（`Frames.java` / `Wire.kt` / 探针），好在漏改会被 `p0-e2e.mjs` 判红而不是静默跑偏。
+>
+> `…net` 这一层另有两条只能在真机上点出来的口径：
+>
+> 1. **无体 POST 要按"方法"而不是"体是否为空"决定给不给 `RequestBody`**。OkHttp 两头都管：POST/PUT/PATCH 给 `null` 抛 `method POST must have a request body.`，GET/HEAD 给非 `null` 抛 `must not have one.`。`resetChannelNo`/`rotateSecret`/`rotateRecoveryCode` 三条是无体 POST，原先按"体为空就传 null"写，结果**点一下按钮只弹这行红字，整条功能不通**；按"空体就跳过"改的第一版又把三条 GET 一起弄挂。那个长度 0 的体只为过 OkHttp 的入参校验——**签名的 canonical 仍按"无体"算**（`bodyBytes` 为空时传 `null` 参与签名），与服务端 `require(http, null)` 对得上。Windows 的 `DeviceClient.SignedAsync` 没有对应 bug：.NET 本来就允许无体 POST。
+> 2. **握手后的三个帧"两认一不认"**：`auth_ok` **不存在**（§5.3 到 `kx` 就结束，再造一个只会多一条永远收不到的分支），连接成功认 `kx`；"**已经追平**"只认 `resume_ok`（服务端补拉要循环到取空才发它，见 §5.3），"这一批发完了"不是追平；`pong` 不解析内容，只把"上次收到任何帧"的时间戳前推，判死看 40s 无息而不是 pong 的载荷。
+
+### 7.2 后台常驻与保活（对应 D18）
+
+目标：**不依赖厂商推送，靠自己常驻收消息**，同时让通知栏尽量干净。Android 的硬约束是"前台服务必须带一条通知"（Android 8+ 无法移除），所以思路是**压低这条通知的存在感 + 用厂商级授权换存活率**。
+
+| 手段 | 说明 |
+|------|------|
+| 后台常驻服务 | `foregroundServiceType="remoteMessaging"`；通知渠道 `IMPORTANCE_MIN`、无灯光无声、`onlyAlertOnce=true`，默认折叠成一行不弹窗。Android 15+ 系统会把长期 FGS 通知自动归入"正在运行"分组 |
+| 隐藏监听通知 | 设置页提供入口直达系统通知渠道设置，用户可自行关闭该渠道显示（服务继续运行）；旁边标注可能的后果 |
+| 保活引导页（首启必经 + "我的"可重进） | 按品牌分流图文步骤与深链：①关闭电池优化 `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` ②允许自启动（小米/华为/OPPO/vivo 安全中心各异）③最近任务**下拉锁定卡片** ④关闭"智能省电/应用休眠"。每项实时检测状态并打勾，未完成不阻断使用 |
+| WorkManager 兜底 | 每 15 分钟唯一周期任务拉起服务并比对 `last_applied_seq`，缺口走 REST 补拉；即使进程被杀也只损失实时性，不丢消息 |
+| 连接自愈 | 退避 1s→2s→5s→…→60s；监听网络回调立即重连；重连带 `since_seq`，落后过多触发 `resume_gap` 转 REST |
+| 唤醒策略 | 不持有长时 WakeLock、不锁屏；依赖 FGS 的进程优先级避免被 LMK 首选回收 |
+| 省电模式应对 | 监听 `ACTION_POWER_SAVE_MODE_CHANGED`，在顶栏提示"低电量模式下通知可能延迟"，并给出实测延迟量级 |
+| 可选降级 | "极致省电"开关：关闭常驻服务改为 5–15 分钟轮询，UI 明确标注"消息可能延迟到达" |
+| P2 增强 | 若需要"从不打开 App 也秒到"，再接厂商推送（小米/华为/OPPO/vivo/FCM）作为补充链路，仍复用同一套解密与渲染逻辑 |
+
+### 7.3 通知设计
+
+- 每个 `sender_id` 映射一个 **NotificationChannel（GROUP）**，实现"一个软件一条会话线"的通知分组，用户可在系统设置里单独静音/隐藏某个软件，也可单独调提醒强度。
+- `Notification.MessagingStyle`：sender 名 + 头像（Person.Icon）+ 服务端下发的 `summary` + `setGroupSummary` 聚合；同会话多条用 `addMessage` 形成堆叠，微信观感一致。
+- 提醒强度按 `level`：`error` → `IMPORTANCE_HIGH`（heads-up + 响铃 + 可选震动），`warning` → `DEFAULT`，`info` → `LOW`（仅列表与角标）。会话级可覆盖。
+- 锁屏可见性：`VISIBILITY_PRIVATE` + `publicVersion`（"收到 1 条新消息"），对应 D11 开关（全局 + 按会话）。
+- 点击 → 打开对应会话并置已读；快捷 action"全部已读"；图片消息用 `BigPictureStyle`（缩略图先行，原图到位后更新）。
+- **撤通知的入口有两个，不止快捷 action**：`Notifier.cancelConversation(channel_no, sender_id)` 按 §7.3 的会话分组把这一组活动通知撤掉，"全部已读"快捷操作与用户**从列表点进会话**（`MainActivity` 里那句 `markConversationRead`）两条路都调它。只挂在前者上的后果：红点清了而通知原样躺着，桌面角标停在通知里那个旧 `number`，看着像还有三条没读。
+- **App 角标的总数与列表红点同一条口径：排除静音会话**（`BadgeHelper` 与 `App.kt` 的 `totalUnread()` 流各自过滤，不是两处各写一遍规则）。静音的语义是"不打扰"，把它的未读算进图标角标等于换了个地方打扰。
+- **通知头像**（`Person.Icon` 与 `largeIcon`）走 `AvatarCache`，键就是 §4.5 的 `sha256(sender_id)`。**负缓存只在 404 时打标记**（`{token}.absent`）：404 在服务端是"这个 token 从没存成过"的定论，超时/5xx/401 只是"这一次没问到"——把后者记下来会让一个转存慢了一拍的头像在这台机器上永久缺图。
+
+### 7.4 UI 结构
+
+**底栏（NavigationBar，2 tab）**
+
+1. **消息** —— 会话列表（参考微信）
+2. **我的** —— 设置与接入信息
+
+**① 消息页（会话列表）**
+
+```
+┌────────────────────────────────────────┐
+│ PushBox                    🔍  ＋      │  TopAppBar: 搜索会话/消息；＋ 新建频道
+├────────────────────────────────────────┤
+│ ○ │ Grafana 告警          09:41        │  头像 48dp 圆角
+│   │ [严重] CPU 使用率超过 90%   3      │  名称 16sp / 摘要 13sp 单行
+│───┼─────────────────────────────────  │  未读红点数字（>99 显 99+）
+│ ● │ 发布机器人            昨天         │  置顶会话左侧细竖条标识
+│   │ order-svc 发布成功，耗时 42s       │
+├────────────────────────────────────────┤
+│   消息          │         我的         │  NavigationBar
+└────────────────────────────────────────┘
+```
+
+- 排序：置顶 > 最后消息时间；摘要直接用服务端下发的 `summary`（离线缓存时用本地存的同一份），图片显 `[图片]`，链接显 `[链接] 标题`，带 `title` 时优先显 `title`。
+- 长按会话 → 置顶 / 免打扰 / 重命名 / 设头像 / 清空本会话 / 静音时隐藏红点。
+- 未读总数作 App 图标角标（各厂商 badge 走快捷适配库）。
+- 空状态：插画 + "还没有频道，点这里创建第一个接入地址"。
+
+**② 对话页**
+
+```
+┌────────────────────────────────────────┐
+│ ‹  Grafana 告警                 🔍  ⋮   │  顶栏：返回 + 会话名 + 搜索 + 右上菜单
+│                    ┌────────────────┐  │
+│ 09:41              │ [严重] CPU…    │  │  单向接收：气泡统一左对齐，
+│                    │ 主机 prod-03   │  │  无"发送方/接收方"双色区分
+│                    │ > 近5分钟均值… │  │
+│                    └────────────────┘  │
+│ 10:02  ┌────────────────┐              │
+│        │ [图片 240dp]   │              │
+│        └────────────────┘              │
+└────────────────────────────────────────┘
+
+右上角 ⋮ 菜单内容（D17：筛选只放这里，页面不常驻 Tab）
+┌──────────────────────────┐
+│  全部               ✓    │  ← 单选组：全部 / 未读 / 已读
+│  未读                    │    切换后有轻提示条"当前只看未读 · 退出筛选"
+│  已读                    │
+│  ─────────               │
+│  会话设置（免打扰/置顶/…）│
+│  清空本会话              │
+└──────────────────────────┘
+```
+
+- **筛选**：仅通过右上角 `⋮` 菜单切换 `全部 / 未读 / 已读`，当前项打勾。非"全部"时顶栏下方出现一条 24dp 高的浅灰提示条（可点回全部），避免用户忘记自己在筛选态。筛选基于 `seq > last_read_seq` 判定未读，与服务端游标一致。
+- **搜索**：顶栏 🔍 进入搜索态 → 输入即查本地缓存（即时，300ms 防抖）→ 同时请求 `GET /api/v1/search` 补齐全量历史，两段结果合并去重；可切"仅本会话 / 全部会话"，命中片段高亮，按日期分组，点击结果跳到对应会话对应位置。**"跳到对应位置"是真的滚动 + 高亮那一条**（会话定位到命中 `seq`，粉色描边一拍即散），不是"打开会话看最新"——否则这一条里的第二段（服务端全量历史）在移动端等于没做。
+- 消息按日期分节头（今天/昨天/10月12日）；长按气泡 → 复制文本 / 保存图片 / 删除 / 查看原始 JSON / 打开链接。
+- 加载策略：进入即取本地最近 200 条，上滑分页 `before_seq`（本地无则走 REST），首次进入自动置已读并上报游标。
+- 图片点击 → 全屏预览（本地缓存优先，缺失则下载），失败显占位 + "重试"。
+- **多图按微信铺：4 张是 2×2，其余张数走 3 列**（`MediaImages.kt` 里 `shown == 4` 时把列数改成 2）。3+1 会留一个孤零零的格子，而横排一整条长图带是这一页最早被推翻的版式（D：图片不要横向排布）。
+- **每格的状态是独立的一格，不是"这条消息有图/没图"**：Room v6 的 `messages.media_slots` 存每格的 `{idx,status}`（`MIGRATION_5_6` 只加列，旧行读出来是 NULL ⇒ 走"整条未知"那一支而不是造假终态）。`Gone`（`deleted`/`purged`，别处再也取不到）与 `Missing`（`failed`，还能重试）分两套 UI，只有后者带"重试"。**格子里一律用短词**（`已失效`/`加载失败`），单图才用完整话术——一格只有 88dp，而 Compose 的 `Box` **不裁剪子内容**，"图片加载失败"五个字加一个重试按钮会横向溢出压在隔壁气泡上，症状长得像渲染 bug 而不是布局报错。
+- `media_status=pending` 时图片位显骨架屏/加载占位（高度按 4:3 预估，避免列表跳动）；收到 `media_ready` 帧原地替换，**不重新发通知**；`failed` 显灰占位 + "图片已失效"，正文与气泡不受影响。按 D24 服务端已把图文合并到一帧，正常情况下**首屏就带图**，占位只在抓取超预算 3s 时短暂出现。
+- **App 锁（D30，P1，默认关闭）**：设置里开 PIN/生物识别后，冷启动与后台回前台都要解锁；锁定时通知内容只显示"收到 1 条消息"（`PublicVersion` 降级），会话列表与对话页不可进；密钥材料仍在 Keystore，本地库不变。不做"忘记密码"—— 忘了就凭恢复码重注册设备。
+- Markdown 渲染支持标题/粗斜体/行内码/代码块（横向滚动）/列表/引用/链接/表格；渲染在客户端做，服务端只存原文。
+
+**③ 我的页**
+
+```
+▸ 设备与同步      当前：Pixel 8（dev_7f3a） · ●已连接 · 上次同步 09:42 · 落后 0
+                  其他设备：工作机 Windows ▸ 吊销
+▸ 频道管理        3 个频道 ▸ 新建 / 重命名 / 接入信息 / 重置 Secret / 归档 / 清空
+▸ 备份与恢复      查看·复制·二维码 恢复码 · 添加设备 · 重装后输入恢复码找回全部历史
+                  提醒：恢复码泄露 = 任何人可读取你的全部消息（可重新生成使其失效）
+▸ 通知设置        锁屏仅提示（总开关+按会话） · 静默时段 22:00-08:00 · 按 level 提醒强度
+▸ 后台常驻        服务状态 ●运行中 · 隐藏监听通知 · 电池优化（已忽略 ✓） · 自启动（引导）
+                  · 锁定后台任务（引导） · 极致省电轮询模式（开关）
+▸ 外观            跟随系统 / 浅色 / 深色 · 字号 · 摘要行数（1/2）
+▸ 数据            本地占用 12.4MB · 清理已读图片缓存 · 导出为 JSON · 服务端保留：永久
+▸ 关于/帮助       API 文档摘要 · 版本 · 日志（脱敏）
+```
+
+### 7.5 首启流程
+
+```
+本地生成设备密钥对 → 命名设备 → POST /devices/register
+   ├─ 首次（无 Space）→ 得 group_id + 恢复码 → 强制展示并要求确认已抄/截图禁用（FLAG_SECURE）
+   └─ 换机/加设备   → 选择"我有恢复码" → 输入/扫码 → join → 全量拉历史
+→ 保活引导页（电池优化 / 自启 / 锁定任务，逐项打勾，可跳过但显示风险）
+→ 创建第一个频道 → 展示接入信息（频道号 + Secret + curl 示例 + 二维码）
+→ 进入空消息页
+```
+
+---
+
+## 8. Windows（仅 Win10/11）客户端设计 —— **优先级 P3，最后做**
+
+> 按 D21，本节在服务端 + Android 稳定后实施；**2026-10-15 已开工**：技术栈拍板为 .NET 8 + WPF（D31），工程骨架、四个加密原语、`FrameChannel`（WS 信封）、REST 密封盒/`restAuth` canonical、§5.3 帧绑定（W3c）、`IdentityStore`（W4）、首启两屏（W5）、§5.3 全流程长连接（W6）、§3.3 本地库 `DeviceStore`（W7：SQLite + FTS5）与 §7.2/§6.2 的 `SyncEngine`（W8：退避重连 + 补拉 + 去重 + tombstone + 媒体回填）与 §5.2 的 `ReadReporter`（W9：已读上报 + 离线攒批）与 §4.5 的 `MediaLoader`/`MediaCache`（W10：服务端代理取字节 + 两级缓存 + 槽位状态占位，连带 §12 P3 的 `PushBox.LiveCheck` 真服务体检）与 §7.4/§3.2 的搜索（W11：本地 FTS5 即时命中 + 回车合并签名 `GET /api/v1/search`，按 `id` 去重、命中片段高亮）与 §8.1/§9 的 UI 骨架（W12：双栏 XAML + 窄窗退化、§9.1 token 落 `ResourceDictionary` 并跟随系统深浅色、§9.2 Markdown 支持集与气泡/图位度量、§9.3 的"N 条新消息"胶囊）与 §8.1 的系统集成（W13：`H.NotifyIcon.Wpf` 托盘 + 裸 WinRT `ToastNotificationManager`（头像/摘要/两颗按钮，点击经 `pushbox:` 协议 + 单实例管道唤起那一条会话）+ `HKCU\...\Run` 自启 + 按 `level` 的强度与 §7.4 静默时段）与 §5.2/D13 的删除与清空（W14：`DeleteReporter` 乐观移除 + 回滚票 + 确认后驱逐媒体缓存，单条 `DELETE /messages/{id}` 与整会话 `DELETE /messages?channel_no=&sender_id=`）与 §14/§10.1/§11.1 的发布与隐私收尾（W15：`Logging/AppLog` 只收类型化小字段所以"把正文写进日志"在签名层面就没有路、`PrivacyGate` 五层网 + 崩溃只写文件不上报、`windows/installer/PushBox.iss` 的 per-user self-contained 安装包无人值守装到干净机器、自签 CA 场景"根证书装进本机受信任根存储"的三态实测）完成（§8.4，`dotnet test` 556/556 绿（W15 完成时 517），其中对 `vectors.json` 取证的协议用例仍是 21 条；真服务体检自 W9 起 12/12，另有一台不需要服务端的 `--notify-smoke` 真机体检）。设计提前写清只为保证 §4/§5 的协议留了 PC 所需的一切（group 多设备、游标已读、tombstone、服务端代理的媒体读接口），届时无需改动服务端——**目前已验证成立：W1–W15 全部只靠既有协议，服务端未做任何改动**。
+>
+> 本节分四部分：**8.1 形态**（产品行为）、**8.2 与 Android 的复用边界 + C# 实测记录**、**8.3 工程结构与环境**、**8.4 实施清单 W1–W15**。
+
+### 8.1 形态
+
+- **托盘常驻**为主窗口关闭后继续接收；关闭按钮 = 最小化到托盘（可设为退出）。
+- 窗口结构 1:1 镜像 Android：左侧会话列表栏 + 右侧对话区（双栏，宽窗口），窄窗口退化为单栏导航。
+- 底部无 Tab，用左侧栏顶部切换"消息 / 我的"（与 Android 语义一致，保留跨端心智）。
+- 系统通知：**Toast（WinRT `ToastNotificationManager`）**，含头像、摘要、按钮"打开会话""全部已读"；通知点击唤起对应会话。
+- 开机自启：注册表 `HKCU\...\Run` 或 Task Scheduler，设置页可关。
+- 快捷键：`Ctrl+1/2` 切页，`Ctrl+F` 搜索，`Esc` 关闭对话。
+- 本地存储：`%LOCALAPPDATA%\PushBox\pushbox.db`（SQLite + FTS5，正文明文以便搜索），媒体缓存同目录；`identity.json` 里的身份私钥/token 等四段机密用 DPAPI（`CurrentUser` + 应用熵）绑定当前用户。
+- 重连：指数退避 + `since_seq` 补拉；断连时顶栏显灰点 + "离线，正在重连"。
+- **加入个人空间**：首启选"我有恢复码" → 输入/扫手机上的二维码 → `POST /devices/join` → 立即全量拉历史，与手机看到的内容、已读状态完全一致。
+- 对话页交互与 Android 完全一致：搜索框 + 右上 `⋮` 菜单里的 `全部 / 未读 / 已读`（D17，不做常驻 Tab）；历史搜索同样走服务端 `/search`，本地缓存优先命中即时显示。
+
+### 8.2 与 Android 的复用边界
+
+| 复用 | 方式 |
+|------|------|
+| 协议/DTO/帧加解密 | **服务端与 Android 共用纯 JVM 库 `pushbox-core`**（同一份字节码，零跨语言风险）；Windows 用 C# 实现 Ed25519 + X25519 + HKDF + AES-GCM 四个原语：`BouncyCastle.Cryptography`（X25519 / HKDF-SHA256 / Ed25519）+ BCL `System.Security.Cryptography.AesGcm`（AES-256-GCM），**与服务端 Java 侧同一家库**，语义对照最省力。实现前须跑 §13 的 `vectors.json` 对齐 ⇒ **已完成，21 条向量用例全绿（`dotnet test` 全量 310/310）**（含 W3b 的 `rest_auth` canonical 与 `sealed_box`、W6 的 `ws_auth_message`/`kx_message_hex`，见 §8.4 W2/W3b/W6） |
+| UI 布局与视觉 token | 结构/间距/色值规范统一，**代码不跨端复用**（Compose Desktop 已否决，见 §10.2）；§9.1 色值与 §9.2 字号/间距在 PC 侧落成 XAML `ResourceDictionary`，数值直接沿用（WPF 用 1/96 英寸的设备无关单位，与 Android 的 `dp` 不同基准，同数值在 PC 上略大——按"观感一致"而非"像素一致"验收）。**W12 已按这条落地**：`Themes/Tokens.xaml`/`Tokens.Dark.xaml` 那两本字典是 §9.1 表格的逐行抄写（`ThemeTest` 拿手抄的表对比，两本必须同键同表、深色那本不许出现 `#000000`），`MainWindow.xaml` 里除 `Foreground="White"`（头像首字压在色块上，不是 token）之外没有任何硬编码色值——所有引用都走 `{DynamicResource}`，所以换主题只是 `ThemeManager.Apply(dark)` 调那两本的顺序 |
+| 已读/同步语义 | 同一套游标 + tombstone 逻辑 |
+
+> **C# 侧对齐 `vectors.json` 的验证记录**（`windows/` 下 `dotnet test` 全量通过；其中"对向量取证"的协议用例 21 条：W2 四原语 + W3 帧解码 7 个，W3b 的 restAuth canonical 与密封盒 10 个，W6 的握手 4 个——W14 那两发 DELETE 向量文件里没有，canonical 的字节级口径由 `deploy/probe` ⑪ 的真 HTTP 钉着）——这几条是 P3 真正的省时信息，别再踩一遍：
+>
+> 1. **`NSec` 换掉**。`NSec.Cryptography` 26.4.0 只声明支持 `net9.0`，装到 `net8.0-windows10.0.19041.0` 直接 `NU1202` 不兼容；退到 25.4.0 能装，但从 32 字节种子构造密钥的入口是 `Key(algorithm, in KeyCreationParameters)`（不是 `byte[]`），`Sign()` 还返回 `void`——对没写过 C# 的人，光是"猜对 API"就耗掉半天。**`BouncyCastle.Cryptography` 2.7.0 全程只用了三个类**（`X25519Agreement` / `HkdfBytesGenerator` / `Ed25519Signer`），且签名种子直接 `new Ed25519PrivateKeyParameters(seed, 0)`，一步到位。顺带和 Java 侧同库，§4.3 的边界对照可以逐行抄。
+> 2. **BCL `AesGcm` 的缓冲区形状**：`Encrypt(nonce, plaintext, ciphertext, tag, aad)` 要求 **`ciphertext` 与 `plaintext` 等长**、16 字节认证标签单独落在 `tag` 数组里；而 §4.3 上线的 `data` 是 `ciphertext ‖ tag` 拼接后的 base64。所以加密后要自己拼、解密前要自己切（`AesGcmFrameTest` 就是栽在直接给一个 `plaintext.Length+16` 的缓冲区 → `ArgumentException: Plaintext and ciphertext must have the same length`）。
+> 3. **`new AesGcm(byte[])` 在 .NET 8 已过时**（`SYSLIB0053`），用 `new AesGcm(key, 16)` 显式给标签长度。
+> 4. **`vectors.json` 里所有 `*_b64` 是 URL-safe base64 且无 padding**（含 `-`、`_`），`Convert.FromBase64String` 会抛 `FormatException`。必须先 `-`→`+`、`_`→`/`，再按 `len % 4` 补 `=`。这条对 §5.2 的头像/媒体接口将来返回 base64 时同样适用。
+> 5. **`kx_sig` 不是设备密钥签的**，是服务端**静态身份密钥**签的（向量里用的固定测试种子 `0011223344556677…`），消息体 = `server_eph_pub ‖ hello.nonce`（§5.3 已写，但 vectors 的 `inputs` 里没有这把私钥，容易误拿 `device_sign_seed` 去签）。`ws_auth_sig` 才是设备签名。拿错种子**不会报错，只会签名不相等**，属于"静默跑偏"那类，故在此点名。
+> 6. **`.NET 8` 没有 `System.Base64Url`**（那是 .NET 9 才加的类，`Base64Url.Encode/Decode` 在 net8 里直接 `CS0103` 找不到名字）。第 4 条那套字符替换已经收进 `Crypto/B64Url.cs` 一个静态类，`FrameChannel`/`RestSeal`/`RestCanonical`/`WsCanonical` 与测试都用它，别再在各处复制一份 `Replace('-','+')`。
+> 7. **restAuth 的 canonical 有两处"顺手规范化"就会整片 401**：① `query` 必须与服务端 `getQueryString()` 逐字节相同（`RestCanonicalTest` 里专门有一条把 query 重排后再签名的负例）；② 空 body 也要占一行、值是 `sha256("")` 的 hex，不能省略该行。签名头里的 `method` 传小写也没关系——canonical 里会被 `ToUpperInvariant()` 成大写，向量 `rest_auth.get_search.method` 就故意写成 `"get"` 来把关这一步。
+> 8. **record 的位置参数会和基类同名属性静默重影**（W3c 实测）。`abstract record Frame(string Type)` 之下再写 `record MessageFrame(..., string Type, ...)`，消息内容类型 `type` 就被帧类型 `t` 盖掉：`Expected: markdown / Actual: message`。改叫 `Frame.Kind` 之后，`MessageFrame.Type` 才留给真正的消息类型。**Java 侧的 record 继承有同样的形状**（§10.1 的 Jackson 坑是另一面），跨端抄字段名时以 `core/protocol/Frames.java` 为准。
+> 9. **测试里替服务端封响应，要按请求带来的 `enc_pubkey` 现封**，不能把向量里那份固定信封直接回出去。首启流程每次都新生成密钥对（`IdentityStore.CreateNew`），拿向量的 `device_enc_priv` 封的信封只有"用向量密钥构造的那台设备"才解得开——否则 `AesGcm.Decrypt` 抛 `CryptographicException`，看起来像客户端有 bug。`Support.SealForRequest` 就是照 `DeviceGuard.seal` 的做法：临时私钥现生成、`salt = sha256(eph_pub)`、`n = 0`。
+> 10. **向量的值要选真服务的形状**（第九轮之后改过一次）：`sealed_box.plaintext_json` 原来是四条字段、恢复码还是 `9f3c-77ad-1e58-b0c2` 这种带连字符的展示格式。PC 侧要按 §4.2 自检"22 位 base64url"并要求 `server_pub_fp` 必填，于是把这份向量改成 `{device_id, group_id, token, recovery_code, server_pub_fp}` 全五条 + 22 位码，Java 导出、C# 对齐同时改。**教训：向量缺字段 = 客户端只能猜**，补 W5 时踩到的就是这一条。
+> 11. **下行解密必须是有状态的 channel，不是"一次调用解一封"**（W6 实测）。服务端每个连接、每次换钥都 `new FrameChannel(...)` 从 0 计数，客户端跟着做才谈得上"帧序号连续"。W1 那份 `Net/FrameCodec`（构造时吃 `frameIndex`、每次调用重新 X25519+HKDF）看着能过向量，实际既数不了跳号也无法换钥，于是整类换成 `Net/FrameChannel`（与 `core/crypto/FrameChannel.java` 同名同语义：`Accepts(n)` + `Open` 对坏 tag 返回 `null` 而不是抛）。**同名同语义不是为了好看**：跨端排障时"`frame_index_gap`"这个词两边指同一件事。
+> 12. **`hello` 就带 `server_pub_fp`，所以指纹核对要在交出 token 之前**（W6）。§5.3 的顺序是 `hello` →（客户端）`auth` → `kx`，而 `auth` 帧里就是 `device_id` + `token`。如果照 Android 那样只在 `kx` 上比指纹，等于先凭一个还没验过的服务端身份把凭据送出去再说不匹配。PC 侧两条都比：`hello` 不匹配就不发 `auth`（有一条用例断言 `Sent` 为空），`kx` 再按 `server_pub` 现算一次比对（防的是"hello 与 kx 来自不同身份"这种换钥）。反过来说，`kx` 之前的密文帧直接丢——**"不降级明文"要写成断言**，不是写成注释。
+> 13. **判死要本端自己数静默**（W6）。§5.3 的"40s 无息判死"是服务端那侧的 `@Scheduled`，拔网线时它根本没机会把 close 帧送过来；只等对端关闭的客户端会一直挂在 `ReceiveAsync` 上。PC 侧用单调钟（`Stopwatch`，不受系统时间调整影响）数静默，超时先 `Abort()` 撕 socket、再按 `heartbeat_timeout` 归因；测试把 `deadAfter` 压到 150ms 就能覆盖，不需要真等 40s。
+> 14. **换 scheme 前先看归一化之后的串**（W6 的 `WsUrl`）。`DeviceClient.NormalizeBaseUrl` 会给裸 host 补 `https://`，若用**入参**判 `https` 再对**返回值** `Substring("http://".Length)`，就把 `https://host` 切成了 `//host`，实测输出 `ws:///push.example.cn:8443`。顺序必须是：先归一化、再判 scheme、最后替换。
+> 15. **FTS5 只有 trigram，切不动两个字的中文词**（W7 实测）。§3.3 只写"本地 FTS"，但 SQLite 没有 ngram(2) 这种可配切片：fts5 的 `tokenize='trigram'` 固定按 **3 字符**切，于是"备份""只读"这类最常见的两字查询永远命中不到索引。做法是同一张表两条查询：≥3 字符走 `MATCH`（整串当短语、`"` 成对转义），更短的回退 `LIKE` 并转义 `%`/`_`（不转义的话单一个 `%` 查询会把全表都捞出来）。这和 §3.2 服务端"ngram_token_size=2 + LIKE 兜底单字"是同一条规律的两种实现，**别指望 FTS 能覆盖全部中文查询**。
+> 16. **红点不落列，已读游标就要能先于消息落库**（W7）。`unread_count` 由 `seq > last_read_seq` 现算，省掉了 Android 那套 `recomputeConversation`（删一条未读就得记得重算，漏一次就永久对不上）。代价是 `read` 帧可能比消息先到——本端离线时他端已读到 10，重连后 5..12 一起补拉进来；如果 `ApplyRead` 只 `UPDATE` 不 upsert，这条游标就落在不存在的行上被丢掉，随后第一条消息建出来的行 `last_read_seq=0`，**把已读的历史整片重新算成未读**。
+> 17. **SQLite 的句柄是 RW 共享的**（W7）。测试里想用 `File.ReadAllBytes` 直接验"正文确实是明文落盘"会被自己刚开的连接挡下来报 `IOException`——`ReadAllBytes` 只申请 `FileShare.Read`，而 SQLite 那个句柄持有写权限。换成 `new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)` 就能在读的同时让 WPF 侧另开一条只读连接（W12 的列表流式读要走这条路）。
+> 18. **补拉一页绝不能压在 §5.3 的读循环上**（W8）。`PushConnection` 的读循环是"收一帧、回一次 pong"的那条线程，心跳判死是 40 秒静默；如果 `OnFrameAsync` 里 await 了一次 REST 补拉（服务端正好 3G、或者被 WAF 拖住），pong 就跟着一起不动，**客户端把一条本来健康的连接自己作死了**。PC 侧把入口做成一次 `Channel.TryWrite`，另有一条单线程消费者按 FIFO 落库——FIFO 不只是为了顺序，它让"墓碑 vs 同一条消息"和"media_ready vs 它挂的那条正文"这两对竞态不会互相插队（顺序反了就把已删的消息又写回库里）。测试用一条永远不回答的 HTTP + 同一连接上的 `ping` 把这条钉住：pong 必须照样出去。
+> 19. **"重复投 5 次只弹 1 次通知"的判据是 `msg_id`，不是游标；而谁先落库谁负责通知**（W8）。去重看 `ApplyMessage` 的返回值（`INSERT ... ON CONFLICT DO NOTHING` 的行数），补拉与实时下发是同一条消息的两个副本，这样判比看 `seq` 稳。但反过来有一条不太好受的推论：**第一份如果来自补拉，这条消息就不再弹通知**（休眠回来几百条历史不该糊住脸）。写用例时别把那条实时消息同时塞进 `resume_gap` 覆盖的页里——那样"该不该弹"取决于消费者和读循环谁先到，是一条靠毫秒级运气跑的断言；让它只作为实时帧出现，通知才确定是 1 次。
+> 20. **状态机被 UI 看见的时机要自己定，不能留给调度**（W8）。三处都会踩：① `Offline(reason, retryIn)` 里那个"还要等几秒"必须在**公布状态之前**就把唤醒句柄挂好，否则用户正好在这一瞬间点"重试"，`RetryNow` 找不到可取消的等待，白等一整个退避；② 循环自己收工时的 `finally` 会把状态刷成 `Idle`，但 `Blocked`（设备被吊销 §5.1、服务端身份对不上 §4.3）说的是"这事要人来处理"，**抹成 Idle 之后顶栏就从"已吊销"变成"还没启动"**，用户再也看不到自己该做什么——这两种退出都不再覆盖 `Blocked`；③ 退避是"先等 `waited` 再定下一个"而不是 Android 的"先翻倍再等"（那边第一次就等 2 秒），PC 按 §7.2 的 `1s→2s→…→60s` 从 1 秒起，并额外加一条 Android 没有的复位：**连接活得比两个周期还久就不算故障，回到 1 秒**，否则服务端一次正常重启之后，客户端要按 60 秒的节奏慢慢恢复，看着像坏了。
+> 21. **`resume_ok` 不是心跳，别在连接层就地吞掉**（W9 真服务体检抓到）。`PushConnection` 原来把所有 `SimpleFrame` 都当"连接内部的事"，处理完就 `return`，于是重放结束的 `resume_ok` 到不了引擎，`SyncState.Online` 只剩"有消息落库"这一个来源。后果是**一个还没发过消息的 Space 永远显示"连接中"**：socket 健康、心跳正常、服务端早把这一轮重放收尾了，唯独 UI 在骗人。修法是只吞 `ping`（回 `pong` 是本端自己的回声），其余 `SimpleFrame` 一律转给观察者——`resume_ok` 带的不是正文，是"重放到此结束"这句话，而这句话正是引擎的状态输入。**口径：判"在线"不能靠"收到了东西"，要靠协议里那个明确的结束标记**（§12 P3 验收②③都要读这个状态）。
+> 22. **`Channel` 一旦 `TryComplete()` 就永久关闭，可重启的对象每轮都要换新队列**（W9 同一处抓到）。`SyncEngine` 的帧队列原来是 `readonly` 字段、循环 `finally` 里 `TryComplete()`：单条生命周期内没错，但 `Stop()` 之后再 `Start()`（W13 托盘的"暂停同步"、设置页改完重连都走这条路），上一轮那条已关闭的队列还在原地，`OnFrameAsync` 的 `TryWrite` 从此**静默返回 false**——握手照样成功、`resume_ok` 照样到、`FlushAsync` 照样立刻完成，库里一条都不进，顶栏停在"连接中"再也不动。修法：每轮 `Start()` 换一条新队列和一个代号，`finally` 只关自己那条，也只把**仍是当前这一轮**的状态刷成 `Idle`（否则上一轮的收工会把新一轮刚公布的 `Connecting` 抹掉，用户看到的反而是"还没启动"）。回归断言得真断一次：`ARestartedEngineKeepsTakingFramesIn`（Stop→Start→再落一条）写出来之前，这条路径是零覆盖。
+> 23. **服务端 `read_state` 是 last-write-wins，不是 MAX**（W9 读 `PbStore.upsertReadState` + 真服务体检⑤）。`PUT /api/v1/state/read` 把送来的 `last_read_seq` 直接覆盖上去，并且**朝同组广播一条 `read` 帧**，于是两个方向都要防：本端上报的游标必须**只增不减**（内存里记住每条会话"已经报到哪"，比它小的一律不入队；`DeviceStore.MarkConversationRead` 用的是 SQL 的 `MAX(last_read_seq, last_seq)`），否则一次迟到的重试就把他端刚点亮的红点又吹起来；他端来的 `read` 帧在 `ApplyRead` 里同样取 max（第 16 条那个 upsert 之外再加这一层）。攒批队列**只放内存**是故意的：要落盘就得新增一列记"每条会话报到哪"，§3.3 没有这列，而拿"库里所有大于上次上报值的会话"去重报正好撞上 last-write-wins。代价写明白：PC 离线读完、又在变在线之前重启，这一批就散了（Android 本来就是发一条算一条，同样不保证）。
+> 24. **§5.2 那两个字节接口不是密封盒，别拿 JSON 那条通路去读**（W10）。`/api/v1` 的 JSON 回答一律是一轮密封盒，唯独 `GET /api/v1/media/...` 与 `GET /api/v1/avatars/...` 是 200 + 原始字节（`DeviceGuard.seal` 由控制器自己决定，字节那条走 `ResponseEntity<byte[]>`）；`Cache-Control: no-store` 禁的是 HTTP 缓存，不禁 §4.5 要求落盘的 media_cache。复用原来那条 `SendAsync` 的代价很具体：一张 jpg 被 `ReadAsStringAsync` 当文本读一遍、再送进 `RestSeal.Open`，报出来的是"这个地址可能指向了别的服务、或被反向代理拦下了"——把一个完全成功的取图说成配置错了。所以传输层拆成三块：`OpenAsync`（发送 + 断因）、`FailIfNeeded`（§5.1 错误体→人话，两端共用）、两条读法（文本 / 字节）。字节那条**只在非 2xx 时**把正文读成文本，因为槽位状态就写在错误体的 `hint` 里。
+> 25. **媒体 404 的 `hint` 就是槽位状态，四种"没有字节"不能塌成一个占位**（W10）。`MediaController` 对没到 `ready` 的槽位回 `404 not_found` + hint=`pending|failed|deleted|purged`，行不存在或桶里字节没了才是 hint=`media`（头像那条是 `avatar`）。全渲染成"图片已失效"会让 §4.5 那个正常的异步抓取窗口看起来像失败，而把 401/5xx 也说成"失效"更是撒谎（那是整片签名接口都坏了，和第 23 条的时钟问题同一个量级）。所以 `MediaState` 有八个值、`Placeholder` 只在"字节不会再来"时给那五个字：`Pending` 继续转圈、`NoSource` 不发请求也不占位（UI 落回首字头像）、`NetworkError` 带原因留给用户点重试、只有 `Failed`/`Deleted`/`Purged`/`Missing` 才是占位。真服务体检⑦ 拿一条服务端并不存在的消息打这一发，确认的就是 `404 hint=media → Missing` 且失败的取图绝不落盘。
+> 26. **缓存键用 `(msg_id, idx, size)` 就是"按 object_key 命名"，但补拉也认得它**（W10）。§4.5 写的是"按 object_key 存"，而 `media[]` 里那个 `key` 只存在于帧内，§3.3 的 `messages` 表只留 `media_status`/`media_count`——**补拉回来的消息没有 key 可读**。对象键本身是 `media/{msg_id}/{idx}` 的确定性拼法（探针 ⑲ 逐帧确认过），所以两种写法等价，但只有前者能让"实时下发时看过的那张图"和"重启后补拉再渲染一次"落在同一个键上，而这条正是验收① 的前提。磁盘文件名取键的 UTF-8 **十六进制**（可逆）：按消息清理只需扫 `hex(msg_id + "#")` 这个前缀，不必为每个对象再维护一份索引；键长到文件名顶不住时退化成整串键的 sha256，代价只是那一条等 LRU 淘汰。缩略图与原图必须两个键（`#t`/`#f`），否则点开大图会把 512px 的小图当原图显示。
+> 27. **头像只进内存，而且"这一帧没带头像"不是失败**（W10）。下发的 `sender_avatar` 是服务端 SQL 现算的那条路径（`avatar_key IS NULL → NULL`），加上转存本来就是异步的，首帧通常是 NULL ⇒ 客户端要分清 `NoSource`（不发请求，UI 落回 `sender_id` 首字占位）和 `Missing`（真 404）。头像对象按 (频道, 发送者)**覆盖写**、token 是 `sha256hex(sender_id)` 永远不变，落盘等于把换掉的头像永久留在这台机器上且再也刷不掉，所以 `MediaCache.Put` 开了 `persist: false` 这一档。磁盘命中时拿不到当初的 Content-Type，由 `ImageMime.Sniff` 按魔数认回来——敢这么做的依据是 §4.5 入库前的 MIME 白名单 + 魔数复验，桶里只可能是 jpeg/png/webp/gif（SVG 在服务端就被拒了）。
+> 28. **搜索的 query 要"先转义、再拼、拼完就拿这一串去签"，而 `.NET 8` 的 `Uri` 实测对已转义的串是透传的**（W11）。第 7 条那句"query 必须与 `getQueryString()` 逐字节相同"在搜索这里第一次变得不好办：`q` 不再是自家生成的固定值，而是用户敲进去的任意文本，里面可以有空格、`&`、`%`、emoji。`&` 是最要紧的那个——它同时是 query 的分隔符，先拼未转义的串再签，服务端解出来的 `q` 少一半、`getQueryString()` 又跟我们签的那串不一样，两头都对不上。中途一度写了个"从 `request.RequestUri.Query` 反推再签"的保险版本，实测八个恶意词（空格、`%25`、`%21`、`'`、`(`、`)`、`*`、emoji、`#`、`?`、`=`）过 `Uri` 之后**一个字节都没变**（不是 `+`、没被还原、没被重排），于是把那个 helper 删掉，改由两条用例把这条不变式钉住：`SpacesAndChineseSurviveTheRoundTripToTheWire`（签的串 == 真发出去的 `RequestUri.Query`）与 `AReorderedQueryIsNotTheOneThatWasSigned`（负例）。**教训：为"框架可能替你规范化"而写的防御代码，要先量一次再决定留不留**——量出来是透传，那多出来的一层只是让人误以为 `Uri` 会改东西。
+> 29. **`AND` 比 `OR` 绑得紧，所以"仅本会话"必须先把那组 `OR` 括起来**（W11 抓到的真实产品 bug，不是测试写错）。LIKE 兜底那条语句是 `title LIKE :p OR summary LIKE :p OR body LIKE :p`，作用域过滤按直觉直接 `+ " AND channel_no = :c"` 接在尾巴上，SQLite 读作 `title LIKE :p OR summary LIKE :p OR (body LIKE :p AND channel_no = :c)`——**只有最后一个分支被限住**，别的会话照样被搜出来（用例里期望 1 条、实际回来 2 条）。FTS 那条是 `MATCH` + `AND`，形状天然没这个坑，所以**只有短词分支漏**，而短词恰恰是中文最常见的查询。修法是三个 `LIKE` 整组加括号，并让作用域用例**两条分支各跑一次**（≥3 字符的词 + 两字词）；跨会话列表用 `SearchSql` 的无作用域形态，只对话页那个框传作用域。
+> 30. **本地命中与服务端命中要在同一个列表里长得一样**（W11）。§7.4 是"两段拼一个列表"，于是三处必须对齐：① **`snippet` 窗口照服务端抄**——`SearchController` 固定 120 字符窗口、命中位置放在 `窗口/3` 处、候选顺序 **title → body → summary**、全都找不到时回退到"第一个非空候选的开头"（不是整条空串），`Data/SearchText.Snippet` 逐条照做，两边不一致时同一条消息会在两段里显示成两句不同的话；② **窗口边界不许切断 emoji**——`char.IsLowSurrogate(text[start])` 就往前挪一格、`IsHighSurrogate(text[end-1])` 就往后挪一格，否则 UI 上是一个豆腐块（这条在服务端不存在，因为它按 `String` 索引切，而 Java 的代理对切坏了顶多是显示不出，WPF 直接把半个码位渲染成替换字符）；③ **本地那半要补 `sender_name`**——§3.3 的 `messages` 表里根本没有发送者名（它在 `conversations` 上），而服务端那段是带的，所以 `SearchService.LocalHits` 先从会话表建一张 `(channel_no, sender_id) → display_name` 的字典再投影，否则一段有名一段匿名。
+> 31. **`since` 是 `created_at` 的毫秒下界，不是 seq；`q` 太长要让服务端自己拒**（W11）。§5.2 的搜索行写的是 `since`，顺着上一行 `after_seq` 的直觉去当游标传就会漏掉一整页——服务端比的是 `created_at >= :since`，而 `seq` 是会话内的顺序号，两者毫无关系；PC 侧目前没有"只看某时间之后"的入口，所以这个参数照实保留但只由调用方传绝对时间戳，注释里点名它不是游标。`q` 的 100 字符上限同理不在客户端预先截断：截了就去搜一段用户没打过的文本，静默给出不相干的结果比报 400 更糟——`invalid_param` 那句话已经由 §5.1 的错误码映射变成人话。空串在**两端都**挡（客户端直接返回空结果、不发这一发，服务端 400）：这是 §5.2 少见的"客户端与服务端各自校验同一件事"，因为省掉一次往返的价值不依赖服务端知不知道。
+> 32. **§9.2 的数值只有被一条"读文档"的用例钉住才不会漂**（W12）。UI 骨架第一版是照印象写的：头像正圆、气泡内边距 10×8、气泡最大宽 60%、会话行高随内容自适应。抄 §9.2 做断言时全部判红——规范定的是**头像 44dp 圆角 6dp 的微信式方圆形（不是正圆）**、行高 64dp、左右内边距 16dp、气泡内边距 **12×10**、最大宽 **72%（窄屏 78%）**。这些数在 Android 侧是 Compose 里写死的 dp，在 PC 侧则是 `MainWindow.xaml` + `Controls/BubbleView.cs` 两处，**没有任何机制保证它们跟着 §9.2 改**。所以 `ThemeTest` 直接读仓库里的 XAML 与文档表格对比，`BubbleViewTest`/`MediaStripTest` 断度量。**教训：跨端"同一份规范"的第三条腿是测试**——Android 有 Compose 的常量、PC 有 XAML 的属性，两边都只是在抄 §9.2，只有把 §9.2 抄成断言，规范改动才会同时吵到两端（WPF 用 1/96 英寸的设备无关单位，与 Android 的 dp 基准不同，同数值在 PC 上略大，所以这些断言按"观感一致"而不是像素一致写）。
+> 33. **头像色不能拿 `string.GetHashCode()` 当索引**（W12，§12 P3 验收③ 的锚点）。.NET 的 `String.GetHashCode()` 默认按**进程随机化的种子**计算，同一个发送者名两次启动会落到不同颜色——而 §7.4 的 `avatarColor = (name.hashCode() and Int.MAX_VALUE) % 6` 在 Kotlin 侧是稳定的 31 多项式。PC 侧的 `AvatarVisual.StableHash` 逐字节复刻那个多项式（`h = 31*h + c`，`int` 溢出行为一致），并把 `"hello".hashCode() == 99162322` 钉成固定向量：这条断言一旦红，说明哈希又变回了"进程内随机"，同一条消息在两端就会显示成不同颜色的头像，验收③ 直接失守。六个调色板值（07C160 / 198CFF / FA5151 / B06900 / 7B61FF / 00B3A7）与 Android 同源。
+> 34. **深色 token 下 WPF 自带的列表选中态不可用，选中信息要自己画**（W12）。`ListBoxItem` 的默认模板在高亮时铺系统蓝 + 白字，压在 `bg.elevated` 的 `#1E1E1E` 上对比度直接崩掉，而且那个蓝跟 §9.1 的 `accent`（`#2AAE67`）毫无关系——**"选中"在视觉上变成了"操作系统在说话"**。修法是 `ConversationRowStyle` 自己出模板：一条 3px 的左侧竖条（`Rail`）在选中时染 `accent`、其余情况透明，底色只提到 `Bg.Page`，并把 `FocusVisualStyle` 关掉（默认的虚线框在深色上像一条 bug）。这和 §9.1 那句"accent 克制使用"是同一件事的两面。
+> 35. **`TextBlock.Text` 一旦被 `Inlines` 填过就读回空串**（W12）。Markdown 的行内样式（粗体 / 行内码 / 链接）只能靠 `Run` 挂 `FontWeight` 与 `Background`，于是那一段文字是 `Inlines` 而不是 `Text`；`bubble` 的类型标签也是同一写法。结果 `Assert.Equal("正文", label.Text)` 拿到的是 `""`——**看起来像控件没被填，实际是 getter 的口径**。断言要拼 `Run.Text`（`OfType<Run>().Select(r => r.Text)` 串起来）。同类还有两个小 API 形状：`GridLength` **没有** `UnitType`（判星形列用 `Width.IsStar`），`PngBitmapEncoder` 落盘是 `Save(stream)` 不是 `Write`。
+> 36. **STA 测试的 dispatcher 泵不能是 `DispatcherTimer`**（W12）。`MediaStrip` 的槽位是 `async void` 自己填的（续延回 UI 线程），所以用例必须"转几圈 dispatcher"才断言得到落地之后的样子。第一版泵是 `DispatcherTimer` + `ShowDialog`/frame 那一套，结果**整个 xunit 测试主机进程崩溃**，报的是"测试主机进程崩溃"而不是某条用例失败——同一批里不泵的那条却稳过，很难一眼归因。换成"排一项到 `DispatcherPriority.SystemIdle` 再 `PushFrame`"的经典泵，每圈必然退出（那项一定会跑），七条全绿。**另有一条负向判据要单独的 helper**：「槽位在等网络时不许自己写成'图片已失效'」断言的是"转 120ms 之后它**没变**"，拿"等条件成立"那个泵去写就会因为超时抛出而把用例判成失败——所以 `Sta.PumpUntil(done)` 会超时抛出（正向）、`Sta.PumpFor(ms)` 只转不问（负向），两者共用一圈。
+> 37. **日期分节的基准时间要按本地那天生成，否则换个时区就凭空多一条失败**（W12）。§9.3 的"今天/昨天"分节是本地日历语义，而用例里的时间戳先前写死成 UTC 常量，机器时区一旦不是 UTC+8，"当天早上八点"就落到前一天的分节里——**这是一条由环境决定的断言**。`MainModelTest.At(year, month, day, hour)` 用 `DateTimeKind.Local` 再转毫秒，同一天/相邻两天的关系就与时区无关了。同理，`MainWindowTest`/`FirstLaunchWindowTest` 这类"从 XAML 构造对象图"的用例必须**自己开 STA 线程并在 `finally` 里 `InvokeShutdown()`**，否则线程退出会被 dispatcher 拖着，`Join(30s)` 变成一条随机超时失败。
+> 38. **一次刷新不许把用户翻页读到的历史丢掉**（W12）。顶栏"离线，正在重连"恢复之后会重读当前会话，而 §9.3 允许用户已经往上翻看了好几页（`LoadEarlier` 每页 50 条往 `_window` 里追加）。原来那句"重新取最新 50 条"直接把 `_window` 覆盖掉，用户视觉上就是**历史整片消失、列表跳回底部**。`MainModel.Reload()` 因此改成：按 `_windowBelow` 取"至少覆盖当前已页数"的一页，保留已有行，**返回值是"这一批里新出现的条数"**；`MainWindow` 只在**没有贴在底部**时把这个数累加给 §9.3 的"N 条新消息"胶囊（贴在底部就直接滚动并清零），所以"新消息到了但用户在翻历史"这件事变成一个数字而不是一次打断。回归网是 `ReloadKeepsTheHistoryAlreadyPagedInWhenANewMessageLands`（150 行还在）与 `ANewMessageLandingWhileTheReaderIsUpInTheHistoryIsCountedNotScrolledTo`。
+
+> 39. **三档强度塌成两档：`<audio>` 省略 = 放默认音，静音必须显式写**（W13）。WinRT 的 toast 没有 Android 那套 channel importance 概念，`ToastNotification` 也**没有 `Silent` 属性**（编译期直接 CS0117），所以决策层的 `None/Silent/Sound/HeadsUp` 到传输层只剩"带不带声音"：`Silent` 与静默时段降级后的那几条要写成 `<audio src="ms-winsoundevent:Notification.Default" displayOnly="true"/>`。反直觉的是**不写 `<audio>` 不等于静音**——系统照样放默认提示音，"静默时段里的 warning"就会变成"照样响一声"。这条只能把 XML 解析回 `XDocument` 逐属性断言（`ToastXmlTest`），人耳走查抓不到"该静音的那条其实响了"。
+> 40. **未打包的 WPF 得自己写那两处 HKCU 才有 toast**（W13）。MSIX 稀疏包替应用注册 AUMID 与协议，`dotnet run` 出来的 exe 没有这一层，`CreateToastNotifier(aumid)` 拿到的是"这个 AUMID 不存在"。`ToastRegistration.Ensure` 因此写 `HKCU\Software\Classes\AppUserModelId\PushBox.Windows`（DisplayName）+ `HKCU\Software\Classes\pushbox\shell\open\command = "<exe>" "%1"`。点击回会话选的是 `activationType="protocol"` + `launch=pushbox:conv/…`，不是"把 launch 串交给进程"：foreground 那条路 Windows 不会把参数递给**已经在跑**的那个实例，而 §8.1 要的恰恰是"唤起对应会话"。
+> 41. **单实例是通知点击的前提，而 Win32 mutex 是按线程递归的**（W13）。协议处理器起的是"一个新进程"，它不看应用活着没有；没有 `InstanceHandoff` 这一层，点一条通知就多一个托盘图标 + 一条长连接 + 一个开同一份 SQLite 的写者。两个坑：`new Mutex(false, name)` + `WaitOne(0)` 是**错的**——同名互斥体已存在时构造函数不把所有权交给本线程，于是"谁都没持有"和"别人持有"读起来一模一样，第二个实例会自认主实例；要用 `new Mutex(true, name, out createdNew)` 并读 `createdNew`。写测试时"第二个实例"必须**换一条线程**去抢，同线程第二次抢必然成功，那条断言会假绿而不是假红。
+> 42. **头像在 toast 这一层是"只进内存"的唯一例外**（W13）。W10 那条口径管的是缓存层（对象覆盖写、token 不变，落盘等于把换掉的头像永久留在本机），而 toast 的图片只能吃 `file:///` URI。`ToastAvatar.Stage` 因此另起一个目录：同名覆盖、按 token 的 LRU 封顶 8 张、`Clear` 容错；认图只按魔数（png/jpeg），非图像字节回 null 且**不落盘**。测 LRU 别用 `Thread.Sleep` 制造先后（时间戳粒度会让第 9 张挤掉谁变成随机），`File.SetLastWriteTimeUtc` 钉死顺序才稳。
+> 43. **开机自启默认关，而"设置里是开的"与"注册表那一笔"要分三种漂移看**（W13）。默认关的理由很实际：开发机的 exe 在 `bin\Debug`，一开就把调试构建写进启动项。真开机时两者会分叉——值一模一样 ⇒ 不动（重写同值会让任务管理器"启动"页莫名亮一次"程序已更新"）；有条目但指着别处 ⇒ 是我们自己换了安装目录，跟着搬；条目不见了 ⇒ 用户在"启动"页里自己关的（§8.1 说的就是这条路径），`ReconcileAutoStart` 顺着他把设置改成关，而不是下次开机偷偷再塞回去。判定是纯函数 `AutoStart.DriftOf`，注册表只有 `Apply` 一层薄皮。
+> 44. **免打扰那条门留在引擎，所以 `ToastNotifier` 收到的 `muted` 恒为 false**（W13）。照 Android 的分工抄（`SyncEngine.kt:141` ↔ `SyncEngine.cs:359`）：引擎读库判 `IsMuted`，帧到通知器时已经过了这道。规则本身仍留在可测的 `AlertPolicy.Evaluate` 里，因为"静音只是不弹，入库/红点/时间线一概不受影响"这条口径要有断言。`DeviceStoreTest` 与 `SyncEngineTest` 各补一条，数据用**第二条 SQLite 连接**直接 UPDATE 那一列造——PC 目前只有读这一列的一侧（§8.1 的形态里还没有写入口），所以测的是"读得对不对"而不是"能不能设"。
+> 45. **托盘那一行只留一套口径：账归窗口算，托盘被通知来取**（W13）。`MainWindow.TrayRefresh` 是"我重画了"的广播，`TrayUnread`（全会话未读总数）与 `TrayState`（连接状态文案）都由窗口从模型读，托盘自己再数一遍就会有两套口径。踩到的一条：这句广播**不能排在 `Refresh()` 的 `if (!IsLoaded) return;` 之后**——"启动就最小化到托盘"和 `HideToTray` 之后再打开会话，窗口都没有渲染机会，tooltip 会永远停在第一版；`TrayIcon.TooltipFor` 保持纯函数（未读在前、状态在后、两个都没有就只剩应用名）让五种组合都能被断言。
+> 47. **删除要回滚而已读不回滚——这条不对称是本机游标已经越过那条消息造成的**（W14）。§9.3 的乐观删除如果服务端没答应，这条消息在服务端的活表里还活着、在别的端还显示，而本机组游标不会退，补拉永远不会再把它带回来；不放回就是两端各看一套，而且这台机器上它再也回不来了。已读那一路正好相反：`read_state` 是 last-write-wins，本机报一个更小的值会把别端红点点亮，所以它只增不减、失败只攒着重试，从不"撤销一次已读"。`ADeadNetworkRollsBackToo`（断网时删除"看起来成功了"是这一步最不能接受的失败）与 `TheGroupCursorNeverMovesForADelete` 各钉一半。
+> 48. **本地乐观删除与 tombstone 帧共用同一段 SQL，"收敛"才是结构性的**（W14）。`DeleteMessageLocal` 不自己写删除，它调 `ApplyTombstone` 的 id 分支那一段（删行 → `RecomputeConversationSql` → 空了 `DropEmptyConversationSql`），两条路落进同一个库状态；写成两份"看起来一样"的实现，早晚会在"删掉最后一条要不要连会话行一起删"这种地方分叉。用例是 `TheLocalDeleteAndTheTombstoneFrameLandOnTheSameDatabaseState`：同一份数据，一支走本机删除、一支走帧，逐列比。
+> 49. **回滚票要带上"只有本机知道的列"，放回时却只许动其中一列**（W14）。`last_read_seq`/`custom_name`/`avatar_path`/`pinned`/`muted` 不在服务端那一发的形状里，票上不带就放不回去（`TheUndoTicketCarriesTheColumnsOnlyThisMachineKnows`）；放回会话行时 `ON CONFLICT DO UPDATE` 只合并 `MAX(last_read_seq)`，其余列行已存在就留着它现在的值——删出去这段时间里他端可能刚读了这条会话、也可能刚改了名字；消息用 `DO NOTHING` 而不是 `REPLACE`，因为期间同一条又被落库一次的话，库里那份带着更新的媒体终态（`AMessageThatAlreadyCameBackWinsOverTheTicket`）。聚合值（`last_seq`/`last_msg_at`/`last_summary_cached`）一律重算，不从票上来。
+> 50. **唯一不回滚的那一支认的是 `hint`，不是状态码**（W14）。404 + `code=not_found` + `hint=message` 才是"服务端本来就没有这条"（多半是别端刚删过）：这时候本机移除正是要的终态，放回只会造出一条僵尸消息——服务端活表里没它，之后的补拉和 tombstone 广播都不会再提它，只有这台 PC 还留着。而 404 也可能是地址指错了服务或被代理拦下（§8.2 第 24 条同一条判断：那种回答根本不是本服务端的密封盒），那种必须回滚，所以 `DeleteReporter.IsAlreadyGone` 要求两个字段同时成立，`ANotFoundFromSomethingOtherThanTheServerRollsBack` 用一段 `<html>Not Found</html>` 钉住。hint 是服务端自己写的字段，永远不含消息正文（§14）。
+> 51. **媒体缓存的驱逐排在服务端确认之后**（W14）。回滚时消息会带着图一起回来，此刻清缓存等于凭空多一次取图（还是取屏幕上正画着的那张）；而服务端确认删过之后，对象已被标成待删（§4.5 的宽限期），本机留着的副本就成了别处再也取不到的孤儿字节。一条用例同时断言两半：`CacheBytesSurviveARollbackAndGoAwayWithAConfirmedDelete`。顺序写反了不会报错，只会让用户在回滚后重新等一次图。
+> 52. **整会话清空是"一次 DELETE + 一条带 scope 的 tombstone 帧"，而它幂等回 `deleted=0`，所以没有"已经没了"那个分支**（W14）。逐条删在服务端是一上千条 UPDATE、在别的端是一上千帧，这条接口的存在理由就是把两段都压成一次；query 照 W11 那条**先转义再拼再签**（`channel_no` 在前、`sender_id` 在后，与服务端方法声明同序），`sender_id` 省略即整频道——不能替它编一个空串，服务端把空白也当省略（`TheScopedClearOrdersAndEscapesItsQuery` 的四种输入含 `83 27`/`jen kins`）。幂等又意味着任何失败都放回本地，包括 401 那种"整片签名接口一起不对"。
+> 53. **乐观那一刻靠回调，二次确认靠可替换委托**（W14）。`DeleteReporter` 的 `locallyRemoved` 在 HTTP 请求上路**之前**被同步调起，屏幕上那条不等一次网络往返（断网时那是十几秒）就消失；`TheOptimisticMomentComesBeforeTheRequest` 用一个卡在 handler 里的请求把这个顺序钉死，而不是睡一会儿再看它消失没。窗口层的 `Confirm` 是 `Func<string, string, bool>`：直接调 `MessageBox` 会把 STA 测试线程挂在等人点上，而"取消就一条都不动"和"确认框说的那两行话"都是要被用例钉的产品口径——清空那段话术改了 Android 的原文（`delete_dialog` 写的"服务端仍保留历史"是 Android 还没接 §5.2 清空接口的现状，PC 这一版真会通知服务端），`TheTwoConfirmationsSayWhatTheAcceptanceNeeds` 钉的就是这句偏离是刻意的。
+> 46. **`Show` 不抛异常不等于通知成功，最后一段只能在真机上量**（W13）。系统可能把这一个 AUMID 的通知整个关掉（`NotificationSetting.Disabled`），此时 `Show` 静默"成功"而用户什么也看不见。所以体检读的是 `SettingProbe()`（Setting 的枚举名）而不是有没有异常，`Delivered + 退路次数 == 1` 两种机器状态都算过；`LastFailure` 只存异常**类型名**（§14：`Message` 可能把正文带进来）。注册表真写进去了、托盘图标真出来了、toast 真弹出来了这三件事没有 xunit 的向量可把关，走 `PushBox.Windows.exe --notify-smoke <out.txt>`（和 `PushBox.LiveCheck` 同一个理由），实测见 §8.4 W13。
+>
+> 54. **Serilog 的滚动文件名没有"占位符"，而验收① 那条 grep 得边写边读**（W15-a）。`rollingInterval: Day` 是把日期**插在扩展名之前**，所以模板要写 `pushbox-.log` 才得到 `pushbox-20261015.log`；第一版照着 `ILogger` 常见写法写成 `pushbox-{Date}.log`，落盘的是 `pushbox-{Date}20261015.log`——那本文件照样在滚、照样能读，只是名字难看，没有任何用例会红。**这一层的坑都是"不报错"型的**，另一条同型的在读日志那侧：文件 sink 到 `CloseAndFlush()` 之前一直攥着写句柄，`File.ReadAllLines` 谈不拢就抛 `IOException`，读回来必须用 `new FileStream(path, Open, Read, FileShare.ReadWrite)`。而 W15 的验收恰恰是"在事件还没写完的时候把整本读回来 grep"（否则要判"这条留痕没落盘"就得先关掉日志，而关掉之后就没法再证明"我关掉之前它真的写进去了"），所以这条 `FileShare` 是**判据本身**要求的，不是顺手改的。装配层的三个数字也在这里定：一天一本、`retainedFileCountLimit: 7`、单本 4MB 再切（`rollOnFileSizeLimit`），§8.1 自用机器的留痕成本，写满不是留着不删的理由。
+> 55. **留痕是进程级的静态入口，所以测它的那两页必须串行**（W15）。xunit 默认按**类**并行，而 `AppLog` 是 `static`：两个类各自 `AppLog.Start(自己的临时目录)` 会互相看见对方的 `_log`，于是一个类的行落进另一个类的文件，症状是"某条用例偶尔读到不属于这条用例的行"，而单跑两条都绿。解法是 `[Collection("AppLog")]` 把 `AppLogTest` 与 `LogWiringTest` 挂进同一个集合串行，每条用例 `IDisposable` 里自己 `CloseAndFlush()`（**这也是"没 `Start()` 一个字都不写"这条口径能存在的前提**：跑真引擎/真删除/真取图的用例不显式开日志，就不会往 `%LOCALAPPDATA%` 落文件，测试机不会积累垃圾目录）。`PrivacyGateTest` 不参与——它测的是纯函数，不碰装配，让它继续并行。
+> 56. **`IdentityStore.SaveLastAppliedSeq` 会为一份"本来就不存在的副本"把同步循环带崩**（W15-b 修的真实缺陷）。断开时回写游标那一步是 `Load()` 再 `Save(current with …)`，而身份文件缺失或被改坏时 `Load()` 抛异常——那一刻连接已经正常结束、游标的权威在库里（`SyncEngine` 取的是 `max(文件, 库)`），所以这次回写跳过既不漏消息也不影响任何东西，但它原先沿着 `while` 循环的收工那一行往外抛，`Task` 没人 await 就静默，症状是"重连之后再也不动了"。改法是 catch `FileNotFoundException`/`InvalidDataException` 后 `return`，**并把"读不出身份"这一事实留在日志里**（`IdentityFileUnreadable`，§8.4 W15 那条接入点）——那条留着比回写成功更值钱：下次有人问"为什么这台同步用的是旧游标"，只有这一行答得上。
+> 57. **干净机器 + 一个 `pushbox:` 参数 = 崩在 dispatcher，而这条路径 `dotnet test` 和 `LiveCheck` 都走不到**（W15-c 修的真实缺陷）。`App.HandleTarget` 在 `MainWindow` 还没建时直接调 `OpenMainWindow()`，那里第一句就是 `identities.Load()`；没注册过的机器（新装包、或者用户还没走过 §7.5 的首启两屏）上，系统把协议处理器叫起来 → 进程起 → `FileNotFoundException` → 一行 FTL 是它唯一的遗言，而且那一刻 `AppLog.Start` 还没跑到，遗言都留不下几行。修复是"没有身份文件就**直接返回**"（一个还没注册的应用不该对点击做任何事），顺序上把 `AppLog.Start` 提到 `OnStartup` 最前面。**这一条只有"打包 + 冷启动带参数"能撞见**：开发机永远有 `%LOCALAPPDATA%\PushBox\identity.json`，测试用假 handler，`LiveCheck` 不碰协议——所以 §12 P3 之外需要 §8.4 W15 那种"拿装出来的包跑一次"的体检。
+> 58. **那三处 HKCU 全机只有一个位置，装机版与开发版是"最后一个启动的接管路由"，也因此没法用静态 `AppMutex`**（W15-c）。AUMID、`pushbox:` 协议处理器、`HKCU\...\Run` 三个键都按**名字**唯一，`bin\Debug` 的开发实例与 `{localappdata}\Programs\PushBox` 的装机版写的是同一批键、另一个路径（W13 的 `ToastRegistration`/`AutoStart` 从来没打算区分"几份安装"）。实测撞到的两面：装机版一启动，开发实例的通知就跳到装机版；装机版一卸载，那一整键被删，开发实例的 `pushbox:` 也没了（得再起一次或跑一次 `--notify-smoke` 才恢复登记）。**卸载侧的规则是"只删确实指向 `{app}` 的那些"**（`PushBox.iss` 的 `PointsIntoApp`，`[Code]` 里逐个读值再比前缀），宁可留一条指向已删除目录的条目，也不替别人把登记抹掉。同一条理由否掉了 `AppMutex`：单实例那把锁的名字是 `PushBox.Windows.` + sha256(**exe 全路径**) 前 6 字节（`InstanceHandoff.KeyOf`，故意按路径派生，这样两份安装不互相顶掉，§8.2 第 41 条），没有一个静态名可写进 `[Setup]`；`CloseApplications=yes` + Restart Manager 够用（Inno 会在卸载时问系统要那几个进程），代价是"用户正在用的实例被关掉再重启"这件事由 Inno 的默认对话框承担——per-user 安装不需要提权，所以那一屏不会出现 UAC。
+> 59. **Inno 的脚本侧四个报错都是一次性给一个准确原因，改起来没有联想空间**（W15-c）。① `[Files]` 里没有 `Comments=` 这个键（那是 `[Tasks]` 的），写了直接 `Unrecognized file keyword`；② `RegDeleteValue` 在 Inno 6 是**三参**（根键、子键、值名），照 `RegWriteValue` 的形状给四个就 `Invalid number of parameters`；③ `SetupIconFile=` 给了空值比不给还早报错，所以项目没有 `.ico` 的那段时期是**整行不写**、用 Inno 的默认图标（现在有了：`PushBox.Windows/PushBox.ico`，见第 68 条）；④ **`/DMyAppVersion=…` 在 Git Bash 里会被 MSYS 当 Unix 路径转换**，症状是"找不到工程文件 `D:/Apps/DE/Git/DMyAppVersion=0.1.0`"——同一个坑今天在同一台机器上踩了三次（`openssl req -subj /CN=…`、setup 的 `/VERYSILENT`、ISCC 的 `/D`），统一解法是 `export MSYS2_ARG_CONV_EXCL='*'`（`build-installer.sh` 里就这一句），而不是改用 PowerShell：这条构建命令将来要在 CI 与本机两边跑，写成 sh 只有一份。
+> 60. **`[Tasks]` 不写 `Flags: unchecked` 就是默认勾选，而 `/VERYSILENT` 会把默认勾选一起执行**（W15-c）。第一版的"创建桌面快捷方式"没加 `unchecked`，实测静默装完之后注册表里 `Selected Tasks = desktopicon`、桌面上凭空多一个图标——对一个自用工具的包来说这就是"给别人机器装东西"。同理不引外来文件：官方分发带 29 种**官方**语言，`ChineseSimplified.isl` 不在其中（属 Unofficial translations），所以 `[Languages]` 挂自带的 `Default.isl`，向导按钮是英文、而我们自己 authored 的那几句（任务勾选项、`[Run]` 那一行）是中文；静默安装两种都不出现，不影响"无人值守"那条验收。
+> 61. **"能装到干净机器"这条只能看包内容，本机装了 SDK 就证明不了任何事**（W15-c）。判据是 `{app}` 里这五本同时存在：`coreclr.dll`、`hostfxr.dll`、`hostpolicy.dll`、`System.Private.CoreLib.dll`、`PresentationFramework.dll`——framework-dependent 发布一本都不带，而这台开发机装着 .NET 8 SDK，所以"装完起得来"在开发机上永远是真、与包是不是 self-contained 无关。实测 `{app}` 里 269 本顶层文件（递归 477，多出的是各语言的 satellite 资源目录）/ 56MB 包 / `publish/` 194MB（`publish/`、`Output/` 都进 `.gitignore`，二进制产物不入库这条与 `testvectors/` 只有一份 JSON 是同一个理由）。`.pdb` **刻意留着**：§14 允许日志带异常类型名与堆栈，而没有了 pdb 那行只剩方法名、行号全丢，"留痕能定位问题"这一半就没了（这也是包体积里唯一可以砍却没砍的一项）。版本号只有一个来源：csproj 的 `<Version>`，`build-installer.sh` 用 `sed` 读出来再 `/D` 传进 `.iss`（`.iss` 里那个 `#ifndef MyAppVersion` 的默认值只给"手工跑 ISCC"兜底），两处数字各写一份时包里的版本会骗人，而升级判断看的正是它。
+> 62. **TLS 的信任在 PC 上只有"根存储"一个入口，而进程不会回头重读它**（W15-c，§11.1 的接法）。三态实测（一次性 openssl CA + Node HTTPS 靶子 + 临时 .NET 探针，跑完连根存储带临时目录全拆）：根没装 → REST 与 WS **都被拒**，且两侧话术完全不同（REST 是 `AuthenticationException: The remote certificate is invalid because of errors in the certificate chain: PartialChain`，WS 是 `The SSL connection could not be established`）；`certutil -addstore -user Root ca.cer`（`-user` 只进当前用户，**不需要管理员**）之后**新起的进程**两侧都通；**已经在跑的那个进程依旧被拒**——链构建结果按进程缓存，WS 断线重连仍在同一个进程里，不算新进程，所以换证书之后要做的动作是"退出应用再起一次"，而不是"等它自己重连上"。`PartialChain` 只意味着两件事之一：根没装，或者装到了别的用户名下（这正是最容易误判成"证书链不完整其实是服务器没发全链"的那个错误——本机复测时它是 CA 没进存储的那一种）。撤销要用指纹：`certutil -delstore -user Root "CN 名"` 会被系统弹的确认框拦掉并返回"操作已被用户取消"，**而证书还在**——第一次那轮"没装根应当被拒"的基线就是这样整批作废重跑的，第二次改用 `-delstore -user Root <SHA1>`、删完 `-store` 报 `NTE_NOT_FOUND` 才算数。代码侧一行都不用改：`DeviceClient` 是裸 `new HttpClient()`、长连接是裸 `new ClientWebSocket()`，`ServerCertificateCustomValidationCallback` / `DangerousAcceptAnyServerCertificate` / `ServicePointManager` 全项目 grep 零命中，**"不绕过校验"是靠没有代码来保证的**；与 Android 那边把 CA 写进 `network_security_config.xml` 是不同的接入方式（PC 没有 per-app 的信任配置）。
+>
+> 63. **接入频道是投递过滤器，不是权限边界**（§5.2）。`POST /channels/join` 用 `channel_no + secret` 证明的只是"我有权往这条频道写"，读凭据始终是设备 token（§4.1 的分工不许被这个功能改动）；因此它**只对同一 Space 内的频道生效**——未知号码、别组频道、已归档频道一律 **404 而不是 401/403**，不给枚举频道号留缝隙，错密钥才 401。因为是过滤器不是门，`subscribed_only=1` 时某条频道"没接入"意味着这台设备连它的**历史**也拉不到，而接入之后连接入**前**那条也一起放开：过滤按频道，不按接入时刻。同理，接入**不触发** `fail_count`/`locked_until` 那把锁——它保护的是公开入站路径（外部发送者猜密钥），而这一发已经过设备 token + Ed25519 签名，同 Space 成员暴力试密钥没有意义。
+>
+> 64. **"这台设备接没接入这条频道"必须恒有一个可读的答案，且开关的取值只认服务端回显**（§5.2）。`GET /channels` 的每一项因此恒带 `subscribed`：一条订阅都没有时是全 `false`，而不是让整个键消失——客户端界面要能在"还没接入任何频道"这个正常状态下读到同一个字段，靠键缺失去猜迟早猜出错。`subscribed_only` 也**不从"有没有订阅行"推导**：默认全收（0）才是可预期的行为，一台接入了三条频道的设备不该因为接入了就突然收不到其余频道；接入与开关是两件独立的事，界面上各自有措辞。切换模式的两端都取服务端回显而不是本机意图（WPF 那个 CheckBox 失败时要退回原值，Android 的 Switch 直接 adopt 回显），否则一次被服务端拒绝的点击会在界面上留下一个自己骗自己的状态。**建频道的那台设备由服务端默认写一行订阅**：不接的话"新建频道 → 打开只接收已接入"这条最自然的操作序列会把自己刚建的频道静默掐断，而没有任何一处界面提示过这两件事有关联。
+>
+> 65. **"这台设备落后多少条"只能跟本组的行高比**（§5.3，由真服务体检抓到）。`seq` 是全局单调的，所以 REST 的 `after_seq` 游标与响应里的 `latest_seq` 用全局值是对的；但 `PushboxWsHandler.replay` 里那个 `latest - sinceSeq > GAP_THRESHOLD` 拿的是全局 `MAX(seq)` 减一个**组内**游标，于是别的 Space 的流量能把一条消息都没有的新 Space 顶过阈值，每次连接都只回 `resume_gap`、永远等不到 `resume_ok`——顶栏停在"连接中"，而那条连接活着、实时帧也照收。取数因此分成两个方法：WS 用 `latestSeq(groupId)`，REST 继续用 `latestSeq()`。
+>
+> 66. **判据宽容的地方就是缺陷藏身的地方**（验收资产）。`deploy/probe` 的 `waitReady()` 把 `resume_gap` 与 `resume_ok` 一起当成"就绪"，所以第 65 条那个 bug 在探针里跑了很久全绿，直到 `PushBox.LiveCheck` 那条要求真的走到 `Online` 才现形。同一轮里探针自己贡献了一条反向的假失败：`POST /channels/leave` 的判据把 unseal 之后的 body 当响应对象去读 `.status`，`undefined === 200` 永远不成立——**一条判据要能区分"服务端说不"与"我没读到服务端的话"**，所以 `leaveAs` 同时带回 status 与 body，不在 helper 里先把 status 丢掉。
+>
+> 67. **"同一条消息两端都收到"是三件事各自成立的结果，其中最坑的那一件全程不报错**（§4.3、§5.2、§5.3）。① **服务端不是"广播一次"，而是逐连接各封一份信封**：`PushRegistry.dispatch` 遍历会话表里 `group_id` 相同的每一条 session，在 `session.lock` 内用**该连接自己的会话钥与帧序号**封一个 `enc` 再写 socket，所以两端拿到的是同一条明文、两条互不相干的密文，一条连接的 ratchet 不影响另一条。`NotifyCoordinator` 那句日志 `在线下发=N` 就是这个循环返回的"写成功的连接数"，它是"为什么只有一端收到"的第一站——两端都在线时应该是 2。② **会话表按 `device_id` 唯一，同 id 的新连接会主动关掉旧的那条**（`PushRegistry.open` 的"同一设备的新连接接管"，`POLICY_VIOLATION`）。因此**把一端的身份文件复制到另一台机器，得到的不是"两台设备"而是"两台轮流持有同一条连接"**：症状是只有一端收得到、且随启动顺序漂移，**服务端与客户端都不报任何错**，界面照旧显示"连接正常"。要两台就得注册两台——第二台首启填恢复码走 `POST /devices/join`，`DeviceService.enroll` 用同一个 `secretHash` 落进同一个 `group_id`，另外发一对密钥与一个 token。③ **两端唯一会长期不一致的地方是逐设备的 `subscribed_only`**（第 63/64 条）：默认全收，所以开箱即用就是一致的；开了过滤又没接入这条频道的那一台静默，而这条缺席既没有帧也没有提示，只在两端界面那句"开了过滤又一条没接入＝收不到任何消息"里预告过。打扰那一层是**两条独立的门**：帧里的 `notify` 位由**频道**静默在受理时定（`IngestService` 读 `channels.muted`，跨设备一致，所以两端一起响或一起不响），"会话免打扰"却是**本机**库里的判断（`SyncEngine.kt` ↔ `SyncEngine.cs` 各读各的），只让那一台不弹、入库与红点照常；已读跨端共享（`read` 帧，实测 30–50ms）。④ **"同时"只对当时在线的连接成立**：写 socket 抛错就摘掉那条会话、继续下一个设备（一个死掉的客户端不会卡住整组广播），离线那台靠重连后的补拉循环追平。PC **没有**轮询兜底这一档——`SyncWorker` 那条 15 分钟的 WorkManager 周期属于 Android 的极致省电模式，两端文档都不要把它写成 PC 的行为。
+> 68. **一套渲染图要变成两端能用的图标，卡点全在"这一层系统对图片有什么硬要求"上**（第二十四轮，Android 与 PC 的图标接入）。① **自适应图标的背景层不能是一张透明图**：`logo/Android/adaptive_background.png` 导出的是 432×432、每个像素 alpha 都是 0 的**空图层**（导出工具留了个没内容的层），而 API 26+ 的遮罩要求背景铺满整张 108dp 画布，直接引用它等于"图标没有底"。改法是背景层不引那张图，改由 `@color/ic_launcher_background`（`#F2F5F9`）承担，换底色只改 `res/values/colors.xml` 那一行。② **前景必须缩进安全区，源图是铺不满的**：那张 `adaptive_foreground.png` 的不透明内容实测最大半径 162.1/432 ⇒ 占画布 37.5%，而自适应图标只有中心 72dp 可见、推荐内容区是 66dp 直径，圆/方遮罩下盒盖与箱底会被切掉。所以前景按"内容质心对齐画布中心 + 内容半径压到 0.296×画布"重排，五档 density 各出一张（108/162/216/324/432）。桌面图标不吃这套遮罩，`.ico` 那一份的内容半径是 0.47×图块，比自适应那份**大得多**——同一个源图，两个形状系数，别互相抄。③ **通知小图标跟启动图标不是一回事**：`Notifier.kt` 那 5 处原先写的是 `R.drawable.ic_launcher`，即那张绿色方块占位 vector；状态栏只取 alpha 通道由系统着色，3D 渲染图缩到 24dp 只会糊成一团，所以另画 `res/drawable/ic_stat_pushbox.xml`（掀盖箱子的单色剪影），同一形状按 2.4 倍放大后兼作自适应图标的 `<monochrome>` 层（Android 13+ 主题图标），一处形状两处用。④ **`.NET 8` 的 `ApplicationIcon` 改的是 apphost，判据要看 `obj\` 而不是 `bin\`**：`dotnet build` 的产物是托管 `PushBox.Windows.dll`（`/win32icon` 进这里）加一个 `PushBox.Windows.exe`（apphost 模板复制来的），SDK 的 `CreateAppHost` 会把图标补进 apphost，因此标题栏、任务栏、`TrayIcon.cs:55` 那句 `Icon.ExtractAssociatedIcon(Environment.ProcessPath!)` 与卸载面板的 `UninstallDisplayIcon` 全部自动跟着变，**不需要给 `Window` 加 `Icon=`**。而 `bin\` 那一份可能拷不过去——使用者自己开着的实例会锁住 exe，MSBuild 重试 10 次后报 `MSB3027/MSB3021` error；这一轮第一次就栽在 `dotnet build ... | tail` 上：**管道退出码是 `tail` 的，构建失败也显示成功**，看 `obj\Debug\...\apphost.exe` 抽出来的图标才知道改动本身是对的。⑤ **`.ico` 的载荷形状要混着给**：16/24/32/48 用未压缩 DIB（`BITMAPINFOHEADER` 的高度写两倍= XOR+AND，AND 掩码全 0，32bpp 的透明由 alpha 表达），64/128/256 用 PNG 载荷——PNG-in-ICO 是 Vista 之后的扩展，个别老组件在小尺寸上仍按 DIB 取，全给 PNG 会在那些地方拿到空图。ISCC 认这份混合 `.ico`，实测拿同一路径编一个探针包，抽出来的 `Setup.exe` 图标就是它。⑥ **降采样有两个坑**：GDI+ 的 `HighQualityBicubic` 有负瓣，432 直接拉到 16 会在透明边缘留一圈暗边，所以先对半降到目标的 3 倍以内再一步到位；而"对半降"改的是位图分辨率、**不改归一化画布**，定位必须继续按原始 432 算——第一版按降采样后的宽度算，结果除 432 那一档以外每张都小一半且偏心，而预览图恰好就是 432 那一档，所以**只看预览发现不了**。补上"内容半径应等于系数×size、质心应落在画布中心"的逐张自检才抓到。
+>
+> 69. **主动 ping 只对齐"出站节奏"，判死仍然只有一条截止线**（§5.3，PC 侧的半开检测）。Android 的 `keepAlive` 会自己发 ping，PC 原来只是"收到 ping 回 pong"，于是服务端那侧停了 ping 但 socket 还挂着时，本端要等到静默满 40s 才反应，而 NAT 那边早就把这条绑定收了。现在 `HeartbeatSenderAsync` 按 hello 的 `heartbeat_sec` 各发一发 `{"t":"ping"}`，服务端 `PushboxWsHandler` 回 pong（`registry.send(live, Frames.Simple.pong())`），这条 pong 就是第 13 条那个静默计数器的新血。**三件事不能省**：① **起跑不能睡整觉**——hello 到达之前 `_heartbeatSec` 还是默认 25，一次 `Task.Delay(25s)` 会把这一整条连接钉在默认节奏上（服务端说"我们这边 5 秒"也没用），所以睡着时按 1 秒一小段、每段醒来重读间隔；② **一条 socket 同时只能有一个 `SendAsync` 在飞**（`ClientWebSocket` 的硬限制，第二个当场抛 `InvalidOperationException`），而心跳任务与"收到 ping 回 pong"分属两条线程，所以出站只有 `SendAsync` 这一道 `SemaphoreSlim(1,1)` 的门——少了它，一次相位撞上的 ping/pong 会让整条同步循环带着异常收工，而不是断线重连；③ **心跳不新增第二个判死条件**。判死归 `QuietWatchdogAsync` 那一条 `heartbeat+15s`（第 13 条），心跳发送失败只静默 `return`：从 `Task.WhenAll` 抛出去等于把整条循环钉死，而"发不出去"这件事的归因本来就由读循环那一条给。**测试口径**：`deadAfter` 压到 1.5s、hello 说 1 秒，断言 `Sent` 里真的有 `{"t":"ping"}` 且结论是 `heartbeat_timeout`——拔网线那半条仍然只在 `PushBox.LiveCheck` 与实机上成立。**两端阈值刻意不同**：Android `SyncEngine.keepAlive` 数的是 `interval × STALE_HEARTBEATS(2)`（默认 50s），PC 沿用 §5.3 那句 `heartbeat+15s`（默认 40s）——协议文档写的是 40s，不为了"跟 Android 一模一样"去动它，代价只是 PC 比 Android 早 10 秒认输、补拉也早 10 秒。
+>
+> 70. **XAML 的三类缺陷全在加载那一刻才炸，编译期一点声音都没有**（W12，PC 起不来的三次报错）。① **`Style` 的 `TargetType` 与挂载元素对不上**（带 `TargetType="TextBlock"` 的 `Text.H3` 挂到 Button 上）→ `XamlParseException`，实测栽了两次（顶栏 ⚙、返回 ←）。② **`TextBlock` 的内容属性是 `Inlines`**，往里塞 `<StackPanel>` 这种元素子节点同样只在运行时抛——空会话状态那一整块因此外层是 `Grid` 不是 `TextBlock`。③ **`StaticResource` 要求键在解析时就存在**，而 `Text.*` 那 7 个样式只活在 App 级那两份 token 字典里、由 `ThemeManager.Apply()` 换进 `MergedDictionaries`；任何在那之前建窗口的路径（以及 xunit 那种在裸 STA 线程上"没有 `Application`"地构造窗口的写法）都会当场"无法找到名为…的资源"，所以跨字典的引用一律 `DynamicResource`（它只是暂时拿不到值，换主题时字号本来也不变）。**这一类不能用"跑一遍看看"来收口**：三条断言常驻 `ThemeTest`——`EveryStyleReferenceMatchesTheControlItIsPutOn` 按 XML 逐元素比对样式键的 `TargetType`（按行匹配必然漏，因为样式引用常常跟别的属性换行写在同一个元素上）、`EveryTokenTheWindowsReachForExists` 拦键名拼错、`TheMainWindowReachesTheFontStylesThroughDynamicResource` 钉住 MainWindow 里不许再出现 `Style="{StaticResource Text.`。
+
+### 8.3 工程结构与环境
+
+```
+windows/                     ← C# 侧的唯一边界；IDE 只打开 PushBox.sln，
+                                不要打开仓库根目录（根下同时有 Maven + Gradle，会被误索引，见 D27）
+ ├─ PushBox.sln
+ ├─ PushBox.Windows/               TFM = net8.0-windows10.0.19041.0（WinRT Toast 必须带 10.0.19041 版本号）+ UseWPF
+ │   ├─ Crypto/    X25519Kex · HkdfSha256 · AesGcmCipher · Ed25519Sign      ← §8.2 四原语的薄封装，已完成
+ │   │             B64Url · RestCanonical · WsCanonical                      ← URL-safe b64 唯一入口 + restAuth 8 行 / WS 4 行 canonical，已完成
+ │   ├─ Net/       FrameChannel（WS 信封，有状态）· RestSeal（REST 密封盒）      ← 两条读侧解密，已完成
+ │   │             DeviceClient · ApiError · Wire                            ← §5.2 两个开放接口 + §5.1 错误码→人话 + 出站帧，已完成
+ │   │             Frames                                                   ← §5.3 全部帧型的手写字段绑定（W3c），已完成
+ │   │             DeviceClient 另有两条**字节**读法：MediaAsync / AvatarAsync ← §4.5 服务端代理取图，回答不是密封盒（W10）
+ │   │             DeviceClient 另有签名 GET SearchAsync                      ← §5.2 搜索：q 由用户敲，先转义再拼再签（W11）
+ │   ├─ Media/     MediaCache · MediaLoader · MediaState · ImageMime          ← §4.5 的两级图片缓存 + "先问缓存再发请求"这条链（W10），已完成；
+ │   │             ImageSourceOf                                            ← 槽位状态从 404 的 hint 映射成占位，头像只进内存不落盘；
+ │   │                                                                        W12 补 `ImageSourceOf`：缓存字节 → `BitmapImage`（WPF 侧唯一的解码入口）
+ │   ├─ Data/      IdentityStore · EnrollmentFlow · DeviceStore              ← DPAPI 落盘 + §7.5 首启编排（W4/W5）+ §3.3 本地库（W7），已完成
+ │   │             IdentityStore 另管两份游标副本：TOFU 指纹 + last_applied_seq（W8）
+ │   │             SearchService · SearchText                                ← §7.4 的两段合并（本地即时 + 回车服务端，按 id 去重）
+ │   │                                                                        + §3.2 那套 snippet 窗口/命中高亮（W11），已完成
+ │   │             Markdown                                                  ← §9.2 支持集的**解析层**（W12）：标题/粗体/行内码/代码块/
+ │   │                                                                        列表/链接/引用/表格，无斜体、无 `---`、表格要有表头分隔行，
+ │   │                                                                        与 Android 的 Markwon 口径一致；产出 block/inline 记录，不碰 WPF
+ │   ├─ Sync/      PushConnection · ClientWebSocketTransport · IPushTransport ← §5.3 一条连接的握手/心跳/断因（W6），已完成
+ │   │             SyncEngine · SyncState · INotifier                       ← §7.2 退避重连 + §5.2 补拉 + §6.2 入库去重（W8），已完成；
+ │   │             ← W12 挂在 INotifier 上的 `NullNotifier` 已删：W13 起这一位是 `Notify/ToastNotifier`，
+ │   │                                                                        引擎一行都没改。免打扰（`IsMuted`）那道门仍然留在引擎里（§7.3，与 Android 同一分工），通知吃帧不吃字符串、正文永不进日志（§14）。
+ │   │                                                                        **W15 让这一页开始有留痕可写**：断链/补拉被拒/吊销停机/休眠醒来各留一行，
+ │   │                                                                        而且 `SaveLastAppliedSeq` 在身份文件读不出时跳过回写而不是把同步循环带崩（§8.2 第 56 条）
+ │   │             ReadReporter                                             ← §5.2 已读上报 + 离线攒批（W9），已完成；宿主只管在
+ │   │                                                                        `SyncState.Online` 翻转时调 SetOnline，打开会话时调 MarkRead
+ │   │             DeleteReporter · DeleteOutcome · DeleteResult              ← §5.2/D13 删除与清空（W14），已完成；本机先乐观移除（回调那一刻就重画）、
+ │   │                                                                        服务端那一发只管别的端，只有 `RolledBack` 会让提示条说话；
+ │   │                                                                        回滚票（`MessageUndo`/`ClearUndo`）由 `DeviceStore` 的局部删除/清空交出
+ │   ├─ Settings/  ClientSettings                                          ← §7.3/§8.1 那几个开关的落盘处（W13）：`%LOCALAPPDATA%\PushBox\settings.json`，
+ │   │                                                                        读侧任何坏文件（空、非 JSON、截断、类型不对）一律回默认，写侧只整份覆盖；
+ │   │                                                                        **默认是通知开、静默关、自启关、关窗进托盘**，静默窗口 22:00–08:00 只是形状、不默认生效
+ │   ├─ Notify/    AlertPolicy · ToastPlan · ToastXml · ToastProtocol      ← §7.3 强度 + §7.4 静默时段 + §8.1 toast 的三层（W13）：
+ │   │             ToastNotifier · ToastAvatar · ConversationTally            判定（AlertPolicy/ToastPlan，纯函数）→ 机械转录（ToastXml，
+ │   │                                                                        在 xunit 里 `XDocument.Parse` 回读逐属性断言）→ 交给系统（Show，
+ │   │                                                                        只能真机）；ToastProtocol 是 pushbox: URI 的编解码，ConversationTally
+ │   │                                                                        数"这一会话第几条"以便第二行写"N 条新消息"；
+ │   │                                                                        头像落盘（ToastAvatar）是 W10"只进内存"的唯一例外——toast 只吃 file:/// URI
+ │   ├─ Integration/ TrayIcon · ToastRegistration · AutoStart · InstanceHandoff ← §8.1 那三件事的系统侧（W13）：H.NotifyIcon 的托盘（tooltip 归
+ │   │                                                                        窗口算、设置项落在菜单而不是设置页）、未打包应用要自己写的两处 HKCU
+ │   │                                                                        （AUMID + pushbox: 协议处理器）、`HKCU\...\Run` 自启（默认关，值相同不重写、
+ │   │                                                                        换目录跟过来、条目被用户删了就把设置改成关）、单实例与"点通知那一下"的
+ │   │                                                                        命名管道转发（名字由 exe 全路径派生，换一份安装不互相顶掉）
+ │   ├─ Logging/   AppLog · PrivacyGate · PrivacyEnricher · PrivacyFormatter  ← §14 在 PC 侧唯一的落点（W15）：**全项目只有 AppLog 这一页能写日志**，
+ │   │                                                                        它的每个公开方法只收类型化的小字段（错误码、计数、游标、毫秒、异常**类型名**），
+ │   │                                                                        所以"把正文写进日志"在签名层面就没有路；PrivacyGate 是纯函数的五层网
+ │   │                                                                        （敏感键名 → 120 字符长度闸**整值替换而不是截断** → `k=v`/JSON/URL query 三种转储形状 →
+ │   │                                                                        ≥40 b64 或 ≥32 hex 的凭据形状 → 异常只留类型名与堆栈），PrivacyEnricher 在属性级
+ │   │                                                                        把非基元值折成类型名，PrivacyFormatter 是落盘前最后一道；Serilog 4.4.0 +
+ │   │                                                                        `Serilog.Sinks.File` 7.0.0（一天一本 `pushbox-20261015.log`、留 7 本、单本 4MB），
+ │   │                                                                        **没 `Start()` 一个字都不写**（所以测试里那些跑真引擎/真删除的路径不会往 `%LOCALAPPDATA%` 落文件），
+ │   │                                                                        日志目录建不出来只是"这台没有留痕"、不带走应用；崩溃那条路**只写文件、没有任何上报**
+ │   │                                                                        （这一页没有 HttpClient 也没有 URL，"上报开着"在代码里就不成立）
+ │   ├─ Themes/    Tokens.xaml · Tokens.Dark.xaml · ThemeManager             ← §9.1 的 12 个 token 落成两份 ResourceDictionary（W12）：
+ │   │                                                                        Apply(dark) 只换这两本的合并顺序，深浅色跟随系统靠
+ │   │                                                                        `SystemEvents.UserPreferenceChanged` 广播 `ThemeManager.Changed`
+ │   ├─ Controls/  MarkdownView · MarkdownStyle · BubbleView · MediaStrip    ← §9.2 的**渲染层**（W12）：度量全在代码里（字号/行高/圆角/竖条
+ │   │                                                                        3px/气泡内边距 12×10/图位 220×165），MarkdownStyle 是 token 字典的快照，
+ │   │                                                                        换主题时作废重建；这样一份 Style 就能在测试里断言渲染结果（验收③）
+ │   └─ Views/     FirstLaunchWindow · OnboardingModel                     ← 首启两屏（W5）已落；XAML 只放控件，判定都在 model 里
+
+ │                 MainModel                                              ← §8.1 双栏 + §9.3 的**判定层**（W12）：筛选/未读数字/时间分节/
+ │                 MainWindow · MainWindow.xaml                                窄窗退化/气泡列宽，全部不碰 WPF，所以验收③ 的判据在普通用例里
+ │                 Converters（TokenBrush · HasValue · AvatarBrush · FirstChar · TimeFormat）
+ │                                                                        ← XAML 里那些"绑定才能算出来"的小判定（W12）
+ │                 App · TrayActions                                      ← §8.1 的装配都收在 App.xaml.cs（W13）：托盘常驻 + 关窗=最小化（可设为退出）、
+ │                                                                        两处 HKCU 注册、单实例转发、开机自启对账都在这一个 OnStartup 里排顺序；Notify/Settings/Integration 三页各自不知道对方存在。
+ │                                                                        W15 把 `AppLog.Start` 排在**这一切之前**（后面每一页才有留痕可写），并挂上两个崩溃挂钩
+ │                                                                        （`DispatcherUnhandledException` 管 UI 线程、`AppDomain.UnhandledException` 管托盘消息泵与 WinRT 回调那几条非 UI 线程）；
+ │                                                                        `HandleTarget` 在没身份时**直接返回**而不是去开主窗——干净机器上一条 `pushbox:` 冷启动就是这么崩在 dispatcher 上的（§8.2 第 57 条）
+ ├─ PushBox.Crypto.Tests/          xunit；直接读仓库根 testvectors/vectors.json
+ │                                 （§13 的开工闸口；当前全量 556/556 绿，W15 时 517，取证用例仍是 21 条，其余是脚本 socket/脚本 HTTP/临时目录真文件的行）
+ │   ├─ MarkdownTest · MainModelTest · RenderTest · ThemeTest · MainWindowTest ← W12 新增的五页（`RenderTest.cs` 一份文件里住着
+ │   │                                                                        MarkdownView/BubbleView/MediaStrip/Avatar 四个类 + STA/树/合成 Style 的公共 helper）：
+ │   │                                                                        `RenderTest.cs` 里 `Sta.Run`（STA 线程 + 收尾 InvokeShutdown）、
+ │   │                                                                        `Sta.PumpUntil`/`PumpFor`（正向等条件 / 负向只转）、`Tree`（按类型走可视树）、
+ │   │                                                                        `Paint.Style()`（八种各不相同的冻结灰，专抓"两个 token 拿错"）；
+ │   │                                                                        ThemeTest 反过来读 XAML 与 §9.1 表格比，MainWindowTest 从 XAML 构造整窗
+ │   ├─ AlertPolicyTest · ToastPlanTest · ToastXmlTest · ToastProtocolTest ← W13 的四页判定与转录（31 + 15 + 10 + 22）：level→强度、
+ │   │                                                                        静默时段跨午夜、总开关/免打扰 veto、摘要优先级、tag/group/launch、
+ │   │                                                                        两颗按钮、计数行；XML 用 `XDocument.Parse` 回读逐属性断言（§8.2 第 39 条），
+ │   │                                                                        URI 那条要自由文本往返（频道号可以是"频道 01"这种带空格的）
+ │   ├─ ClientSettingsTest · SystemIntegrationTest                        ← W13 的另两页（18 + 32）：设置文件的坏输入与逐字段跳过、
+ │   │                                                                        自启判定与两处 HKCU 的键路径、单实例的**真命名管道往返**
+ │   │                                                                        （"第二个实例"要换一条线程去抢，见 §8.2 第 41 条）、托盘文案、
+ │   │                                                                        头像落盘与 LRU、ToastNotifier 的失败契约（Delivered + 退路 == 1、
+ │   │                                                                        LastFailure 只有异常类型名）。另外给已有四页各补一条：
+ │   │                                                                        `DeviceStoreTest`（`IsMuted` 按 (频道, 发送者) 这一对读）、
+ │   │                                                                        `SyncEngineTest`（静音会话照常落库、游标照进，只是不弹）、
+ │   │                                                                        `MainModelTest`（托盘那个数字是全会话未读总数）、
+ │   │                                                                        `MainWindowTest`（STA 上走一遍"URI → 那一条会话被选中 + 红点清零 +
+ │   │                                                                        重画通知到托盘"——W13 验收① 在窗口这一侧的落点）
+ │   ├─ AppLogTest · PrivacyGateTest · LogWiringTest                       ← W15 的三页（11 + 15 + 12）。前两页测的是那五层网本身：`AppLogTest`
+ │   │                                                                        里最值钱的是 `GrepOverTheWholeLogDirectoryFindsNoBodyFragment`（§8.4 W15 验收①，
+ │   │                                                                        拿**真文件**读回来 grep 整个目录而不是只看有没有调用过脱敏函数）与"崩溃留痕只留抛出那一行、
+ │   │                                                                        不留它旁边那句话"、"目录写不了就只是没留痕而不是把应用带下去"；`PrivacyGateTest` 逐条钉那五层
+ │   │                                                                        （键名不分大小写、超长值是**整值替换不是截断**、裸值吃到行尾而带引号的只吃自己、
+ │   │                                                                        JSON 与 URL query 两种转储、词中词不误伤、hex 与 base64 两把凭据形状、
+ │   │                                                                        恢复码短于 .NET 的任何一条形状所以剩下那几道墙得单独钉）。`LogWiringTest` 是**接进去**的那一层：
+ │   │                                                                        补拉被拒、吊销停机、身份文件读不出、删除被服务端拒、缓存落盘失败、通知与搜索各条路上
+ │   │                                                                        "日志里只可能出现码和游标"（`AssertNothingLikeContent`），跑真引擎/真删除/真取图组件、只把日志目录换成临时目录。
+ │   │                                                                        **这一页要 `[Collection("AppLog")]` 关掉并行**——留痕是进程级的静态入口，
+ │   │                                                                        并发跑会互相染上别人那几行（§8.2 第 55 条）
+ │   └─ （`Sta` 那条"可视对象必须活在 STA 上、线程自己开自己关"的口径见 §8.2 第 37 条）
+ ├─ installer/   PushBox.iss · build-installer.sh                          ← §10.1 的发布路线（W15-c）：`bash build-installer.sh` 做
+ │                                                                           `dotnet publish -c Release -r win-x64 --self-contained true -o publish` 再叫 `ISCC.exe`，
+ │                                                                           产物 `Output/PushBox-Setup-<版本>-win-x64.exe`（`publish/`、`Output/` 已进 `.gitignore`，194MB + 56MB 不入库）。
+ │                                                                           三条拍板写在这个目录的注释里：**self-contained**（"干净机器"那条验收不接受"请先装 .NET 桌面运行时"）、
+ │                                                                           **per-user**（`PrivilegesRequired=lowest` + `{localappdata}`，因为这一版要写的 HKCU 与要落的 `pushbox.db` 本来就在当前用户下）、
+ │                                                                           **版本号只从 csproj 的 `<Version>` 来**（`build-installer.sh` 读出来用 `/D` 传进 `.iss`，两处数字不一致时包里的版本会骗人）。
+ │                                                                           卸载只清**确实指向 `{app}`** 的那三处 HKCU，`%LOCALAPPDATA%\PushBox` 一律保留；不用 `AppMutex`
+ │                                                                           （单实例那把锁的名字是按 exe 全路径派生的，没有一个静态名可写，§8.2 第 58 条）
+ └─ PushBox.LiveCheck/             真服务体检（§12 P3 的 12 条判据）：控制台程序，指着跑起来的服务端跑一遍
+                                   `bash deploy/run-dev.sh --server.port=8081`
+                                   `dotnet run --project windows/PushBox.LiveCheck -- http://127.0.0.1:8081`
+                                   为什么不是用例：xunit 2.5 没有运行时 skip，做成 `[Fact]` 就只能"服务端没起时假装绿"
+```
+
+| 项 | 值 | 说明 |
+|----|----|------|
+| SDK | .NET SDK **8.0.426**（LTS），`D:\Apps\DE\Net\sdk` | 装在 `DE` 是本机目录约定（运行时/SDK 进 `D:\Apps\DE`，GUI 工具进 `D:\Apps\DT`） |
+| 自定义路径的配套动作 | `DOTNET_ROOT=D:\Apps\DE\Net` + 该目录进 `PATH` | **非默认位置安装不会自动写这两项**，漏了就是 `dotnet 不是内部或外部命令` + Rider 探测不到 SDK；改完必须**新开终端** |
+| 桌面运行时 | `Microsoft.WindowsDesktop.App 8.0.32` | 自检看 `dotnet --list-runtimes`，缺这一行 WPF 一律编不过（`NETSDK1100`） |
+| NuGet 全局缓存 | `D:\Apps\DE\NuGet\packages`（`NUGET_PACKAGES`） | 与 `DE\Maven\MavenRepo` 对齐；Rider 要重启才继承该变量 |
+| IDE | **Rider 2026.2.3.1**（`D:\Apps\DT\JetBrains\JetBrains Rider 2026.2.3.1\bin\rider64.exe`，已装） | **不再要求 Visual Studio**：WPF/XAML/调试器 Rider 全覆盖，省 8–10GB 与一次重启。仅当坚持免费路线才装 VS 2022 Community + `ManagedDesktop` 工作负载 |
+| 依赖 | `BouncyCastle.Cryptography` 2.7.0 · `Microsoft.Data.Sqlite` **8.0.32**（W7 已加，跟着 `WindowsDesktop.App 8.0.32` 的补丁号走）· `H.NotifyIcon.Wpf` **2.1.4**（W13 已加）· `Serilog` **4.4.0** + `Serilog.Sinks.File` **7.0.0**（W15 已加：只用到"滚动文件"这一件事，脱敏那三层是手写的，没有再引任何日志/崩溃上报 SDK——§14 要的"崩溃上报关闭"在依赖表里就是这一句） | `NSec.Cryptography` 与一条试错时加的 `System.Security.Cryptography.Algorithms` 已从 csproj **移除**（前者不可用、后者是 .NET Core 2.x 时代的遗留包，HKDF 已由 BouncyCastle 承担）；测试项目通过 `ProjectReference` 指向 `PushBox.Windows`，所以 `FrameChannel`、`PushConnection`、`DeviceStore` 都能被直接测到（前两者靠 `IPushTransport` 的假 socket，`DeviceStore` 靠临时目录里的真 db 文件，都不需要起服务）。`Microsoft.Data.Sqlite` 非 Core 版会自己带 `SQLitePCLRaw.bundle_e_sqlite3`（实测 2.1.13）并把 FTS5 + trigram 一起装好，**不用写 `Batteries_V2.Init()`**。**W13 实测**：托盘只需要 `H.NotifyIcon.Wpf` 这一本（`TaskbarIcon` + `ForceCreate`），toast 那一侧**没有再引入任何库**——TFM 带上 `10.0.19041` 之后 `Windows.UI.Notifications` 是投影出来的 WinRT，`ToastContentBuilder` 反而不够用（它不给 `activationType`/`displayOnly` 的出口），所以直接 `new ToastNotification(xml)`；`System.Drawing.Icon.ExtractAssociatedIcon` 由 WPF 那本自带，不用额外包 |
+| 冒烟命令 | `dotnet test`（在 `windows/` 下，**当前 556/556**，W15 时 517）；`dotnet run --project PushBox.Windows`；`bash deploy/run-dev.sh --server.port=8081` + `dotnet run --project windows/PushBox.LiveCheck -- http://127.0.0.1:8081`；`bash windows/installer/build-installer.sh` + `"...Output\PushBox-Setup-<version>-win-x64.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`（W15-c：安装/覆盖装/卸载三段退出码全 0、无 UAC、`{app}` 里五本运行时 DLL 齐全，实测表见 `docs/Windows开发环境安装教程.md` §5.3，口径与坑见 §8.2 第 58–61 条）；**`dotnet run --project PushBox.Windows -- --notify-smoke 输出文件`（W13 新加：注册表真写进去了、托盘图标真出来了、toast 真弹出来了这三件没有 xunit 的向量可把关，只能真机量） | 第二个现在弹的还是**首启两屏**（本机 `%LOCALAPPDATA%\PushBox\identity.json` 不存在——2026-10-15 W12 再跑一次时确认过那个目录压根没建起来，所以这条冒烟不碰网络、不产生任何本地数据）；有身份时才进 W12 的双栏主窗口。实测：exe 起进程稳定驻留（约 110MB）、日志无异常，按自己起的 PID 结束。**主窗口这一页更适合看 `MainWindowTest` 而不是看屏幕**——它在 STA 线程上从 XAML 构造整窗并断言初始面板状态（`x:Name` 对不上、模板没挂上、初始可见性不对都会在那里判红），而无身份时的 `PushBox.Windows.exe` 根本走不到那一页。**第三个是真服务体检（§12 P3 的 10 条判据，10/10 过才算这一步没退化；第 ⑦ 条从 W10 起，打的是带 `size=thumb` 的签名取图请求 ⇒ 真验签 + 404 hint 映射；第 ⑧ 条从 W11 起，打的是用户敲进去的那种词——中文、空格、`%`、`&` 一起进 query ⇒ 真验签 + 密封盒解得开 + 本地那半不被合并掉；第 ⑨/⑩ 条从 W14 起，是两发真签名 DELETE 打到真验签上，故意打在服务端并没有的这些行上，所以判的是"404 `hint=message` 读成『本来就没有这条』、`deleted=0` 读成幂等成功"这两条解读，服务端有真行的那两支由 `deploy/probe` 的 ⑪/⑯/⑰/⑱ 覆盖，同一份代价不跑两遍）：8081 是自己叫起来的，跑完只杀自己那个 PID——8080 上是使用者手动起的实例，不碰。W12/W13 都没动协议，那两轮的 8/8 是"不退化"的确认而不是新增判据**（通知这一层只是让同一批帧多了一个 UI 侧消费者）；W14 动了协议面，判据从 8 条长成 10 条。`--notify-smoke` 是独立于 LiveCheck 的第二台体检仪：不需要设备身份、不连服务端，把逐项结果写进指定的文本文件（实测见 §8.4 W13）|
+
+
+### 8.4 实施清单（按依赖顺序，W1–W15，含补入的 W3b/W3c 共 17 项）
+
+> 排序原则与 §12 的 P3 闸口一致：**先加密对齐（W2），再打通"收得到、存得下"（W3–W8），然后才是交互（W9–W11）、界面（W12–W13）、运维收尾（W14–W15）**。每一步都有可独立运行的验收，不出现"半截模块只能等下一步"。
+
+| # | 交付物 | 要做的事 | 依赖的既有契约 | 验收 | 状态 |
+|---|--------|----------|----------------|------|------|
+| W1 | `windows/` 工程骨架 | sln + WPF 主项目 + xunit 测试项目 + 引用关系 | §10.1、§8.3 | `dotnet test` 能跑起来 | ✅ 已完成 |
+| W2 | `Crypto/` 四原语 | X25519 协商、HKDF 派生、AES-GCM 加解密、Ed25519 签验，逐条对 `vectors.json` | §4.3、§4.4、§5.3、§13 | 全绿（含篡改负例） | ✅ **7 例全绿**：X25519 ×1、HKDF ×1、AES-GCM ×2（正例 + 篡改负例）、Ed25519 ×2（`ws_auth_sig` + `kx_sig`）、信封端到端 ×1（W6 时并入 `FrameChannelTest`） |
+| W3 | `Net/FrameChannel` | `envelope_json` →（解码 URL-safe b64 → X25519 → HKDF → AES-GCM）→ 明文帧；nonce/AAD 按 `n` 重建。**W6 落地时把这份"一次调用解一封"的 `FrameCodec` 换成了有状态的 `FrameChannel`**（与 `core/crypto/FrameChannel.java` 同名同语义）：会话密钥只在 `kx` 时派生一次，帧序号连续性由 channel 自己数，`Open` 对 tag 校验失败返回 `null` 而不是抛（Java 的 `AesGcm.open` 就是这个口径） | §4.3、§5.3 | 用向量里的真实 envelope 解出 `plaintext_json` 且字段逐项相等 | ✅ 已完成（W3b 一并完成后，两条读侧路径都过向量；W6 又补了"篡改帧不推进计数器""换 key 即解不开"两条负例） |
+| W3b | `Net/RestSeal` + `Crypto/RestCanonical` | **REST 响应是另一种密封盒**，形状与 WS 信封不同：`{v, eph_pub, salt, data, n}`，`salt = sha256(server_eph_pub)`、`n` 固定 0、用**设备静态 enc 私钥**解（此时 WS 会话密钥还不存在）——`register`/`join` 的回包也照样密封，里面是 `token` 与恢复码，不能用 WS 那条路径凑。再加 `X-PB-Sig` 的 8 行 canonical（`pushbox-rest-auth-v1 / device / METHOD / path / 原始 query / sha256hex(body) / ts / b64(nonce)`） | §5.2 的"密封范围"与"canonical"两段 | ① 拿 PC 的新设备注册回包能解出 `token`；② query 串**原样**进签名（不许自己按 Map 重拼）；③ 空 body 用 `e3b0c442…b855`；④ 时钟漂 6min 整片接口一起 401 的表现能被复现并给出可读提示 | ✅ **向量已补、字节级已对齐（10 例绿）**：`vectors.json` 新增 `rest_auth`（GET 带 query/空 body + POST 带中文 body 两条用例，各含 `canonical` 原文与 `sig_b64`）与 `sealed_box`（`envelope_json`/`plaintext_json`/`eph_pub_b64`/`salt_b64`/`session_key_hex`）。C# 侧 `Crypto/RestCanonical` + `Net/RestSeal` 逐条对上，含"query 重排即验不过"的负例。**④ 时钟漂 6min → 整片 401 的表现待 W5 真连时验**，那条不是向量能覆盖的 |
+| W3c | 帧 DTO 绑定 | §5.3 全部帧型（`message`/`media_ready`/`read`/`tombstone`/`resume_gap`）的 C# 侧字段绑定。**照 `Wire.kt` 的做法手工按字段读写，不要用 `System.Text.Json` 直接反序列化到 record/不可变类型** —— Android 侧那次 Jackson/`isRecord()` 静默序列化成 `{}` 的坑（§10.1）在 C# 上表现为字段名大小写/命名策略不匹配时同样静默丢值 | §5.3 | 每类帧都能从解密后的 JSON 取到非空字段；`tombstone` 的 `id` 与 `scope` 互斥两形态解析正确 | ✅ **已完成（`Net/Frames.cs`，8 例绿）**：基类属性叫 `Kind`（帧的 `t`），`MessageFrame.Type` 留给消息内容类型——两者同名那次实测把 `Expected: markdown / Actual: message` 判红了，C# 与 Java 的 record 继承都会踩。除 §5.3 全部帧型外还接住了 `media_failed`、`auth_ok/auth_fail`、`resume_ok`、`ping/pong`；未知 `t` 返回 `null` 让读循环跳过而不是抛。`tombstone` 的 `id`/`scope` 两形态与"都没有就什么都不清"都有独立用例 |
+| W4 | `Data/IdentityStore` | 落盘 `enc_priv`/`sign_priv`/`device_id`/`token`/`group_id`/各频道 `last_applied_seq`；密钥用 **DPAPI** 绑定当前用户（§8.1、§3.3） | §4.2 | 杀掉进程重开能读回同一身份；`%LOCALAPPDATA%\PushBox\` 下无明文私钥 | ✅ **已完成（7 例绿）**：`%LOCALAPPDATA%\PushBox\identity.json`，四段机密（两把种子 + token + 派生用）用 DPAPI `CurrentUser` + 应用熵封装，`.tmp` 写完后原子改名。**游标口径调整**：本文件只存一个全局 `LastAppliedSeq`（W6 建连要 `since_seq`，那时 SQLite 还没打开），**每会话游标仍归 §3.3 的 `sync_state` 表（W7）**，两处不能互相覆盖。负例覆盖了换熵解不开、截断文件、私钥长度错在写盘前就被拒 |
+| W5 | 首启两屏 | ① 本地生成密钥对 + 命名设备 → `POST /devices/register`；② "我有恢复码" → `POST /devices/join` | §5.2、§7.5、D26 | 用手机的恢复码在 PC 加入后，会话列表与已读状态和手机**完全一致**；第 6 台设备被拒并给出可读提示 | ✅ **模块与话术已完成（`Net/DeviceClient` + `Data/EnrollmentFlow` + `Views/FirstLaunchWindow`，全量 76/76 绿）**：register/join 只发 body、**不带任何 `Authorization`/`X-PB-*` 头**（有专门用例守这条）；回包用设备静态 enc 私钥开密封盒，向量 `sealed_box` 已补 `server_pub_fp` 且恢复码改成真的 22 位 base64url 形状。§5.1 的 `error` 码全部翻成人话（`device_limit_reached`→"绑满 5 台…先吊销一台"、`invalid_credential`→"重新复制恢复码"、`clock_skew`→"校准 Windows 时间"，W3b 的验收④就在这条话术里），TLS 不受信、代理回 HTML、超时、断网各有一句。**"与手机完全一致"那半条要等 W7/W8 落库与补拉才能实测**，本机已验的是：假服务端下 join 的字段/路径正确、身份落盘后恢复码与 token 都不是明文。**首启两屏已能真的弹出来跑一次**（`PushBox.Windows.exe` 起停已验），UI 细节留给 W12 |
+| W6 | `Sync/PushConnection` | `ClientWebSocket` 走 §5.3 全流程：`hello` → `kx`（验 `sig` + 核对 `server_pub_fp` 做 TOFU）→ `auth`（一次一签，吃 `hello.nonce`）→ 帧路由 → `ping/pong`（25s 心跳、40s 判死）→ `resume_ok`/`resume_gap` | §5.3、§4.3 | 拔网线 30s 恢复后自动重连并补齐缺失 seq；指纹不匹配的 `kx` 被拒且**不降级明文** | ✅ **模块与话术已完成（`Sync/PushConnection` + `Sync/ClientWebSocketTransport` + `Net/Wire` + `Crypto/WsCanonical`，全量 104/104 绿，本步新增 25 例）**：socket 抽成 `IPushTransport`，所以整条握手是**拿 `vectors.json` 的字节在假 socket 上跑的**——`ws_auth_message`/`ws_auth_sig_b64` 对上 Java 的 canonical，`kx_message_hex`（`eph_pub‖nonce` 那 64 字节）与 `kx_sig_b64` 用 `server_id_pub_b64` 验通，再把向量里的 `frame.envelope_json` 解成 `MessageFrame`。**"不降级明文"是被断言出来的**：`kx` 之前到的密文帧直接丢、指纹不匹配时 `Sent` 里连 auth 帧都没有（token 没出过进程）、伪造 `sig` 与"换掉服务端身份公钥"两条各自断在 `bad_kx_signature`/`server_identity_mismatch`。另外钉住：帧序号跳号即断（`frame_index_gap`）、篡改帧只丢不拆连接、中途 `kx`（epoch+1）新建 channel 并把序号从 0 重数、加密与明文两种 `ping` 都回明文 `pong`、`media_ready` 不推进游标、`auth_fail` 标成终止态不重连、`heartbeat_timeout` 由本端的静默看门狗判死（拔网线时服务端根本没机会 close，光等对端是错误的做法）。**"拔网线 30s 恢复后自动重连补 seq" 那半条要 W8 的退避循环接上才成立**，本步交付的是"一条连接能正确地开、活、死"；真服务联调随 W9 在 8081 上跑 |
+| W7 | `Data/DeviceStore` | `Microsoft.Data.Sqlite` + **FTS5**，建 §3.3 的 `conversations`/`messages`/`sync_state`/`fts_messages`；`unread_count` 由 `last_read_seq` 与 `seq` 比较得出 | §3.3 | 冷启动全量恢复能写库且分页不乱序；`body` 只在本机明文（§3.3 的保密口径） | ✅ **已完成（`Data/DeviceStore`，本步新增 17 例、全量 122/122 绿，连跑三次不抖）**：四表照 §3.3 落，`fts_messages` 用**外部内容表**（`content='messages'`）+ insert/delete/update 三个触发器同步，UPDATE 带 `WHEN` 守卫——`media_ready` 只改 `media_status`，不值得重建索引。三条口径值得记：① **`unread_count` 不落列**，`Conversations()` 里用 `seq > last_read_seq` 现算，于是 tombstone 删掉一条未读时红点自动跟着少（Android 那边为同样的问题专门写了 `recomputeConversation`）；② **游标同事务**：`sync_state` 的 `''` 行（§3.3 那列就叫 `channel_no`）与消息插入、会话 bump 一起在 `ApplyMessage` 的事务里推进，进程被杀在两步之间也不会让游标跑到消息前面；`identity.json` 里那一份只负责"还没开库就要建连"的起头值，且因为 DB 写先发生，不一致时 DB 只会更大，取 max 不会漏消息；③ **已读帧可以先于消息到达**（本端离线时他端已读到 10），所以 `ApplyRead` 是 upsert 一个壳会话行，否则第一条补拉消息 bump 出来的行 `last_read_seq=0`，会把已读的历史整片重新算成未读。搜索分两条：≥3 字符进 FTS5 `trigram`（含中文与大小写不敏感的 ASCII），短于 3 字符退回 `LIKE` 并转义 `%`/`_`——**和服务端 §3.2 的 `ngram(2)` + LIKE 兜底同一个道理**，trigram 的切片就是 3 字符，两字中文词进不了索引。**顺带补了 W3c 的一个漏绑定**：`media_status` 只在 §5.2 历史项里有、实时帧没有（终态靠 `media_ready` 回填），而入库要用这一列，所以 `MessageFrame` 加了 `MediaStatus` 并补了一条历史项形状的用例。保密口径按 §3.3 执行：`body` 是本机明文副本，另一条用例反向钉住"这张表里没有任何列像是在存凭据"（扫 `pragma_table_info`，`token`/`priv`/`seed`/`secret`/`fp`/`key` 一个都不许出现） |
+| W8 | `Sync/SyncEngine` | 退避重连 + `GET /api/v1/messages?after_seq=` 补拉 + 幂等去重 + tombstone 两形态（`id` 单条 / `scope` 整会话）+ `media_ready` 按 `id` 原地合并**不推进游标、不重复发通知** | §5.3、§6.2、§7.2、§5.2 | 同一条消息重复投 5 次只落 1 行；`resume_gap` 后与手机端内容一致；`media_ready` 乱序/重复到达表现一致 | ✅ **已完成（20 例绿，另 `IdentityStore` 补 3 例）**：`SyncEngine` + `SyncState`（Idle/Connecting/Online(lastSeq)/Offline(reason,RetryIn)/Blocked(reason)，用 record 是故意的——同一游标重复到达不算状态变化，W12 顶栏不必自己去重）+ `INotifier`（W13 的 WinRT Toast 实现它，传的是帧不是字符串，正文只有这一条路进 UI、永不进日志 §14）。`DeviceClient` 补 §5.2 的签名 GET（`after_seq`/`limit` 原样进 canonical）+ 密封盒翻页；`IdentityStore` 补 TOFU 指纹落盘与"断开时回写的游标副本只增不减"。**去重口径按 `msg_id`**（`messages` 主键，`ON CONFLICT DO NOTHING` 的影响行数就是"这条见过没有"）而不是本行原写的 `(channel_no,sender_id,seq)` 三元组：`tombstone` 与 `media_ready` 也只带 id，跨路径共用同一个锚点才不会"补拉 dedupe 了、墓碑没 dedupe"。退避 1s→2s→4s→…→60s（先等再翻；Android 那边第一次就等 2s），并加一条它没有的复位：连接活得比两个周期还久就不算故障 ⇒ 回到 1 秒。补拉失败（401/超时）**只丢这一轮**：游标停在真正落库的那条、链不断，下次连接同一条路径再补。**三条验收各自的用例**：`FiveDeliveriesOfOneMessageLandOneRowAndOneNotify`、`BackfillPagesUntilHasMoreStopsAndNeverNotifies` + `ATombstoneInsideThePageWinsOverTheSameRowsMessage`、`MediaReadyArrivingEarlyOrTwiceEndsUpOnTheRowOnce`。踩到的三个坑记在 §8.2 第 18–20 条（读循环不能被补拉拖住、通知归"先落库的那份"、状态让别人看见的时机） |
+| W9 | `Sync/ReadReporter` | 打开会话/滚动到末尾 → `PUT /api/v1/state/read`；**本地游标只增不减**（§5.2 签名与 canonical） | §5.2、§4.4 | 手机已读 → PC 红点 <2s 消失（§12 P3 验收②）；离线期间攒的下一次联网批量补报 | ✅ **已完成（`Sync/ReadReporter`，本步 +15 例、全量 160/160 绿；真服务体检 6/6）**：**"清红点"和"报网络"是两件事**——`MarkRead` 先写本地游标（`DeviceStore.MarkConversationRead` 现在把真正存下来的那个值回出来）并立刻把红点清掉，再入内存队列；`FlushAsync` 用一把 `SemaphoreSlim(1,1)` 保证同一时刻只有一条 `PUT` 在线上，失败整批原样回队列、`LastError` 留一句人话给 UI（不吞异常也不制造未观察 Task）。**攒批按会话合并**：同一条会话读两次只报最大的那个游标，已经报过的（含正在飞的那一条）不再入队。**离线**：`SetOnline(false)` 时只攒不发，变在线就把队列抽干——宿主只需在 `SyncState.Online` 翻转时调一次 `SetOnline`，引擎与上报器之间没有引用。**§12 P3 验收② 实测**：本机 `MarkRead` → 同组那台的未读 3 → 0，四次跑下来 34/36/42/47 ms（阈值 2s，走的是真 `PUT` + 服务端广播回来的 `read` 帧）。踩到的两条都不是 W9 自己的代码：`resume_ok` 被连接层吞掉、重启复用已关闭的队列，见 §8.2 第 21–22 条；服务端 last-write-wins 的口径与"队列只放内存"的取舍见第 23 条 |
+| W10 | 媒体链路 | `GET /api/v1/media/{msg_id}/{idx}?size=thumb\|full` 带 token+签名，**服务端代理 200 回字节**（不是预签名 URL），落本地缓存按 `key` 命名；失败态按 `slot.status` 渲染 `failed`/`deleted`/`purged`；头像走 `GET /api/v1/avatars/{avatar_token}` | §4.5、§5.2 | 断网时图片来自缓存；404+状态能映射成对应占位而不是破图；无钥读桶不可能（读侧不直连 RustFS） | ✅ **已完成（`Media/MediaCache` + `Media/MediaLoader` + `DeviceClient` 两条字节读法，本步 +36 例、全量 196/196 绿；真服务体检 7/7）**：**回答不是密封盒**——`MediaAsync`/`AvatarAsync` 请求侧照旧一发 §5.2 签名（`size` 那串原始 query 进 canonical 与进 URL 用同一个变量），回答侧直接 `ReadAsByteArrayAsync`；传输层因此拆成 `OpenAsync` + `FailIfNeeded` + 两条读法，错误口径两端共用。**先问缓存再发请求**：`MediaCache` 内存按字节 LRU（默认 12MB）+ 磁盘按最后写入时间 LRU（默认 64MB，§8.1 的 `%LOCALAPPDATA%\PushBox\media_cache`），键是 `(msg_id, idx, t\|f)`，命中一次网络都不碰 ⇒ 验收① 是这个顺序的结果而不是一个离线开关。**`MediaState` 八个值**：`Ready`/`Pending`（hint=pending，继续转圈）/`Failed`/`Deleted`/`Purged`/`Missing`（后四个才给"图片已失效"占位）/`NoSource`（这一帧压根没带图源，UI 落回首字占位）/`NetworkError`（带原因、留给用户重试）；失败的取图**绝不落盘**，所以一次抖动不会把这个图位永久钉死。**头像只进内存**（对象覆盖写、token 不变，落盘等于把换掉的头像永久留在本机），磁盘命中时 Content-Type 由 `ImageMime.Sniff` 按魔数认回来。验收③ 是结构性成立：PC 侧只有 `DeviceClient` 这一条 HTTPS 出口，没有任何 S3 SDK 依赖。**W14 已经预留好接口**：`EvictMessage(msgId)` 一次清掉内存 + 磁盘两级（磁盘名是键的十六进制，扫 `hex(msg_id+"#")` 前缀即可）。四条口径见 §8.2 第 24–27 条 |
+| W11 | 搜索（D19） | 输入即时命中本地 FTS5；回车 → 服务端 `GET /api/v1/search` 结果合并展示，按 `id` 去重、带 `snippet()` 高亮 | §3.2、§5.2 | 未缓存的历史消息能被搜到；同一条结果不出现两次 | ✅ **已完成（`Data/SearchService` + `Data/SearchText` + `DeviceClient.SearchAsync`，本步 +34 例、全量 230/230 绿；真服务体检 8/8）**：**两段是两个来源，不是一次查询的两个结果**——`LocalHits` 只碰本机库（输入即查，不等网络），`SearchAsync` 才发那一发签名 GET；服务端失败（401/超时/地址指错）**只影响第二段**，本地那半照样返回并附一句 `Error`（§5.1 的人话），因为离线时"查到自己缓存过的内容"才是这次搜索的主要价值。**去重锚点是 `id`**：服务端的 `id` 是 ULID、本机的 `msg_id` 就是它，所以同一条一边出现过就不再列第二遍 ⇒ 验收②，与 W8 的落库去重同一个键。**`q` 那串先转义、再拼、拼完就签**（§8.2 第 28 条）：`&` 既是值里的字符又是 query 分隔符，服务端 `getQueryString()` 拿到的是转义形态，先拼未转义的串再签就两头都对不上；`.NET 8` 的 `Uri` 实测对已转义串**逐字节透传**（空格是 `%20` 不是 `+`、`%25` 不被还原），于是删掉了"从 `RequestUri` 反推 query"那层防御代码，改由两条用例把这条不变式钉住。**"仅本会话"是一个 scope 而不是一条新查询**：`DeviceStore.Search` 的作用域过滤必须接在括号外（第 29 条：`AND` 比 `OR` 绑得紧，LIKE 兜底那条三个 `OR` 分支实测只限住了最后一个），而且**两条分支各断言一次**——≥3 字符进 trigram、更短的回 LIKE，中文最常见的两字查询恰好走在容易出错的那条上。**本地命中的形状要跟服务端命中对齐**（第 30 条）：`SearchText.Snippet` 抄服务端那套 120 字符窗口、命中位放在 1/3 处、候选顺序 title→body→summary、全都不命中回退"第一个候选的开头"，窗口边界避开代理对；`sender_name` 从 `conversations` 补（§3.3 的 `messages` 表没这一列），否则两段拼一个列表时一边有名一边匿名。**验收① 分两半**：单测 `AMessageThatWasNeverCachedIsStillSearchable` 用假服务端返回一条本机没有的 id 验合并；真服务体检 ⑧ 验的是**同一发请求在真 `SearchController` 上验得过签**（那个 Space 是体检新建的、服务端本来就没内容，所以断言的是"服务端认了 + 本地 3 条没被合并掉"而不是命中数）。`type`/`since` 留在 `DeviceClient` 上照实绑定（`since` 是 `created_at` 毫秒下界、不是 seq，第 31 条），`SearchService` 只透出 §7.4 的那两档：全部会话 / 仅本会话 |
+| W12 | UI 骨架 | 双栏 XAML（左会话列表 / 右对话区），窄窗口退化单栏；`⋮` 菜单里 `全部/未读/已读`（**D17：不做常驻 Tab**）；§9.1 token 落成 `ResourceDictionary` + 深浅色跟随系统；Markdown 按 §9.2 支持集渲染；`level` 只做气泡左侧竖条 + 会话行小圆点；**消息气泡左侧加发送者头像（44px 圆角 6，与会话行一致），横向排列「头像 + 8px 间距 + 气泡」，与 Android MessageBubble 结构一致** | §8.1、§9.1、§9.2、§9.3、D17、D15 | 同一条消息 PC 与 Android 渲染结果一致（§12 P3 验收③） | ✅ **已完成（`MainWindow.xaml(.cs)` + `Views/MainModel` + `Views/Converters` + `Themes/` + `Controls/` + `Data/Markdown`，本步 +80 例、全量 310/310 绿；真服务体检仍 8/8 不退化——本步没动协议）**：**判定与渲染分成三层，XAML 只做绑定**——`MainModel` 不碰 WPF（筛选三档、未读纯数字上限 `99+`、日期分节、窄窗 720px 退化、气泡列宽 `BubbleMaxWidth = min(900, 右栏宽 × 72%/78%)`），`MarkdownView`/`BubbleView`/`MediaStrip` 是代码构造的可视对象（度量写死在常量里：正文 15/23、标题 20/18/16/15/15/15、摘要与小字 13/18、标签 12、行高 64、头像 44 圆角 6、内边距 16、气泡内边距 12×10 圆角 8、竖条 3px、图位 220×165），`MainWindow.xaml.cs` 只剩"把模型的判定搬到控件上"。这样 §12 P3 验收③ 的判据就是普通 xunit 断言而不是"两人各看一眼"：**`Paint.Style()` 造一份八种灰各不相同的合成 `MarkdownStyle`**，两个 token 拿错就会显形，`AvatarTest` 再把 Android 那条 `avatarColor` 的 31 多项式哈希钉成固定向量（`"hello".hashCode()==99162322`），同一条消息在两端的字色、层级色条、头像底色才有可比性。§9.1 落成 `Themes/Tokens.xaml` + `Tokens.Dark.xaml` 两本字典（12 个 token 逐行对文档，深色那本不许出现 `#000000`），`ThemeManager.Apply(dark)` 只换合并顺序、`SystemEvents.UserPreferenceChanged` 广播 `Changed` 让各窗口作废画刷快照；`MainWindow.xaml` 除头像首字的 `Foreground="White"` 之外没有硬编码色值，所有引用走 `{DynamicResource}`。**`level` 的克制按 §9.1 执行**：只有 `warning`/`error` 上色（info 不着色），气泡左侧 3px 竖条 + 会话行名称前 8px 小圆点，不做色块；`TimeFormat.LevelAccent` 与 `TokenBrushConverter` 供 XAML 绑定。**两处刻意的未完成**：① 会话行的头像仍是首字占位（`MediaLoader.AvatarAsync` 的字节由 W13 的 Toast 来消费，"没图的会话不该碰 DPAPI"这条留在那条 step）；② §9.3 的 200ms 骨架屏没做（本机 SQLite 读在 50ms 内，占位反而闪一下）。踩到的七条记在 §8.2 第 32–38 条（§9.2 数值要抄成断言、头像哈希不能用 `GetHashCode`、深色下自带选中态不可用、`TextBlock.Text` 遇 `Inlines` 返回空串、`DispatcherTimer` 泵会崩测试主机、日期用例要按本地时区、刷新不许丢掉已翻页的历史） |
+| W13 | 系统集成 | `H.NotifyIcon.Wpf` 托盘（关窗=最小化到托盘，可设为退出）+ **WinRT `ToastNotificationManager`**（头像/摘要/"打开会话"/"全部已读"按钮，点击唤起对应会话）+ 开机自启（`HKCU\...\Run`，设置页可关）+ 静默时段与按 `level` 的提醒强度 | §8.1、§9.3、D25、D17 | Toast 点击能定位到具体会话；`max_level` 截断过的消息在 PC 端强度与手机端一致 | ✅ **已完成（`Notify/` + `Settings/` + `Integration/` 三页 + `App.xaml.cs` 的装配，本步 +132 例、全量 442/442 绿；真服务体检仍 8/8 不退化——本步没动协议；`--notify-smoke` 真机实测通过）**：通知这条路按"能不能进 xunit"分成三层，**只有最后一层碰系统**——判定层 `AlertPolicy`（三档强度照 Android 的 `Notifier.ensureChannel` 抄：`error`→`HeadsUp`、`warning`→`Sound`、其它→`Silent`，**不认识的值落低端**；`None` 是 PC 多加的一档，把"总开关关掉""该会话免打扰"收成同一个返回值才好断言；静默时段命中只**降级**不取消、`error` 豁免，窗口那条 `if (s<=e) … else …` 是跨午夜写法的逐字翻译，用例给的是带 +08:00 的 `DateTimeOffset` 而不是改机器时钟）→ 计划层 `ToastPlan`（`summary ?: title ?: content`、标题取 `sender_name` 缺失回 `sender_id`、tag/group 按会话、同一会话第二张起带"N 条新消息"计数行、两颗按钮 `打开会话` / `全部已读`）→ 转录层 `ToastXml`（`launch` + `activationType="protocol"`、静音写成 `<audio displayOnly="true">`、头像走 `appLogoOverride` + `hint-crop="circle"`；判据是 `XDocument.Parse` 回读逐属性，见 §8.2 第 39 条）。**验收①「Toast 点击能定位到具体会话」这条链**：`pushbox:conv/〈频道〉/〈发送者〉` 由 `ToastProtocol` 编解码（自由文本往返 + 11 条垃圾输入回 null）⇒ shell 起的是**第二个进程** ⇒ `InstanceHandoff` 抢不到 mutex 就把 URI 写进命名管道然后退出 ⇒ 主实例 `Dispatcher.BeginInvoke(HandleTarget)` ⇒ `MainWindow.OpenConversation`。两端都在用例里：`SystemIntegrationTest` 跑**真命名管道**（转发命中 / 主实例还没 `StartListening` 时靠 `Send` 的重试送达 / 回调抛异常不杀服务线程 / 退位后下一个进程成为主实例），`MainWindowTest` 在 STA 上断"URI 解出来那一条真被选中、红点清零、重画通知到托盘"；中间"系统真把协议处理器叫起来"这一段没有向量可把关，`--notify-smoke` 量到 `registered=True` 且协议指向当前 exe。**验收②「`max_level` 截断过的消息在 PC 端强度与手机端一致」**：PC 读的就是下发帧里的 `level`（服务端已按 D25 截断过），三档映射与 Android 一一对应，所以"手机端不横幅、PC 端也不横幅"是同一张表的结果。**托盘**（`H.NotifyIcon.Wpf` 2.1.4）：左键唤起窗口、右键菜单是 `新消息通知 / 静默时段 / 开机自启 / 关闭窗口时最小化到托盘` 四个勾 + 打开 / 退出，关窗默认 `e.Cancel` + `HideToTray`（只有"退出"那一次走真关）；tooltip 的账归窗口算（`MainWindow.TrayUnread` = 全会话未读总数、`TrayState` = 连接状态文案），托盘自己不再数第二遍——**这句广播不能排在 `Refresh()` 的 `IsLoaded` 门后面**（§8.2 第 45 条）。**自启**：`HKCU\...\Run` 一个带引号的 exe 全路径，**默认关**（开发实例一开就把 `bin\Debug` 写进启动项），`AutoStart.DriftOf` 把"设置说开"和"注册表那一笔"的三种漂移分开看（同值不重写、换目录跟过来、条目被用户在"启动"页删掉就把设置改成关）。**设置落盘** `%LOCALAPPDATA%\PushBox\settings.json`：坏文件一律回默认、逐字段跳过错类型、分钟 `Clamp` 到 `0..1439`，而 `AlertPolicy` 持的是 `Func<ClientSettings>` 而不是值，所以菜单改一下开关下一条消息就按新的走。**免打扰**：那道门按 Android 的分工留在引擎（`SyncEngine.cs:359` ↔ `SyncEngine.kt:141`），`IsMuted` 读的是 `(channel_no, sender_id)` 这一对而不是整个频道，静音只是不弹——入库、游标、红点、时间线一概照常；**PC 目前只有读的一侧**（§8.1 的形态里还没有写入口），所以两条用例的数据都用第二条 SQLite 连接直接 UPDATE 那一列造。**头像**：`ToastAvatar.Stage` 是 W10"只进内存"的唯一例外（toast 只吃 `file:///` URI），同名覆盖 + LRU 封顶 8 张 + 只认 png/jpeg 魔数；缓存没命中就**先不带图发**、后台补一发取字节，不拿取字节去堵通知。**失败契约**：`ToastNotifier` 对同步循环只承诺一句"任何异常都不回抛"（消息已经落库，通知发不出去只是"这条没打扰你"），`Show` 失败转托盘气泡（`Delivered + 退路 == 1`），而系统关掉这一个 AUMID 时 `Show` 不抛却什么也不出——所以体检读的是 `SettingProbe()` 而不是有没有异常；`LastFailure` 只存异常**类型名**（§14）。**真机实测（2026-10-15）**：`aumid=PushBox.Windows registered=True`、`scheme=True`、`setting=Enabled`、`delivered=2 suppressed=0 failure=-`（warning + error 两条真弹出）、静默窗开成整天后 `quiet_info=Silent quiet_error=HeadsUp`；**剩一下要人点的**是在真弹出的那条通知上按"打开会话"看窗口是否落到那一条会话（`HandleTarget` 之后每一步都有用例）。**设置项落在托盘菜单而不是设置页**：这台机器上还没有 §8.1 那句"设置页可关"里的"设置页"（§8.4 的 W1–W15 也没排它），菜单是它目前唯一合理的落点。踩到的八条记在 §8.2 第 39–46 条 |
+| W14 | 删除与清空 | 单条/整会话 → `DELETE /api/v1/messages/{id}` 或 `?channel_no=&sender_id=`；本地即时移除 + 等 tombstone 收敛 | §5.2、§3.2 | PC 删一条 → 手机红点与内容同步消失；反向亦然；重启后不复活 | ✅ **已完成（`Sync/DeleteReporter` + `DeviceStore` 的乐观删除与回滚 + `DeviceClient.DeleteMessageAsync`/`ClearMessagesAsync` + `MainWindow` 两处右键与提示条，本步 +37 例、全量 479/479 绿；真服务体检从 8 条长成 10 条，8081 实测 ⑨=`404 hint=message` 不回滚、⑩=`deleted=0` 幂等成功，⑤ 那条老判据三次 33–37 ms 不退化）**：**这一段是 PC 比 Android 多出来的回滚**（§9.3"本地乐观删除 + 回滚兜底"，口径见 §8.2 第 47 条）——本机组游标已经越过这条，服务端不答应就是两端各看一套且这台再也回不来，所以 `DeleteOutcome` 有三种结局而提示条只在 `RolledBack` 说话（`NothingLocal` 不是失败：库里本来就没这条，网络一次都不碰）；**乐观那一路与帧那一路共用同一段 SQL**（`DeleteMessageLocal`→`ApplyTombstone` 的 id 分支：删行 → 重算聚合 → 空了删会话行），"等 tombstone 收敛"因此是结构性的而不是两份实现的默契；**回滚票带本机才有的列，放回时只动 `MAX(last_read_seq)` 那一列**，`name/custom_name/pinned` 不覆盖、消息 `DO NOTHING`、聚合一律重算、全局游标永不因删除移动；**唯一不回滚的是 404 `code=not_found` + `hint=message`**（认两个字段而不是状态码：代理造的那个 404 页面不带 hint，那种要回滚；服务端活表里没这条时放回只会造出一条只有这台 PC 看得见的僵尸消息）；**整会话是一次带 scope 的 DELETE**（逐条删会让别的端收到上千帧），幂等回 `deleted=0` 故没有"已经没了"分支，任何失败都放回，query 照 W11 先转义再拼再签、`sender_id` 省略即整频道；**媒体驱逐排在服务端确认之后**（`MediaLoader.EvictMessage` → `MediaCache` 两级一起清：提前清等于回滚后白取一次图，确认之后留着就是 §4.5 宽限期外的孤儿字节）；**时序靠回调**——`locallyRemoved` 在请求上路之前被同步调起，屏幕上那条不等网络，而窗口层二次确认是 `Func<string,string,bool>`（`MessageBox` 会把 STA 测试线程挂在等人点上），清空那两行话术改了 Android 原文（"服务端仍保留历史"是 Android 还没接这条接口的现状）。**验收的分工**：`PushBox.LiveCheck` ⑨/⑩ 只验我们算的 canonical 被真服务端验签接受 + 两种回答读得对（故意打在服务端并没有的行上），服务端有真行那两支（tombstone 广播到别的端、宽限期真删对象、幂等回 0）由 `deploy/probe` ⑪/⑯/⑰/⑱ 覆盖，所以"反向亦然/重启后不复活"两半各有归宿；本机的"重启后不复活"落在两件事实上：删除是**真删行**而不是打一个隐藏标记（`DeleteMessageRow`/`DeleteScoped`，与 §3.3 的软删只在服务端那一侧），FTS 索引随行一起消失（`TombstonedRowsDisappearFromTheIndex`），所以冷启动读回来的是同一份缺失。 |
+| W15 | 发布与隐私收尾 | Serilog 滚动日志**全文脱敏**（§14 硬约束：任何日志/崩溃上报不得出现消息正文）+ Inno Setup 安装包（§10.1）+ 自签 CA 场景下"根证书装进本机受信任根存储"的接入说明 | §14、§11.1、§10.1 | 抓 log 目录 grep 不到任何 `body` 片段；安装包能无人值守装到干净机器 | ✅ **已完成（2026-10-15，`Logging/` 四页 + `windows/installer/` 两页，本步 +38 例、全量 517/517 绿；安装包三段无人值守实测 exit 0 全绿；自签 CA 三态实测通过）**。**验收①「抓 log 目录 grep 不到任何 `body` 片段」是读真文件判的**：`AppLogTest.GrepOverTheWholeLogDirectoryFindsNoBodyFragment` 把日志目录开在临时目录、按 §14 那些最容易漏的来源各写一条（正文、snippet、搜索词、恢复码、密封盒 `data`、多行 JSON 转储、带 `?q=` 的 URL、跨行的值），再把目录里**每一本文件逐字节读回来** grep——不是"有没有调用过脱敏函数"，而是盘上那些字节里到底有没有那段文本。之所以要这么判：这一条是整个 PC 端唯一"做错了也不会报错"的验收，接口照样 200、消息照样落库。**脱敏是三道各管一段、不靠人记得**：`AppLog` 的每个公开入口只收类型化小字段（错误码、计数、游标、毫秒、异常**类型名**），所以"把正文传进日志"这件事**在签名层面就没有路**（不是"别传"，是没有那个形参）；`PrivacyEnricher` 在属性级把非基元值折成类型名、黑名单键整值丢弃；`PrivacyGate` + `PrivacyFormatter` 是落盘前最后一道文本网——敏感键名（不分大小写）→ 超过 120 字符**整值替换而不是截断**（留前 120 字仍然是在留正文）→ `k=v` / `"k":"v"` JSON / `?q=` 三种转储形状 → ≥40 个 base64 或 ≥32 个十六进制的**凭据形状**（恢复码、API Secret、签名、封装钥都是这个尺寸，而 26 位 ULID 与时间戳够不上）→ 异常只留类型名与堆栈（`Message` 常把 URL 和参数带进来，这条与 W13 的 `LastFailure` 同一个口径，§8.2 第 46 条）。**崩溃上报是"关闭"而不是"没配"**：这一页没有 `HttpClient` 也没有任何 URL，两个挂钩（`DispatcherUnhandledException` + `AppDomain.UnhandledException`，后者管托盘消息泵与 WinRT 回调那几条非 UI 线程）只往文件写 FTL。**另外两条是刻意的**：没 `AppLog.Start()` 一个字都不写（所以测试里跑真引擎/真删除/真取图的路径不会往 `%LOCALAPPDATA%` 落文件，而要看留痕的进程必须显式开一次），日志目录建不出来/盘满/ACL 不让写只是"这台机器没有留痕"，**绝不带走应用**（消息照收照存）。接入点是五处而不是一个中间件：同步循环（断链、`resume_gap` 补拉被拒、吊销停机、休眠醒来）、删除与清空（被拒时只留错误码不留服务端那句人话，因为 `ApiErrorText` 会把 `hint` 原样拼进句子）、媒体（缓存落盘失败一次只说一次）、通知（沿用 W13 的失败契约）、App 装配（启动/收工/两条崩溃）。**验收②「安装包能无人值守装到干净机器」量的是包而不是构建**：`build-installer.sh` 做 `dotnet publish -c Release -r win-x64 --self-contained true` 再叫 `ISCC.exe`（6.7.3，装在 `D:\Apps\DE\Inno Setup 6`），产 56MB 的 `PushBox-Setup-0.1.0-win-x64.exe`；装 / 覆盖装 / 卸载三段退出码全 **0**、全程**没有 UAC**（`PrivilegesRequired=lowest` + `DefaultDirName={localappdata}\Programs\PushBox`，因为这一版要写的 HKCU 与要落的 `pushbox.db` 本来就在当前用户下）、269 本顶层文件（递归 477，多出的是各语言的 satellite 资源目录）里 `coreclr.dll`/`hostfxr.dll`/`hostpolicy.dll`/`System.Private.CoreLib.dll`/`PresentationFramework.dll` 五本**全在应用目录里**——这是"干净机器不需要先装运行时"的直接证据（本机装了 SDK，所以那条判据只能看包内容，不能看"这台能不能起"）。卸载只删**确实指向 `{app}`** 的那三处 HKCU（AUMID、`pushbox:` 协议、`...\Run`），`%LOCALAPPDATA%\PushBox`（身份/库/日志）**刻意保留**——前两样是 DPAPI 绑当前用户的，删掉等于把"重装还能认回同一个 Space"堵死；`AppMutex` 没用，因为单实例那把锁的名字是按 exe 全路径派生的，没有一个静态名可写。**这一步顺带抓到两个真实缺陷**（都只有"打包 + 冷启动"这条路能撞见，`dotnet test` 与 `LiveCheck` 都撞不见）：① 干净机器上带一个 `pushbox:` 参数启动 → `HandleTarget` 直接去开主窗 → `identities.Load()` 抛 `FileNotFoundException` 崩在 dispatcher，而那一刻生产日志里只有孤零零一行 FTL——已改成"没有身份文件就什么也不做"（首启还没注册的人点的是通知，那条路应当被忽略而不是弹崩溃）；② `IdentityStore.SaveLastAppliedSeq` 在身份文件缺失/被改坏时把整个同步循环带崩在收工那一行——游标的权威在库里，这一份只是"开库之前就要知道的起头值"，所以跳过这次回写既不漏消息也不该死人（§8.2 第 54–58 条）。**自签 CA 那一栏是三态实测出来的**（一次性 openssl CA + Node HTTPS 靶子 + 临时 .NET 探针，跑完连根存储带临时目录全部拆除）：根没装 → REST 与 WS **都被拒**（`AuthenticationException: … certificate chain: PartialChain` / `The SSL connection could not be established`）；`certutil -addstore -user Root`（`-user` = 当前用户，不需要管理员）之后**新进程**两侧都通；**已经在跑的进程不回头重读根存储**，WS 断线重连仍在同一进程里不算新进程，所以换证书后的动作是"退出应用再起一次"。代码侧一条都不需要改：`DeviceClient` 是裸 `new HttpClient()`、长连接是裸 `new ClientWebSocket()`，`ServerCertificateCustomValidationCallback` / `DangerousAcceptAnyServerCertificate` / `ServicePointManager` 在全项目 grep 零命中——**"没有绕过校验"这件事是靠没有代码来保证的**，与 Android 那边把 CA 写进 `network_security_config` 是不同的接入方式（PC 只有一个地方：系统的根存储）。**剩下没有的**：§14 那张表里服务端侧的日志脱敏不属这一步（PC 只能保证自己这台不留痕）；生产主钥 `PB_S3_MASTER_KEY` 与真实 CA 的下发是运维动作，接法已经写进 §11.1 与 `docs/Windows开发环境安装教程.md` §5.4。**至此 §8.4 的 17 项全部 ✅，P3 没有待办模块**；只有 W12 那两处**刻意的未完成**（会话行头像仍是首字占位、§9.3 的 200ms 骨架屏）仍然保留原判断，它们不是缺陷清单 |
+
+> **与 §14/§12 的衔接**：W2 的完成意味着 §12 P3 的开工前提（"vectors 全绿后才开始写 UI"）已经满足，UI（W12 起）不再受协议风险阻塞。W13 的 Toast 是当初否决 Compose Desktop 的决定性理由，实施时优先做**裸 WinRT 调用**路线，第三方通知封装库只在 WinRT 封装出问题时才引入。
+
+---
+
+## 9. UI 设计规范
+
+### 9.1 颜色 token（微信式中性，D15）
+
+| Token | Light | Dark | 用途 |
+|-------|-------|------|------|
+| `bg.page` | `#F2F2F2` | `#111111` | 页面底 |
+| `bg.elevated` | `#FFFFFF` | `#1E1E1E` | 卡片/会话行 |
+| `bg.bubble.in` | `#FFFFFF` | `#262626` | 接收气泡 |
+| `fg.primary` | `#1A1A1A` | `#EAEAEA` | 正文/会话名 |
+| `fg.secondary` | `#8A8A8A` | `#9A9A9A` | 摘要/时间 |
+| `accent` | `#07C160` | `#2AAE67` | 未读红点外圈、主按钮、选中态（克制使用） |
+| `badge.unread` | `#FA5151` | `#F15B5B` | 未读数字 |
+| `divider` | `#E5E5E5` 0.5dp | `#2A2A2A` | 分割线（左缩进对齐文本起点） |
+| `state.offline` | `#FF9500` | `#FF9F0A` | 连接异常 |
+| `level.error` | `#D93025` | `#F28B82` | 告警类左侧色条、通知强调、"严重"标签 |
+| `level.warning` | `#B06900` | `#F5C06B` | 同上，警告级 |
+| `level.info` | `#8A8A8A` | `#9A9A9A` | 默认级，不着色（克制：仅 `warning/error` 上色列） |
+
+**`level` 的视觉克制**：只在气泡左侧 3dp 竖条 + 会话行名称前的小圆点体现，不做大面积色块，避免"通知工具"变成"彩虹看板"。
+
+深色模式：整站反色 + 降低纯黑 (#000) 使用；通知栏图标随系统；对比度均 ≥ 4.5:1。
+
+### 9.2 排版与间距
+
+- 字体：Android 系统默认（Noto Sans SC 回退），Windows 用 `Segoe UI + Microsoft YaHei UI`。
+- 会话名 16sp / 摘要 13sp / 时间 12sp / 正文 15sp（行高 1.55）/ 日期分节 12sp 居中灰。
+- 列表行高 64dp，头像 44dp 圆角 6dp（微信式方圆形，非正圆），左右内边距 16dp，分割线起于文本 x。
+- 气泡：最大宽 72%（窄屏 78%），内边距 12×10，圆角 8dp，字号 15sp；Markdown 渲染支持标题/粗斜体/行内码/代码块（横向滚动）/列表/链接/引用，图片气泡圆角 8dp。
+- 图标线性风格 24dp，顶栏仅"搜索 + 新建/更多"，避免拥挤。
+
+### 9.3 状态与反馈
+
+| 场景 | 表现 |
+|------|------|
+| 骨架屏 | 首启列表 3 行灰色占位 200ms |
+| 空会话 | 居中插画 + 文案 + "创建频道"按钮 |
+| 加载失败 | 行内重试条，不弹 Toast |
+| 新消息（当前会话内） | 轻震动 + 平滑滚动到底 + 底部"1 条新消息"胶囊（不在底部时） |
+| 连接断开 | 顶栏红点 + 文字；恢复后自动补拉并 Toast"已同步 5 条" |
+| 删除 | 左滑/长按删除，二次确认，本地乐观删除 + 回滚兜底 |
+| 长列表 | `LazyColumn` + `rememberLazyListState` 游标分页，反向加载不抖；列表项 `key = msg_id` |
+| 未读同步 | 上报游标成功后 300ms 淡出去掉红点，失败保留待重试并静默补报 |
+| 筛选态 | 右上菜单选"未读/已读"后，顶栏下出现 24dp 提示条"当前只看未读 · 显示 N 条 · 退出筛选" |
+| 空搜索结果 | "本地无匹配" + 若有服务端结果则分段展示"更早历史（服务端）" |
+| 保活异常 | "我的 → 后台常驻"页顶部横幅：`⚠ 电池优化未忽略，消息可能延迟数分钟` + 一键跳转 |
+
+---
+
+## 10. 技术栈推荐
+
+### 10.1 首选组合
+
+| 层 | 选型 | 理由 |
+|----|------|------|
+| **服务端** | **Java 21 (LTS) + Spring Boot 3.5（Maven 构建，见 D27）**：`starter-web`(Tomcat NIO) + `starter-websocket`（原生 `TextWebSocketHandler`，**不用 STOMP**，帧即 §5.3 的 JSON）+ **MyBatis-Flex（D27 已定，不再考虑 JPA/JdbcTemplate/jOOQ）** + **Flyway** 管 DDL + HikariCP + `starter-validation` + **`aws-sdk-java-v2`**（`S3Client`+`S3Presigner`，endpoint 指向 RustFS）+ Thumbnailator 缩略图 + Caffeine（限流计数与 nonce 缓存）+ Jackson | Java 方向，生态与维护成本最友好；REST 与 WS 一套框架；个人级并发用 MVC 线程模型足够，无需响应式 |
+| **仓库与构建（D27）** | 单仓、**双构建按语言分治**：① `core/` + `server/` 走 **Maven** —— 根 `pom.xml` 是 `packaging=pom` 聚合器并兼任父 POM，**不直接继承 `spring-boot-starter-parent`**，而是在 `dependencyManagement` 里 `import` `spring-boot-dependencies` BOM，于是 Java 版本、MyBatis-Flex、Flyway、`aws-sdk-java-v2` 的版本由父 POM 单点控制；② `android/` 走 **Gradle Kotlin DSL + Version Catalog**（`settings.gradle.kts`、`gradle/libs.versions.toml`、`include(":app", ":pbcore")`）；③ `deploy/` 放 env 脚本、验收探针，P2 再放 compose、Caddyfile、CA 脚本。**`pushbox-core` 只有一份源码**：源码目录仍是唯一的 `core/src/main/java`，Gradle 侧由独立的中转模块 `android/pbcore/build.gradle.kts`（`java-library`）把它的 **srcDir 指过去**，**两侧都锁 `release=17`** | 代价：CI 要跑 `mvn -B verify` 与 `./gradlew :app:assembleDebug` 两套。**刻意不让 Android 依赖 `mvn install` 落进 `mavenLocal()` 的 jar** —— 那条路最典型的翻车是"改了 `core` 忘记重装，手机里跑的还是旧字节码"，而旧加密代码不会报错、只会行为悄悄不一致；源码直编译从机制上消除这种静默漂移。**两条实操陷阱**：① `java.setSrcDirs` 里的相对路径是按**本模块目录**解析的，`android/pbcore` 要写 `rootProject.file("../core/src/main/java")`——写成 `"../core/src/main/java"` 会指到 `android/core`，模块**静默零源码**（`NO-SOURCE`）而构建照样"成功"，直到 `:app` 里满屏 `Unresolved reference`；② 中转模块名叫 `:pbcore` 而不是 `:core`，因为 Gradle 与 `core/pom.xml` 同名目录会让人以为两套构建在抢同一模块 |
+| **共享核心（本项目最关键的一条）** | **`pushbox-core`：纯 JVM 库**（Java 17 语法，无 Spring / 无 Android 依赖）：① `crypto` = Ed25519 签名、X25519 协商、HKDF、AES-256-GCM 帧编解码、HMAC canonical（**只用 Bouncy Castle 的 lightweight API**：`X25519Exchange`/`Ed25519Signer`/`HKDFBytesGenerator`/`GCMBlockCipher`，**不注册 JCA Provider、不用 `Cipher.getInstance`** —— 一注册 Provider 就要看 Android 的系统 Provider 优先级，两端行为可能悄悄不同；Tink 已不引入，见 §10.2）② `protocol` = 帧与 DTO + Jackson ③ `sync` = 游标、去重、tombstone、重连退避。**被 server（Maven）与 android（Gradle）同时依赖** | 服务端与手机编译**同一份源码**，跨端加密/协议不一致风险直接归零 —— 比 KMP 更省事，因为 Android 本就是 JVM。`release=17` 是双构建的兼容下限：服务端跑 Java 21，但 `core` 一旦用 Java 18+ 语法或 API，Maven 与 Gradle 两侧会同时编译失败，所以这条约束由编译器自己把关、不需要额外 lint。Android 侧需开 core library desugaring，**minSdk 26** |
+| **Android（主力端）** | **Kotlin + Jetpack Compose + Material 3** + Room(FTS4) + DataStore + OkHttp(WebSocket) + Activity result launcher + Coil/Markwon 留给 P1 图文与 Markdown + Gradle Kotlin DSL + Version Catalog。实测版本：AGP 9.2.1（**内置 Kotlin 支持**）+ Kotlin 2.2.10 + KSP 2.3.12 + Compose BOM 2026.02.01 + Room 2.7.2 + OkHttp 4.12.0 + DataStore 1.1.7 + Jackson 2.21.4，Gradle 9.6.1 | P0/P1 主力端；Compose 做微信式列表与气泡最快。**三条必须由构建保证的前提**：① `minSdk = 26`，不是 24 —— §7.3 的每条会话线都要 `NotificationChannel`，而它是 API 26 才引入的，留 24 会在 Android 7/7.1 上首帧即崩；② `coreLibraryDesugaring(com.android.tools:desugar_jdk_libs:2.1.5)` 是**硬前提**而非优化，`pbcore` 里的 `X25519.KeyPair`、`FrameChannel.Sealed` 都是 Java 16+ record，record 脱糖只能由这个开关打开，`java.util.Base64`（API 26）也靠它；已用 `dexdump` 验证产物里 `Ed25519$KeyPair` 继承 `RecordTag`、`Base64` 被重写成 `j$.util.Base64`；③ **Android 侧不许用 Jackson 直接绑定 record** —— Jackson 靠 `Class.isRecord()` 识别 record，而这个方法 API 34 才存在，D8 脱糖不会让它返回 true，于是低版本上 record 被当成普通 Bean：**序列化静默变成 `{}`、反序列化抛 "no suitable creator"**，编译期毫无征兆、只在手机上炸。所以 `net/Wire.kt` 只用 Jackson **tree API**（`ObjectNode`/`JsonNode`）手工读写 §5.3 的字段，加密与签名继续复用 `pbcore`；KSP 2.2.x 与 AGP 内置 Kotlin 会冲突，必须 2.3.x |
+| **数据库** | **MySQL 8.4**（内置 `ngram` 全文解析器，中文搜索免装扩展）+ Flyway；备选 PostgreSQL 16 | 自托管常见、备份工具链成熟；`ngram_token_size=2` 覆盖中文分词 |
+| **对象存储** | **RustFS**（你的实例：`<存储机>:7101`，桶 `pushbox` 已存在），服务端经 `aws-sdk-java-v2` 走标准 S3 协议 + **path-style**（裸 IP 必须）；能力已实测：读写/多部分/预签名/匿名拒读/**生命周期**通过，**SSE-C 可用、SSE-S3 需配主密钥**（§4.5） | 按你的指定；Apache-2.0 许可、内存占用低、自带控制台；S3 协议层通用，特性不足可换 MinIO/OSS |
+| **反向代理/TLS** | **Caddy**（自动 HTTPS、WebSocket 透传）或 Nginx + certbot | Caddy 单机自托管几乎零配置 |
+| **观测** | Spring Actuator + Micrometer `/prometheus` + Prometheus + Grafana（可选 Loki 收日志） | 自托管排障必需：WS 掉线率、限流命中、队列积压、RustFS 请求延迟 |
+| **构建/发布** | 服务端多阶段 Dockerfile（`gradle:8-jdk21` → `eclipse-temurin:21-jre`，Boot 分层 jar 吃层缓存）；Android 用 GitHub Actions 出 debug/release APK + AAB | |
+| **Windows（P3，已开工）** | .NET 8 + WPF（`net8.0-windows10.0.19041.0`）+ **WinRT Toast**（`Windows.UI.Notifications`）+ `H.NotifyIcon.Wpf` 托盘 + `Microsoft.Data.Sqlite`+FTS5 + `ClientWebSocket` + **`BouncyCastle.Cryptography`（X25519/HKDF/Ed25519）+ BCL `AesGcm`** + Serilog + Inno Setup；IDE 用已装的 **Rider**，不要求 Visual Studio | **选型已拍板并落地工程骨架**（`windows/PushBox.sln`，§8.3/§8.4）；四原语、WS 信封与 REST 的 `restAuth` canonical/密封盒、§5.3 整条握手（hello→auth→kx→enc）均已对 `vectors.json` 跑绿（21 条向量用例，`dotnet test` 全量 556/556）。**W12 已把 §9.1 token 落成两份 `ResourceDictionary`、§9.2 支持集做成可断言的渲染层**——验收③ 的判据从"两人各看一眼"变成了 xunit 断言。~~`NSec`/`Chaos.NaCl`~~ 实测不可用（§8.2 实测记录第 1 条）。**W13 已把 §8.1 的托盘 / 原生 Toast / 开机自启 / 静默时段全部落地**：通知的点击经 `pushbox:` 协议 + 单实例命名管道落回那一条会话，未打包 WPF 要自己写 AUMID 与协议那两处 HKCU（§8.2 第 40 条）；真机 `--notify-smoke` 实测 `registered=True`、`delivered=2`、静默窗内 `info` 降级而 `error` 仍可打扰。**W14 已把 §9.3 的"本地乐观删除 + 回滚兜底"做成整条链路**：`DELETE /api/v1/messages/{id}` 与带 scope 的 `?channel_no=&sender_id=` 两发 §5.2 签名（服务端一行没改），本机当场消失、服务端没答应就原样放回、媒体缓存的驱逐排在确认之后（§8.2 第 47–53 条）。**W15 已把 §14 的"正文永不进日志"从口径变成结构**：`Logging/AppLog` 是全局唯一能写日志的一页、每个入口只收类型化小字段（错误码/计数/游标/毫秒/异常**类型名**），落盘前还有 `PrivacyGate` 那五层网兜着，验收① 是**把真文件读回来 grep 整个目录**判的（§8.2 第 54–55 条）；崩溃挂钩只写文件、代码里根本没有上报用的 `HttpClient`，所以"崩溃上报关闭"不是一句承诺。发布路线也落地了：`windows/installer/PushBox.iss` + `build-installer.sh` 出 self-contained 的 per-user 包（**装/覆盖/卸载三段无人值守 exit 0、全程无 UAC**，§8.2 第 58–61 条），自签 CA 的接法是三态实测出来的——`certutil -addstore -user Root` 就够、**换证书要重启应用**（进程不回头重读根存储），代码侧一行都不用改（全项目没有任何绕过校验的回调）。原生 Toast 与托盘仍是 .NET 强项，协议已冻结到 W15 都不需要动服务端 |
+
+> **一致性策略随之改变**：服务端(Java) 与 Android(Kotlin) 共用 `pushbox-core`，加密与协议不可能各写一遍，一份单测两端生效。`vectors.json` 跨语言向量降级为 **P3 做 Windows 时**才需要的交付物 —— 但仍要在 `pushbox-core` 的测试里**顺带生成**（零成本，届时直接可用）。
+
+### 10.2 备选组合（各有取舍）
+
+| 组合 | 优点 | 代价 |
+|------|------|------|
+| 服务端 **Quarkus 3 + GraalVM Native** | 内存 <100MB、启动 ~50ms，适合 NAS/小机器 | 反射式序列化与 AWS SDK 要配 reflect-config，调试体验不如 Boot |
+| 服务端 **Javalin 6 / Vert.x 4** | 依赖极轻，WS 写起来直白 | 需自己拼装 DI/校验/Flyway/Actuator 等便利件 |
+| 服务端 **Spring WebFlux + Netty** | 万级长连接更省线程 | 个人规模用不上；阻塞式 JDBC 与响应式混用易踩坑 |
+| 持久层 **Spring Data JPA** / jOOQ | 上手快 / 类型安全最爽 | **已否决（D27）**：游标翻页、`MATCH…AGAINST` 全文检索、批量写都不如 MyBatis-Flex 可控；jOOQ 对 MySQL 免费版有限制 |
+| ~~加密库 **只用 Bouncy Castle**（不引 Tink）~~ | 一套依赖、原语齐全，Android 上也现成 | **已采纳为正式选型（见 §10.1）**，代价照旧要防：X25519+HKDF+AES-GCM 要自己组合正确（易错点：nonce/AAD/密钥边界）。这三处边界现在由 `pushbox-core` 单测 + `testvectors/vectors.json` + Node 探针三向对齐，不再靠人肉记忆 |
+| 数据库 **PostgreSQL 16** | JSONB/GIN 更强、复制方案多 | 中文全文需 `pg_trgm` 或 `zhparser` 扩展 |
+| 对象存储 **MinIO**（替代 RustFS） | 生态与文档最厚，SSE 与生命周期规则成熟 | AGPLv3 许可；内存占用相对高 |
+| ~~Windows 用 **Compose Desktop**（P3 再评估）~~ | 直接复用 `pushbox-core`，跨语言风险彻底消失 | **已否决（D31）**：否决点不是包体积（~60MB）也不是冷启动，而是**原生 Toast 必须自写 JNI + C++/Rust 桥接 DLL 调 `Windows.UI.Notifications`**，托盘还得靠 AWT。对比之下 WPF 路线的"跨语言"只体现在调库拼四个 API，且 `vectors.json` 会把拼错的地方判红；JNI 桥拼错不会判红，只会在用户机器上表现为"通知不弹"。团队若无 native 经验，这一项的难度高于其余全部 P3 工作量之和 |
+| Windows 用 **Tauri 2 + Web** | 安装包最小（3–5MB）、一套代码顺带覆盖 macOS/Linux、Web 技术栈做 UI 迭代快 | **已否决（D31）**：Rust 侧照样要重写四个原语（`ed25519-dalek`/`x25519-dalek`/`aes-gcm` 或 `ring`），仍是"第四个独立实现"，与 D20 把服务端定为 Java 的动机直接冲突；同时引入第三门语言，还要依赖系统 WebView2 运行时。只有"PC 端坚持用 Web 技术写 UI"或"明确要 mac/Linux"才值得翻案 |
+| 长连接换 **MQTT** | 弱网/省电/离线队列成熟 | 引入 broker（EMQX/Mosquitto），多一个组件与鉴权层；帧加密仍需自己做 |
+| Android 保活加 **厂商推送**（小米/华为/OPPO/vivo/FCM） | 不被杀也能秒到 | 需各厂商开发者账号与模板审批；通知内容受厂商限制 |
+
+---
+
+## 11. 部署
+
+### 11.1 当前联调配置（P0 直接用这套，D23）
+
+MySQL 与 RustFS 原本都在 `<存储机>` 上，**服务端不容器化**，本机 `java -jar` 或 IDE 直接跑。**2026-10-13 起 dev 的 MySQL 改到本机 `127.0.0.1:3306`**（原因与实测数据见 §11.1.1：远端库单条 SQL 就要 362ms，会把 §12 验收① 整条吃掉），RustFS 仍在 `<存储机>:7101`。端口可达性已实测：`<存储机>:7101` 与 `<存储机>:3306` 均 OPEN，RustFS 对匿名请求返回标准 S3 `AccessDenied` XML 且带 `x-amz-request-id`，确认按 S3 协议接入即可。
+
+```yaml
+# server/src/main/resources/application-dev.yml
+spring:
+  datasource:
+    # 同机库 = 验收① 的判分前提；要切回远端只改这一行，并把 connection-test-query 加回来
+    url: jdbc:mysql://127.0.0.1:3306/pushbox?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=utf8
+    username: pushbox
+    password: ${PB_DB_PASSWORD}
+    # 本机链路没有被中继设备 RST 的问题，所以刻意不配 connection-test-query：
+    # 配了等于给每条业务语句白加一个来回。
+    hikari: { keepalive-time: 20000, max-lifetime: 900000 }
+  flyway: { enabled: true, out-of-order: false }
+
+server:
+  port: 8080
+  # 联调阶段无证书：手机连的是"跑服务端这台机器"的地址，不是 <存储机>（那台只有 MySQL/RustFS）。
+  # 实测本机 WLAN=<开发机局域网>、Tailscale=<开发机Tailscale>，两个地址从手机都可达（服务端 bind 0.0.0.0）；
+  # Android 侧 network_security_config 临时放行 cleartext（§11.2 上生产后收回）。
+
+pb:
+  s3:
+    endpoint: http://<存储机>:7101
+    region: us-east-1               # RustFS 若不回 region，SDK 端固定填 us-east-1
+    bucket: pushbox
+    access-key: ${PB_S3_ACCESS_KEY}
+    secret-key: ${PB_S3_SECRET_KEY}
+    path-style: true                # 关键：内网 IP + 无泛域名，必须 path-style
+    delete-grace: 168h
+    purge-initial-delay: 60s        # §4.5 media sweep：tombstone 只记账，过 delete-grace 才 DeleteObject
+    purge-interval: 1h              # 联调要看真删：--pb.s3.delete-grace=2s --pb.s3.purge-interval=3s（探针 ⑯）
+    object-encrypt: none            # 只支持 none|sse-c（sse-s3 要 RustFS 进程先配主密钥，本期未接线；填别的值拒绝启动）
+    master-key: ${PB_S3_MASTER_KEY} # sse-c 时封装每槽位客户钥的 base64 32 字节：openssl rand -base64 32。
+                                    # 一旦有对象落库就不可轮换（旧封装钥解不开）；缺失/长度不对时进程直接起不来。
+                                    # 开关只影响新写入对象，历史明文行按各自 enc_mode 照读。
+  ingest: { base-path: /message }          # 第三方只有这一个写入口，无 /media
+  search:                                 # §5.2 D19 服务端全文搜索
+    fulltext: true                        # false 时一律 LIKE：给 ngram 索引出问题时留一条降级开关
+    min-query-len: 1                      # 短于它就是空查询，直接 400 而不是扫一遍
+    max-limit: 200                        # 客户端传的 limit 夹在这里，扫多少行不能由客户端定
+  media:
+    enabled: true
+    max-images: 4                          # images[] 条数上限
+    max-image-bytes: 10485760              # 单张 10MB
+    max-total-bytes: 33554432              # 单条消息 32MB
+    timeout: 10s
+    max-redirects: 2
+    allow-private: false                   # SSRF：禁抓私网/100.64.0.0/10（当前图片来源全为公网，无需例外）
+    allow-hosts: []                        # 精确 host[:port] 逃生阀，本次部署保持为空
+    concurrency: 4
+    retry-max: 3                           # 含入站首次在内的总抓取次数；用完就停在 failed
+    retry-interval: 5m                     # 重试巡检间隔，同时就是同一张图两次尝试的最小距离
+    thumb-long-edge: 512
+```
+
+> `path-style: true` 不是可选项：endpoint 是裸 IP，虚拟主机风格（`bucket.<存储机>:7101`）无法解析。`aws-sdk-java-v2` 里对应 `.forcePathStyle(true)`。
+
+建库（✅ **2026-10-13 已在 `<存储机>:3306` 执行完毕**，实测环境为 MySQL **8.4.6**、`ngram_token_size` 已经是 **2**，无需改 my.cnf 与重启；已建库 `pushbox`（utf8mb4 / `utf8mb4_0900_ai_ci`）与专用账号 `pushbox@%`，表结构仍交给 Flyway，库当前为空）。
+✅ **同一天也在本机 `127.0.0.1:3306`（MySQL 8.0.46）用同一段脚本建过一遍**，作为 dev 默认库：`ngram_token_size` 已是 2、`pushbox`（utf8mb4 / `utf8mb4_0900_ai_ci`）与 `pushbox@localhost` + `pushbox@127.0.0.1` 就绪，Flyway V1 一次通过（`utf8mb4_0900_ai_ci` 与 `FULLTEXT … WITH PARSER ngram` 在 8.0 上均可用，所以 8.0/8.4 两个实例跑同一份 DDL 没有分歧）。下面是执行脚本，换机器/重建时照抄即可：
+
+```sql
+CREATE DATABASE IF NOT EXISTS pushbox
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER IF NOT EXISTS 'pushbox'@'%' IDENTIFIED BY '<自行生成强口令>';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES
+  ON pushbox.* TO 'pushbox'@'%';          -- Flyway 需要 DDL 权限；只给 pushbox 库，不给全局
+-- 本机实例上 'pushbox'@'%' 换成 'pushbox'@'localhost' + 'pushbox'@'127.0.0.1' 两个更贴切：
+-- JDBC 走 TCP 到 127.0.0.1 时 MySQL 认的主机名是 localhost，两个都建才不会因解析方式而连不上。
+FLUSH PRIVILEGES;
+-- 中文全文检索前提（§3.2 的 ngram 索引依赖它）：ngram_token_size=2。
+-- 该值已在服务器全局生效，实测 `FULLTEXT ... WITH PARSER ngram` 建索引并命中中文双字词；
+-- 若换到新实例必须先在 my.cnf [mysqld] 设好并重启，再建表，否则已建索引不会自动重算。
+```
+
+实测留档（同一连接内验证）：`pushbox` 账号可建表、可建 `FULLTEXT WITH PARSER ngram`、写入两行中文后 `MATCH…AGAINST('使用率')` 与 `AGAINST('五分钟')` 各命中 1 行 ⇒ D19 的服务端中文全文搜索成立；验证表已 DROP。
+
+> **两个必须改掉的现状**：① 该 MySQL 实例的 `root` 口令是弱口令且 `root@%` 允许远程登录 —— PushBox 上线前请改成强口令，应用侧只用 `pushbox` 账号；② 同实例上还跑着 `gitea / gotab / halo / iyuu / lsky / novel_plus` 等业务库，所以 `pushbox` 账号**只授予本库权限**（已按最小权限配置），Flyway 的 DDL 也只允许落在 `pushbox`。生成好的口令写入部署机环境变量 `PB_DB_PASSWORD`，**不要提交进仓库**（`.gitignore` 排除 `application-local.yml` 与 `.env`）。
+
+建桶（一次性，用 `mc` 或 RustFS 控制台 `http://<存储机>:7101` 对应的 Console 端口）：
+
+```bash
+mc alias set pb http://<存储机>:7101 "$PB_S3_ACCESS_KEY" "$PB_S3_SECRET_KEY"
+mc mb -p pb/pushbox && mc anonymous set none pb/pushbox
+```
+
+Android 端联调配置（D1=A）：`http://<开发机地址>:8080`——**不是 <存储机>**，那台上只有 MySQL 与 RustFS，服务端跑在开发机上（实测本机 WLAN=`<开发机局域网>`、Tailscale=`<开发机Tailscale>`，手机走 WLAN 用前者，装了 Tailscale 用后者）。**明文 HTTP 是允许项，不是待收回的临时口子**（v1.0.0 定稿）：自建服务常在内网/Tailscale 上，只有 IP 与端口、没有可信证书，强制 TLS 等于把这类部署挡在门外。所以 `network_security_config.xml` 保持整体放行 cleartext，客户端不限制 http。**保密不靠这一层**：正文在 TLS 之下还有 §4 的密封盒，凭据只在注册/入站时用一次；是否上 TLS 由部署者按 `deploy/env/prod.env.example` 的口径决定，上 TLS 后地址写成 `https://` 即可，客户端无需改动。模拟器用 `http://10.0.2.2:8080`。
+
+第三方联调自测（`channel`/`secret` 在 App 的"新建频道"或 Web 管理台创建时一次性回显；已有频道的 secret 不在列表回显，见 D28）：
+
+```bash
+curl -sS -X POST "http://127.0.0.1:8080/message" -H "Content-Type: application/json" \
+  -d '{"channel":"83271504","secret":"4f9c…","type":"text","content":"联调测试","sender_id":"dev"}'
+```
+
+#### 11.1.1 P0 联调实测（2026-10-13，验收①的判定口径以本节为准）
+
+| 实测项 | 远端库 `<存储机>:3306` | **同机库 `127.0.0.1:3306`（当前 dev 默认）** |
+|--------|--------------------------|---------------------------------------------|
+| ICMP / TCP RTT | **平均 366ms**（最短 352 / 最长 373，中继后的 Tailscale） | 环回，亚毫秒 |
+| 单次 SQL 往返（"频道不存在→401"这条只打一次库的路径） | **362ms** | **5.5ms** |
+| 新建 MySQL 连接 | **4155ms** | ~170ms（首条请求含 JIT） |
+| 空闲连接被掐 | 中间设备 **26–33s** 空闲即 RST（MySQL 自身 `wait_timeout=28800`） | 不存在（无中间设备） |
+| `POST /message` 纯文字受理 | **2.7–5.9s** | **27–38ms** |
+| 受理后 → 客户端解密出 `message` 帧 | **0ms** | **0ms** |
+| **§12 验收①（1s 内）** | **FAIL**（延迟 4.4–8.6s） | **PASS（49ms）** |
+
+> **结论一：验收① 与"服务端受理"同向，与加密下发无关。** 两种拓扑下"受理后到帧到达"都是 **0ms**，帧加密/握手/广播从来不是瓶颈；差异全在 `POST /message` 内部的**串行 SQL 往返 × 单次 RTT**。受理路径要 4–5 次串行往返（查频道 → `msg_key` 幂等查 → sender upsert → INSERT → 回读带 sender），这些往返**都有必要**，不能为了过线去砍：同机部署时它们合计不到 30ms。
+>
+> **结论二：所以 dev 默认库已切到本机 `127.0.0.1:3306`（MySQL 8.0.46，`ngram_token_size=2` 已生效，Flyway V1 一次通过）。** 这条不是把阈值放宽，是把判分环境换到与生产同构的拓扑上——生产里服务端与 MySQL 本就同机/同局域网。**切回远端只需改 `application-dev.yml` 那一行 URL**，同时必须把被删掉的 `connection-test-query: SELECT 1` 加回来（远端链路空闲 26–33s 就被中继设备 RST，而 Hikari 的保活清扫固定 30s 一轮压不住那个窗口；本机链路没有这个问题，配探测语句只会给每条语句白加一个来回）。
+>
+> **仍未在真机验证的**：②③④ 的**客户端侧**行为目前只有 Node 探针这一实现证明过（它逐字节复刻协议，能证明服务端与协议正确，不能证明 Android 的 Room 入库/通知/重连实现无误）。无 adb 设备连接时，手机上的通知、断线补齐、恢复码回放必须另行收口，见 §17 第 3 条。
+
+**另一个只在运行时才暴露的坑（已由 §11.1 的实测确认，写进代码注释也写在这里）**：`ServletServerContainerFactoryBean` 的 **`maxBinaryMessageBufferSize` 设成 0 会让 Tomcat 的入站读帧循环静默停摆**——握手、`kx`、下行全部正常，但服务端**一个客户端帧都收不到**，日志里没有任何痕迹。本项目只用文本帧，直觉上会把二进制缓冲设 0，结果是最难查的一类失败。两个缓冲一律设成 `frameMaxBytes * 2`。
+
+#### 11.1.2 IDEA 里点 Run 起不来（2026-10-16 实测并修好）
+
+IDEA 自动生成的那条 Spring Boot 运行配置只有 main class，**不带任何环境变量**，而 dev 的口令与桶密钥是 `${PB_DB_PASSWORD}` / `${PB_S3_ACCESS_KEY}` / `${PB_S3_SECRET_KEY}` 三个必填变量。Spring 的 `Binder` 对解析不了的占位符是"原样留下"而不是报错，所以实际看到的是：
+
+- Flyway 建库时 `Access denied for user 'pushbox'@'127.0.0.1' (using password: ***)` —— 那个 `***` 是 §13 的 `%pbex` 把 `YES/NO` 一起遮了，本来最能定位问题的一个词正好被我们自己的脱敏挡住；
+- 上下文停在 `flywayInitializer`，Tomcat 起了又关，症状长得像"IDEA 编译坏了"或"端口被占"。
+
+`DevCredentialsGuard` 把这件事挪到连库之前：profile 是 dev **且这次运行真会建 DataSource** 时，三个键里有任何一个没配或配成空白就当场停下并点名缺哪几个。`DevCredentialsGuardTest` 6 条钉住它的边界：只报键名绝不带值、`PB_S3_MASTER_KEY` 是可选项不能当必填拦下来、prod 不归它管（容器里由 compose 的 `${VAR:?}` 与 `S3Config` 守）、不带 DataSource 的上下文（`LogbackMaskingConfigTest` 那种只加载 yml+Logback 的）不许被打断。
+
+两种补法，都不要求把明文写进任何会入库的文件：
+
+1. `powershell -NoProfile -ExecutionPolicy Bypass -File deploy/env/set-user-env.ps1` 把 `deploy/env/local.env` 写进**当前用户**的环境变量，然后完全退出并重开 IDEA（IDEA 只在启动时读一次进程环境，不重启看不到）。好处是运行配置里一个明文都不留。脚本全程只打印键名。
+2. `Run/Debug Configurations → PushboxServerApplication → Environment variables` 里填这三个键。`.idea/` 已 gitignore，但 `workspace.xml` 里就是明文，别把它贴进 issue 或截图。
+
+顺带排除掉两个看着很像嫌疑犯的：工程 SDK 是 **JDK 25**（`misc.xml` 里 `project-jdk-name="25"`）而 `maven.compiler.release=21` —— 实测用 25 直接跑这只 jar 完全正常（4.6s 起、`/healthz` 回 `db:up`），`--release 21` 在 javac 25 上是合法交叉编译；`compiler.xml` 也已给两个模块覆盖 `-parameters`（Jackson 反序列化 record 靠它），所以 IDEA 自己编出来的产物与 Maven 的一致。**根因只有"运行配置没带 env"这一条。**
+
+### 11.2 生产部署
+
+资产都在 `deploy/` 下，不用另建：`docker-compose.yml`（两套拓扑共用一份文件，差别只在 `.env` 里的地址）、`Dockerfile`（多阶段：`maven:3.9-eclipse-temurin-21` 构建 → `eclipse-temurin:21-jre` 运行，非 root uid 10001）、`Caddyfile`、`ca/gen-ca.sh`、`backup/backup.sh`、`monitoring/{prometheus.yml,grafana/provisioning}`、`env/prod.env.example`。仓库根 `.dockerignore` 只放行 `pom.xml` + `core/src` + `server/src`（与根 pom 的 `<modules>` 一一对应），`deploy/Dockerfile` 由 compose 的 `dockerfile:` 键单独读取，不受上下文影响。
+
+拓扑二选一，都靠 `.env` 里的地址区分，compose 文件不用改：
+
+| 拓扑 | MySQL | RustFS | `.env` 取值 |
+|------|-------|--------|-------------|
+| A 复用 `<存储机>` | 远端 3306 | 远端 7101 | `PB_DB_URL=jdbc:mysql://<存储机>:3306/...`、`PB_S3_ENDPOINT=http://<存储机>:7101` |
+| B 完全独立 | compose 内 `mysql`（放开注释，必须带 `--ngram_token_size=2`） | compose 内 `rustfs` | `.../mysql:3306/...`、`http://rustfs:7101` |
+| **C 本地文件系统** | compose 内 `mysql` | **无需对象存储** | `PB_STORAGE_TYPE=local`、`PB_STORAGE_LOCAL_PATH=/app/data/media` |
+
+**环境变量 → Spring 属性的映射只写在一处**：`server/src/main/resources/application-prod.yml`。compose 只透传同名 `PB_*`，不出现 `SPRING_DATASOURCE_*`——写进去也能跑，但环境变量优先级压过 yml，等于两个地方各声称拥有同一个键，排查时盯 yml 看不出真实取值来自哪。必填项：`PB_DB_URL`、`PB_DB_PASSWORD`、`PB_S3_ENDPOINT`、`PB_S3_ACCESS_KEY`、`PB_S3_SECRET_KEY`（缺任何一个 compose 在 `up` 之前就报错，`${VAR:?}`），可选 `PB_DB_USERNAME`（默认 `pushbox`）、`PB_S3_REGION`、`PB_S3_BUCKET`、`PB_S3_PATH_STYLE`、`PB_S3_OBJECT_ENCRYPT`、`PB_S3_MASTER_KEY`。**使用本地存储时**（`PB_STORAGE_TYPE=local`），S3 相关变量可留空，只需设置 `PB_STORAGE_LOCAL_PATH`（容器内默认 `/app/data/media`）。
+
+```bash
+cp deploy/env/prod.env.example deploy/.env   # 填真值；.env 与 *.env 已在 .gitignore
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d   # 另加 prometheus + grafana（只绑 127.0.0.1）
+```
+
+三条容易踩的容器化细节，都已在 `docker-compose.yml` 里钉住：
+
+1. **日志目录**：logback 读 `${PB_LOG_DIR:-logs}`，compose 置 `/app/logs` 并挂 **named volume** `server_logs`。换成 `./data/logs` 绑定挂载会把镜像里 `chown pushbox:pushbox /app/logs` 那层遮盖掉（Docker 建的宿主目录属 root），进程写不进日志，而容器仍然是"健康"的。
+2. **healthcheck 只做 TCP 探活**（`bash -c "exec 3<>/dev/tcp/127.0.0.1/8080"`，JRE 镜像没有 curl/wget）。`/healthz` 会真连库，拿它做 healthcheck 等于让一次数据库抖动把容器判死；反过来说，容器"健康"不代表配对了——运维告警要看 `/healthz` 的 `ok` 与 `pushbox_*` 指标，不是看容器状态。
+3. **Caddy 等 server 健康再起**（`depends_on: condition: service_healthy`），`/actuator/*` 在 Caddy 上 `respond 403`，Prometheus 走容器网直连 `pushbox-server:8080`——`InternalAccessFilter` 只看 `getRemoteAddr()`，默认只放行环回，桥接段是 compose 用 `PB_SECURITY_INTERNAL_CIDRS` **显式**开给 Prometheus 的（实跑请收紧成 `docker network inspect pushbox_default` 实际分到的子网，别长期用 172.16.0.0/12）；客户端自填的 `X-Forwarded-For` 改不了准入结论（`forward-headers-strategy: none` 就是为这个钉死的）。
+
+`Caddyfile` 关键点（TLS 走 **D1=B：自签/内部 CA**，不申请公网证书）：
+
+```
+pushbox.internal {
+    tls ./certs/pushbox.crt ./certs/pushbox.key     # 自建 CA 签发的域名/IP SAN 证书
+    reverse_proxy pushbox-server:8080
+}
+```
+
+`reverse_proxy pushbox-server:8080` 自动透传 WebSocket Upgrade；显式设 `read_timeout 300s`、`idle_timeout 300s`（否则长连接会被默认值掐断）；80 端口 301 跳 https；`/message` 设 `request_body max_size 64MB`（body 只有 JSON 与若干 URL，留足余量即可，**没有 multipart 上传口**）。图片抓取是服务端主动出网，不经过 Caddy，因此反代侧无需调大超时。
+
+自签路线的**必须配套动作**（否则等于没加密）：① 用自建根 CA 签服务端证书（`openssl`/`step-ca` 一次性生成，CA 私钥离机保存）；② **根 CA 证书分发**到各端 —— Android 把根 CA 放进 `res/xml/network_security_config.xml` 的 `trust-anchors`（**不要**全局 `cleartextTrafficPermitted` 或 `trust user CAs`），Windows 装进本机受信任根存储；③ 第三方侧接入文档明确写"需信任该根 CA 或用 `--cacert`"，否则 Grafana/Alertmanager 的 webhook 会因证书不受信直接失败。证书有效期建议 1–2 年并在"我的 → 数据"提示到期时间。
+
+完整默认项（生产用，前缀 `pb`，env 可覆盖）：
+
+```yaml
+pb:
+  ws: { heartbeat-sec: 25, frame-max-bytes: 32768, key-rotate-hours: 24 }
+  retention: { mode: forever, max-message-bytes: 32768, max-images-per-msg: 4,
+               max-image-mb: 10, max-msg-media-mb: 32 }   # 永久保留，只随用户删除
+  ratelimit: { per-channel-per-min: 60, burst: 20, per-ip-per-min: 120, per-device-per-min: 300,
+               per-channel-images-per-min: 20 }           # 抓图比发消息贵，单独限
+  devices: { max-per-group: 5 }                          # D26
+  notify: { summary-chars: 60, truncate-content: true,
+            media-wait: 3s }                             # D24：图文合并窗口，超时即先发
+  channels: { default-max-level: error, default-max-images: 4 }   # D25 / §3.2
+  ingest: { base-path: /message,                          # 第三方唯一入口，凭据在请求体
+            credential-fail-lock: 5, lock-window: 5m }    # 传输加密归 Caddy，应用侧不设 require-https 开关
+  media:                                                  # 外链抓取转存（§4.5）
+    enabled: true, timeout: 10s, max-redirects: 2, retry-max: 3, concurrency: 4
+    allow-private: false, allow-hosts: [], thumb-long-edge: 512   # 图片来源全公网 ⇒ allow-hosts 空
+    retry-initial-delay: 2m, retry-interval: 5m   # §4.5 抓取重试；间隔即退避，账本是 fetch_attempts
+  s3: { delete-grace: 168h }                      # tombstone 后延迟真删对象（endpoint/keys 走 env）
+  search: { fulltext: true, min-query-len: 1, max-limit: 200 }
+```
+
+备份与恢复：`mysqldump --single-transaction` + RustFS 卷打包，定时上传到异地（上传前 `age/gpg` 加密，因为库内是明文）。用户侧只需保管**恢复码**；服务器数据丢失则历史与图片不可恢复（服务端是唯一归档源），要在"我的 → 数据"里显式提醒。
+
+管理 CLI 就是同一个 jar 的 `--admin=<命令>` 分支（`AdminCli`，跑完 `System.exit`），不额外装 Spring Shell：`device-revoke --device-id=`（丢失恢复码时手工吊销）、`rotate-secret --channel-no=`、`export-json --group=|--channel-no= --output=`、`media-sweep`（清理过宽限期的待删对象）、`flyway-info`。容器里：
+
+```bash
+docker compose run --rm pushbox-server java -jar /app/app.jar --server.port=0 --admin=flyway-info
+```
+
+`--server.port=0` 是必需的而不是图省事：`--spring.main.web-application-type=none` 这条路走不通——`WebSocketConfig` 的 `webSocketContainer` bean 要 `ServletContext` 才能拿到 `ServerContainer`，去掉 web 上下文反而起不来。`flyway-info` 在 `spring.flyway.enabled=false` 的部署下只报一句"迁移状态请由 DBA 侧查 flyway_schema_history"并退 1，不会把整条服务带走（`AdminCli` 注的是 `ObjectProvider<Flyway>`）。
+
+#### 11.2.1 prod profile 实测（2026-10-16）
+
+本机没有 docker CLI，`docker compose up` 那一步**尚未真机验证**；能验的都验了——用 prod profile + compose 同名环境变量直接跑 jar（远端拓扑 A 的库与桶，端口 8081，`--spring.flyway.enabled=false` 以免动那台共享库的表结构）。通过的判据：
+
+- `The following 1 profile is active: "prod"`；`PB_S3_OBJECT_ENCRYPT=sse-c` 真的绑上了（启动行 `对象存储加密模式=sse-c`），而这一行在 prod 下才看得见——原来 `!dev` 的 root 是 WARN，把这类 INFO 判据全吞了，已改回 INFO。
+- `PB_LOG_DIR` 生效：日志落在指定目录的 `pushbox-server.log`，与 console 同一条 `${PB_PATTERN}`。写死 `logs/` 的旧写法依赖镜像 `WORKDIR /app` 恰好对上，一改 WORKDIR 就没人知道日志去哪了，已改成读环境。
+- `POST /message` 走错凭据 → 401 `invalid_credential`；请求体里塞的正文 needle 在 console 与文件两本日志里 grep 计数都是 0。顺带发现驱动报错文本里的 `using password: YES` 也被 `%pbex` 遮成了 `***`——凭据键在异常文本里同样遮，是 §13 想要的方向。
+- `/healthz` 200 `{"ok":true,"db":"up"}`、`/actuator/health` 只回 `{"status":"UP"}`、`/actuator/prometheus` 200 且含 `pushbox_*`。
+- 带 `X-Forwarded-For: 8.8.8.8` 的 `/healthz` 依旧 200：来源判定不认这个头，伪造它既打不开也关不上内网端点。
+
+三条实测换来的修复（都不是 compose 文件本身的问题）：
+
+1. `AdminCli` 原本硬依赖 `Flyway` bean，于是 `spring.flyway.enabled=false`（DBA 手工迁移这类常规部署）会让**整条推送服务起不来**，管理子命令缺一个依赖不该拖垮主链路 → 改 `ObjectProvider`。
+2. `pb.s3.endpoint/bucket/access-key/secret-key` 任一留空时进程照样启动、TCP healthcheck 照样过，但每条带图消息一路停在 `failed`，症状要等用户报"图不见了" → `S3Config` 建客户端时当场拒绝，`S3ConfigTest` 两例（含"配齐能建出客户端且不探测网络"）。
+3. 脱敏实际生效的转换器是正则实现（`body=[^\s,}]+` 遇到带空格的正文只遮到第一个空格），而 8 例单测覆盖的那把逐字符扫描器 `LogMasking` 反而没人调用 → logback 注册回 `Masking*Converter`，删掉两个弱实现；同时 `%pbex` 现在自带行首换行，异常不再和消息挤在同一行。
+
+仍未证实的两处：镜像真的能 build（无 docker），以及 compose 里 `mysql`/`rustfs` 那段放开注释后的拓扑 B 首启（`ngram_token_size=2`、宿主目录 chown 10001）都只在文档层面自洽。另外那台共享库 <存储机> 的 schema 落后于代码（缺 `senders.avatar_key`），真部署时 flyway 默认开着会自动补迁移——本次实测刻意没去动它。
+
+---
+
+## 12. 分阶段实施路线
+
+> 按 D21 排序：**服务端（Java）与 Android 是 P0/P1 的全部重点**，加固放 P2，Windows 明确后置到 P3。每阶段都可独立交付使用，不出现"半截 PC 端"占坑。
+
+| 阶段 | 范围 | 关键交付 | 验收标准 |
+|------|------|----------|----------|
+| **P0 最小闭环（1–1.5 周）** | `pushbox-core` + 服务端（Java） + Android | ① `pushbox-core`：crypto（Ed25519/X25519/HKDF/AES-GCM/HMAC）+ 帧与 DTO + 单测，并顺带产出 `vectors.json` ② 服务端：Flyway 建表、设备注册与恢复码、频道 CRUD、**`POST /message`（channel_no + secret 进请求体，幂等 `msg_key` + 限流 + 失败锁定 + summary + ngram 全文；`images[]` 先只做字段校验 + 落 `media_objects(pending)`）**、WS（kx 握手 + 帧加密 + 心跳 + `since_seq` 补拉）③ Android：首启注册、保活引导、后台服务收帧入库、**消息页会话列表 + 对话页 + 已读游标上报 + 系统通知** | ① curl 发消息 → 手机 1s 内出通知（**判分环境=服务端与 MySQL 同机/同局域网**；Node 探针实测 **49ms**，阈值 1000ms 未放宽，见 §11.1.1）；② 断网 30min 重连后补齐且无重复；③ 卸载重装输恢复码 → 历史文字 100% 恢复；④ 未注册设备拿不到任何内容；⑤ `pushbox-core` 单测全绿。**服务端 + 协议侧 13/13 已通过；②③④ 在 Android 真机上的表现仍待收口（无 adb 设备）** |
+| **P1 Android 体验完整（1.5–2 周）** | Android + 服务端配套接口 | 右上 `⋮` 的 `全部/未读/已读` 筛选、服务端 + 本地合并搜索（`/search`）、**图片链路（`MediaFetchService` 抓外链 → SSRF 校验 → 缩略图 → RustFS 转存 → `media_ready` 帧 → 客户端经服务端代理口下载（不直连桶） + 本地缓存/LRU 清理）**、Markdown/链接渲染、会话置顶/免打扰/重命名/设头像、按 `sender_id` 的通知分组与按 `level`（含频道 `max_level` 截断，D25）的提醒强度、锁屏隐藏内容、角标、tombstone 删除（含宽限期后 `DeleteObject`）、静默时段、**App 锁 PIN/生物识别（D30，可选、默认关）**、设备数上限 5 的提示与吊销流程（D26） | ① 长中文/代码块/表格不串版；② 搜索跨全部历史命中并高亮；③ 图片离线可看、删除后他端隐藏、**外链 404/防盗链时正文照常送达且显占位**；④ 小米/华为实测 8h 后台到账延迟 <1min；⑤ 深色模式全页走查通过 |
+| **P2 加固与运营（持续）** | 服务端为主 + Android 收尾 | Prometheus + Grafana、结构化日志脱敏与审计、导出 JSON、恢复码轮换与设备吊销流程打磨、备份脚本、**图片抓取加固（独立出网 socket/`allow-hosts` 收敛、抓取队列指标、失败率告警）**、自建 CA 证书签发与到期提醒、**跨空间 Web 管理台（D28，`web-admin/` 烘进服务端 jar，支持频道创建与密钥重置）**、（可选）厂商推送兜底、（可选）PostgreSQL 迁移路径。**明确不做**：i18n（D29，仅中文但串进 `strings.xml`） | 1 万条/日压测下 WS 稳定不掉线；日志与崩溃上报无正文；备份可异机还原；限流与鉴权通过 §13 安全用例；**SSRF 用例全部拦截（含 DNS 重绑定与内网 302）** |
+| **P3 Windows 客户端（最后）** | 仅 Windows | **按 §8.4 的 W1–W15 逐项交付**：工程骨架与环境（W1）→ C# 四原语对 `vectors.json`（W2）→ 帧解密 `FrameChannel`（W3）→ REST 密封盒与 `restAuth` canonical（W3b）→ 身份落盘 + 首启 register/join（W4/W5）→ WS 全流程握手与重连（W6）→ SQLite+FTS5 落库与同步引擎（W7/W8）→ 已读上报（W9）→ 服务端代理取图（W10）→ 搜索（W11）→ WPF 双栏 UI（W12）→ 托盘 + 原生 Toast + 自启（W13）→ 删除/清空（W14）→ 日志脱敏 + Inno Setup（W15） | ① **vectors 全绿后才开始写 UI —— 前提已满足（2026-10-15，`windows/` 下 `dotnet test` 517/517，其中向量用例仍是那 21 条）**；② 手机已读 → PC 红点 <2s 消失（对应 W9）**已达成**：W9 的 `PushBox.LiveCheck` 在 8081 真服务端上量到 34–47 ms（本机 `MarkRead` → 同组另一台的未读 3 → 0，走真 `PUT /state/read` + 服务端广播的 `read` 帧）；③ 与 Android 同一条消息渲染结果一致（对应 W12）**已达成（判据是断言而不是人眼）**：渲染三层（`Data/Markdown` 解析 → `Controls/MarkdownView`/`BubbleView`/`MediaStrip` 度量 → `MainModel` 判定）全在代码里，`RenderTest` 30 例（Markdown 渲染 11 + 气泡 8 + 图位 7 + 头像 4）+ `MarkdownTest` 18 例 + `MainModelTest` 23 例 + `ThemeTest` 8 例 + `MainWindowTest` 1 例拿一份八种灰各不相同的合成 `MarkdownStyle` 逐条断言字号/行高/圆角/竖条/图位，并把 Android 那条 `avatarColor` 的 31 多项式哈希钉成固定向量（`"hello".hashCode()==99162322`，§8.2 第 33 条）——**两端"一致"的含义是"同一份 §9.2 数值 + 同一个头像哈希"，而这两样现在都有用例守着**；④ 新增：W6 的 `kx` 验签/指纹核对必须拒掉伪造握手，不接受"降级明文继续连"（**已达成**：`kx` 前到的密文帧被丢、指纹不匹配时 `auth` 帧根本没发出，见 §8.4 W6）；⑤ **W13 的两条验收已达成**（对应 §8.1）：Toast 点击落回那一条会话（`pushbox:` 协议 + 单实例命名管道 + `MainWindow.OpenConversation`，两端各有用例）与"`max_level` 截断过的消息在 PC 端强度与手机端一致"（同一张 `level`→强度表，不认识的值落低端）；系统真把协议处理器叫起来那一段走的是 `--notify-smoke` 真机体检而不是用例；⑥ **W14 的删除与清空已达成**（对应 §9.3）：两发 §5.2 签名 DELETE 在 8081 真服务端上被验签接受（体检第 ⑨/⑩ 条，`404 hint=message` 读成"本来就没有这条"、`deleted=0` 读成幂等成功），本机的乐观删除与 tombstone 帧落进同一个库状态、服务端没答应时原样放回（§8.2 第 47–53 条）；"PC 删一条 → 手机端同步消失 / 反向亦然 / 重装不回放"那三件的服务端那一支由 `deploy/probe` ⑪/⑯/⑰/⑱ 覆盖，两侧加起来才是那条验收；⑦ **W15 的两条验收已达成**（对应 §14 与 §10.1）：**「抓 log 目录 grep 不到任何 `body` 片段」是读真文件判的**——`AppLogTest` 把日志开在临时目录，按正文/snippet/搜索词/恢复码/密封盒 `data`/多行 JSON 转储/带 `?q=` 的 URL/跨行的值各写一条留痕，再把目录里**每一本文件逐字节读回来** grep（读的时候 sink 还攥着写句柄，所以要 `FileShare.ReadWrite`，§8.2 第 54 条），同批用例另钉"超长值是**整值替换而不是截断**""异常只留类型名与堆栈""日志目录写不了只是这台没留痕、不带走应用"；**「安装包能无人值守装到干净机器」是拿装出来的包判的**——`bash windows/installer/build-installer.sh` 出 56MB 的 self-contained per-user 包，`/VERYSILENT` 安装 / 覆盖装 / 卸载三段退出码全 **0**、全程**无 UAC**、`{app}` 里 `coreclr`/`hostfxr`/`hostpolicy`/`System.Private.CoreLib`/`PresentationFramework` 五本齐全（这是"干净机器不需要先装运行时"的唯一直接证据，本机装了 SDK 就证不了），卸载只清确实指向 `{app}` 的 HKCU 并**保留** `%LOCALAPPDATA%\PushBox`（DPAPI 绑当前用户，删掉等于把"重装认回同一个 Space"堵死）。这一步真机撞出并修掉两个只有"打包 + 冷启动"能撞见的缺陷（§8.2 第 56–57 条）。自签 CA 那一栏给的是接法说明 + 三态实测（§11.1、`docs/Windows开发环境安装教程.md` §5.4）：根没装时 REST 与 WS 都被拒、`certutil -addstore -user Root` 之后新进程通、**跑着的进程不会回头重读根存储**（换证书要重启应用）。**至此 §8.4 的 17 项全部 ✅，P3 没有待办模块** |
+
+---
+
+## 13. 测试矩阵
+
+- **`pushbox-core` 单测（一份源码，只在 Maven 侧跑：`mvn -B -pl core test`，2026-10-15 实测 26/26 绿：`CryptoVectorsTest` 10 + `KeyWrapTest` 8 + `ModelAndTextTest` 8）**：固定 `enc_pubkey/eph_priv/salt` → 期望 shared secret、HKDF 会话密钥、帧明文↔密文（含 AAD/nonce/篡改负例）、HMAC canonical 与签名；同时把这些向量导出为 **`testvectors/vectors.json`**（**刻意不放 `core/target/`：那会被 `mvn clean` 抹掉，而这份文件是 P3 Windows 端的开工前提，必须像契约一样能检出、能 diff；CI 要用 `-Dpushbox.vectors.path=` 覆盖成工件路径**）供 P3 的 C# 端校验。
+  - **2026-10-15 为 W3b 补的两段向量**（缺它们时 C# 只能照抄 Java 源码、字节级一致性无人把关）：`rest_auth`（`get_search` 用**小写 method + 含空值参数的原始 query + 空 body**、`post_channels` 用**中文 body + 空 query**，每条都给 `canonical` 原文与 `sig_b64` 期望签名）与 `sealed_box`（REST 响应那种一次性盒 `{v, eph_pub, salt, data, n}` 的完整信封 + 明文 + 派生出中间值，`eph_priv` 固定成可复现的测试私钥）。导出前先在测试里断言"设备静态 enc 私钥 + `eph_pub`/`salt` 能自解出同一份明文"，避免把只能加密不能解密的形状写进契约。
+  - **实现阶段的修正**：Gradle 侧**没有** `:core:test` 这套测试依赖 —— `android/pbcore` 只把 `core/src/main/java` 的**源码**挂进来编译，测试仍只在 Maven 跑一份，避免两处各维护一套 JUnit 依赖导致"同一份源码两种断言"。所以 §10.1 里"CI 跑 `:core:test`"的说法按本条为准。
+  - **跨构建一致性改由两条更硬的证据保证**，不再依赖 instrumented test：① `dexdump` 实测产物里 `Ed25519$KeyPair` 继承 `j$/...RecordTag`、`java.util.Base64` 被重写成 `j$.util.Base64;`，证明 record 与 JDK API 脱糖真的发生（这是"手机上的 `pbcore` 字节码语义与 JVM 一致"的前提）；② `deploy/probe/p0-e2e.mjs` 用 Node 的独立实现（`crypto.diffieHellman`/`hkdfSync`/`aes-256-gcm`）逐字节复刻 §4.3/§4.4 并跑通握手、密封、补拉，等于第三方向 `pushbox-core` 对齐。**Android instrumented test 仍列为后续项**（要在真机上验证 desugaring 后的行为，但它不再是唯一的把关点）。
+  - **协议层与 JSON 绑定不共享**：客户端 `net/Wire.kt` 只用 Jackson tree API 手写 §5.3 的帧，不绑定 `pushbox-core` 的 record DTO（原因见 §10.1 的 `isRecord()` 陷阱）。所以"一份源码两端编译"覆盖的是**加密与 canonical**，帧字段名是两端各自维护、靠探针与 vectors 对账的 —— 改字段名必须同时动 `Frames.java`、`Wire.kt` 与探针，否则探针会红而不是静默不一致。
+  - **第四方向（C# / Windows）已于 2026-10-15 对齐完成**：`windows/PushBox.Crypto.Tests` 读同一份 `testvectors/vectors.json` 跑 **17 条向量用例全绿**（X25519、HKDF-SHA256、AES-GCM 正例 + 篡改负例、Ed25519 的 `ws_auth_sig` 与 `kx_sig`、WS 信封端到端解出明文帧，以及 W3b 的 `restAuth` 两条 canonical/签名 + 密封盒解出 `token`/恢复码 + `salt`/会话密钥/`n` 各自的负例）。**W6 之后这条吃到了整条握手：`ws_auth_message`/`ws_auth_sig_b64` 对上 4 行 canonical、`kx_message_hex`（`eph_pub‖nonce`）+ `kx_sig_b64` 用 `server_id_pub_b64` 验通、`server_pub_fp` 被 `Ed25519Sign.Fingerprint` 复现、向量的 `frame.envelope_json` 在假 socket 上被解成 `MessageFrame` ⇒ 现为 21 条向量用例、全量 `dotnet test` 556/556（W15 时 517；W14 那两发 DELETE 在向量文件里没有对应分支，canonical 的字节级口径由 `deploy/probe` ⑪ 的真 HTTP 钉着，而 W15 那一整批压根不是协议面——它验的是盘上留下的字节）。**这条把 §12 P3 的开工前提正式关闭 —— **"vectors 全绿才写 UI"的闸门已开**，且 W12 的 UI 正是踩着这条闸门做的。踩到的坑（现已 64 条：NSec 不可用、`AesGcm` 缓冲区形状与过时构造函数、URL-safe base64 无 padding、`.NET 8` 没有 `System.Base64Url`、`kx_sig` 用服务端静态身份密钥而非设备种子、restAuth 的 query 原样与空 body 占行、record 位置参数重影、替服务端封响应要按请求的 `enc_pubkey` 现封、向量缺字段=客户端只能猜、有状态 channel、hello 阶段就先比指纹、静默判死要本端数、换 scheme 的先后顺序、FTS5 只有 trigram 切不动两字中文词、`read` 帧可能比消息先到、SQLite 句柄是 RW 共享、补拉不能压在 §5.3 的读循环上、"只弹一次通知"的判据是 `msg_id` 且归先落库的那份、状态机被 UI 看见的时机要自己定（退避句柄/`Blocked` 不被 `Idle` 覆盖/先等再翻倍）、`resume_ok` 不能被连接层吞掉、重启引擎要换一条新队列、服务端 `read_state` 是 last-write-wins 所以本端游标只增不减、§5.2 的两个字节接口不是密封盒、媒体 404 的 hint 就是槽位状态、缓存键要选补拉也认得的那个、头像只进内存且"没带头像"不算失败、搜索的 query 要先转义再拼再签（`.NET 8` 的 `Uri` 实测对已转义串透传）、`AND` 比 `OR` 绑得紧所以"仅本会话"要给那组 `OR` 加括号、本地 snippet 窗口照服务端抄且不许切断代理对、`since` 是 `created_at` 毫秒下界而不是 seq、**§9.2 的数值只有抄成断言才不会漂**、**头像色不能用 `string.GetHashCode()`（进程随机化）而要复刻 Java 的 31 多项式**、深色 token 下 WPF 自带列表选中态不可用（自己画 accent 竖条）、`TextBlock.Text` 遇 `Inlines` 返回空串（断言读 `Run.Text`）+ `GridLength.IsStar` + `PngBitmapEncoder.Save`、**STA 的 dispatcher 泵不能是 `DispatcherTimer`（会把 xunit 测试主机弄崩）且负向判据要一条不抛出的 `PumpFor`**、日期分节用例的基准时间要按本地时区生成、刷新不许丢掉用户已翻页读到的历史、**删除要回滚而已读不回滚（本机组游标已越过这条）**、**乐观删除与 tombstone 帧共用同一段 SQL 才谈得上"收敛"**、**回滚票带本机才有的列而放回只动 `MAX(last_read_seq)`**、**不回滚那一支认 `hint` 不认状态码**、**媒体驱逐要排在服务端确认之后**、**整会话清空是一次 scope DELETE 且幂等没有"已经没了"分支**、**乐观那一刻靠回调、二次确认靠可替换委托而不是 `MessageBox`**、**Serilog 的滚动文件名没有占位符（日期插在扩展名之前，模板写 `pushbox-.log`）而读日志要用 `FileShare.ReadWrite` 边写边读**、**留痕是进程级静态入口 ⇒ 测它的那两页必须 `[Collection("AppLog")]` 关并行（单跑两条都绿）**、**"没 `Start()` 一个字都不写"与"日志目录写不了不带走应用"是同一件事的两面**、**身份文件缺失时那一次游标副本回写会把同步循环带崩（权威在库里，跳过就对）**、**干净机器 + 一个 `pushbox:` 参数 = 崩在 dispatcher，而 `dotnet test` 与 `LiveCheck` 都走不到这条路**、**那三处 HKCU 全机只有一个位置（装机版与开发版 last-writer-wins），也因此没有静态 `AppMutex` 可写**、**`[Tasks]` 不写 `unchecked` 就是默认勾选而 `/VERYSILENT` 会执行它**、**"装到干净机器"只能看包里那五本运行时 DLL，本机装了 SDK 就证明不了任何事**、**TLS 信任只有根存储一个入口，而正在跑的进程不会回头重读它（换证书要重启）；`certutil` 按 CN 删根证书会被系统取消且没删成，复测基线整批作废、**一条 socket 同时只能有一个 `SendAsync` 在飞，心跳与 pong 两条线程不加门就整条循环带异常收工**、**`Style` 的 `TargetType` 与元素对不上、`TextBlock` 里塞元素、`StaticResource` 指向 App 级字典这三类只在加载那一刻抛**）记在 §8.2 的实测记录，回归时同样按那份跑法；**W9 起另有一条真服务端回归（W10 起第 ⑦ 条是签名取图，W11 起第 ⑧ 条是带中文与 `%&` 的签名搜索，W14 起第 ⑨/⑩ 条是两发真签名 DELETE 打在服务端并没有的行上，接入面起第 ⑪/⑫ 条是逐设备 `subscribed` 回显与订阅过滤器同时在实时帧和 REST 历史上收放）：`dotnet run --project windows/PushBox.LiveCheck -- http://127.0.0.1:8081`，12/12 才算过**；**W13 又加了一条不连服务端的**：`dotnet run --project windows/PushBox.Windows -- --notify-smoke 输出文件`（量的是那三件在 xunit 里没有向量的事——两处 HKCU 真写进去了、托盘图标真出来了、toast 真弹出来了，所以它既不需要设备身份也不碰网络）。前者的"真"在于它跑的是真的 Java 服务端与真的 `ClientWebSocket`，脚本假服务端替不了；每跑一次在开发库里多出一个 Space 和两台设备，与 `deploy/probe/p0-e2e.mjs` 同样的代价。**W13 的八条（三档强度塌成两档、未打包要自己写那两处 HKCU、mutex 的线程递归与 `createdNew`、头像落盘是"只进内存"的例外、自启的三种漂移、免打扰那条门归引擎、托盘的账只留一套口径、`Show` 不抛 ≠ 通知成功）记在 §8.2 第 39–46 条，回归时那两半都要跑一遍**。**W14 的七条（删除要回滚而已读不回滚、乐观删除与 tombstone 帧共用同一段 SQL、回滚票带本机才有的列而放回只动 `MAX(last_read_seq)`、不回滚那一支认 `hint` 不认状态码、媒体驱逐排在服务端确认之后、整会话清空是一次 scope DELETE 且幂等没有"已经没了"分支、乐观那一刻靠回调）记在 §8.2 第 47–53 条，它的真服务端那半边是体检的 ⑨/⑩ 两条，服务端有真行的那几支仍归 `deploy/probe` ⑪/⑯/⑰/⑱**。
+- **对象存储兼容性用例**（基础项已于 2026-10-13 实测通过，见 §4.5 结论表；回归时重跑 `deploy/probe/rustfs-capability.mjs` 即可）：`PutObject`（含 5MB）、`GetObject` 回读一致、预签名 60s 内可取且非法时效被拒（仅作桶能力回归，本期读侧不用）、匿名读被拒 403、`DeleteObject` 后 404、`CreateMultipartUpload`、生命周期规则 Put/Get/Delete。**SSE-C 三点校验已于 2026-10-14 完成**（`MediaObjectsTest` ③④⑦ + `MediaSsePipelineTest` ①④：不带钥读必失败=400、带封装钥读成功、落盘非明文；`DeleteObject` 无钥即生效），仍待补：**重启 RustFS 后数据完整性**。
+- **`pushbox-server` 单测（v1.0.0 实测：`mvn -B -pl server -am test` = `core` 26/26 全绿 + `server` 187 条里 76 条实跑全绿、111 条按设计跳过；跑法必须让 `core` 与 `server` 同 reactor（`-pl server -am` 或 `-pl core,server`），否则用的是本地仓库里的旧 core jar，`KeyWrap` 一类新类会 `NoClassDefFoundError`；想连那 111 条一起验，先 `set -a && . deploy/env/local.env && set +a` 再跑**：纯 JVM 用例（`FrameAssemblerCapTest`、`SsrfGuardTest`、`SearchLogicTest`、`MediaRetryLogicTest`、`MediaObjectsConfigTest`、`HealthzControllerTest`、`InternalAccessFilterTest`、`RequestsTest`、`AvatarSourceTest`）不需要任何联调基础设施；碰库/碰桶的用例挂 `@EnabledIfEnvironmentVariable(named="PB_S3_ACCESS_KEY")`，跑前先 `source deploy/env/local.env`。**三条起不来上下文的坑别回退**：`@SpringBootTest` 必须 `RANDOM_PORT`（MOCK 下 `webSocketContainer` 拿不到 `ServerContainer`）、指标类断言必须 `@AutoConfigureObservability`、签名/幂等类断言要在 `@AfterEach` 里清干净自己那批行。各用例对应 §5.1/§5.2 的哪条判定，逐项清单见 §17 第 3 条。
+- **图片抓取（MediaFetchService）用例**：正常 jpg/png/webp/gif 抓取成功且 `media_status=ready`；**SSRF 负例必测** —— `http://127.0.0.1:8080/`、`http://169.254.169.254/latest/meta-data/`、`http://<存储机>:7101/`（我们自己的桶）、`file://`、`http://[::1]/`、DNS 重绑定（先解析公网再 TTL 到期切内网）、302 跳内网 —— 全部必须拒绝且记 `error=ssrf_blocked`；非图片 Content-Type/魔数不符（HTML、SVG）拒收；超 10MB 中途断开；超时/404/防盗链 403 → 重试 3 次后 `failed` 且正文照常入库；相同 sha256 复用对象不重复存；`media_ready` 帧乱序/重复到达时客户端幂等合并、不重复发通知、不推进已读游标。
+- **本轮决策项的专项用例**：① **图文同步（D24）** —— 抓图 1s 完成 → 只发**一条** `message` 帧且通知自带图；抓图超过 `media-wait=3s` → 先发出正文通知（`media[].status=pending`）+ 后续 `media_ready` 且**不再第二次弹通知**；抓取失败 → 3s 内必发（不允许消息被卡住）；纯文字消息 → 不受合并窗口影响（P95 到账 <1s）；② **`max_level` 截断（D25）** —— 频道设 `warning` 时第三方发 `error`，入库与下发都变 `warning`，响应回显生效值，客户端 heads-up 强度随之降级；③ **设备上限 5（D26）** —— 第 6 台 register/join 返回 `device_limit_reached`，吊销 1 台后可重新加入，`group_id` 统计忽略 `revoked_at` 非空行；④ **仅中文/无 i18n（D29）** —— lint 或 review 卡口：`res/` 下不允许硬编码中文字面量（全部走 `strings.xml`）；⑤ **自签 CA（D1=B）** —— Android 仅信任内置根 CA（系统 CA 里的自签证书不得被接受），release 构建连 `http://` 必须失败。
+- **MySQL 全文用例**：中文分词命中（`ngram_token_size=2`）、单字查询兜底 `LIKE`、超长文本、emoji/全角符号、`MATCH…AGAINST` 结果与 `snippet()` 截断正确。
+- **协议测试**：帧乱序 / 重复 seq / 缺口 / 重连 `since_seq` 落后触发 `resume_gap` / **落后条数落在"一批"与 `GAP_THRESHOLD` 之间时必须由补拉循环取空后才回 `resume_ok`**（探针 ㉑，配 `--pb.ws.replay-batch=5`；只发一批就回 `resume_ok` 是静默丢消息，见 §5.3） / 时钟越界 / **下行帧 nonce+index 重放**（必须丢弃并断会话）/ 密钥轮换跨界（24h 或 2^32 帧触发 ratchet，收端能用旧密钥解完尾部帧）/ 幂等重复提交 / 超大 body 截断。若启用 P2 的入站 `ts/nonce/sign`，另测其重放窗口（±5min，nonce 去重缓存）。
+- **同步测试**：多端同时打开同一会话（游标竞争，取 max）、删除与到达并发、恢复码登录后全量回放（1 万条压测 < 30s）。
+- **Android 存活矩阵**：Pixel(Android 14/15/16) / 小米 / 华为 / OPPO / vivo，分别测"完成保活引导"与"未引导"两种状态下 1h/8h/24h 到账延迟与被杀率；这是本项目体验成败的关键实测项。
+- **安全测试**：`POST /message` 里 `secret` 暴力枚举（限流 + 5 次/分钟失败即 `locked_until` 锁定，且 401 响应体统一、不区分"频道不存在/密钥错"以防频道号枚举）、`msg_key` 幂等（同 key 重复提交只落一条，返回同一 `id`/`seq`）、越权访问他人 `channel_no`/`msg_id`、**媒体与头像读接口不带签名一律 401**（读侧已改成服务端代理，桶里不再有匿名可取的 URL；`sse-c` 下即使摸到桶地址也读不出字节）、`/search` SQL 注入、WS 未签名握手、**日志脱敏断言：请求体与 body/summary 不得出现在任何 Logback appender 输出中**（含 access log 与异常堆栈）。
+- **UI 走查**：深浅色、字体放大 200%、长中文/emoji/代码块/表格、无网弱网、通知折叠展开、锁屏可见性两种模式。
+
+---
+
+## 14. 风险与隐私说明
+
+| 风险 | 说明 | 处置 |
+|------|------|------|
+| **服务端明文归档** | MySQL 表、dump 备份文件里都有正文可读 | 部署文档硬性要求：HTTPS 强制跳转、磁盘 LUKS 或云盘加密、MySQL 账号最小权限 + `bind-address` 仅内网、备份上传前 `age/gpg` 加密、访问与错误日志禁止打印 body/summary（Logback 用 PatternLayout 白名单字段）、崩溃上报关闭。**PC 端已按同一口径落地（2026-10-15，W15）**：`Logging/AppLog` 是全项目唯一能写日志的一页且每个入口只收类型化小字段（错误码/计数/游标/毫秒/异常**类型名**），落盘前还有五层文本网兜着，验收① 是把日志目录里每一本文件读回来 grep；崩溃两个挂钩只写文件，那一页没有 `HttpClient` 也没有 URL——"崩溃上报关闭"在代码结构上不成立为反例（§8.2 第 54–55 条） |
+| 恢复码泄露 | 拿到恢复码 = 可注册设备读取全部历史 | "我的"里可一键**重新生成恢复码**（旧码失效并踢出未确认设备）；设备列表可远程吊销；join 需已有设备签名二次确认（可选开关） |
+| API Secret 泄露 | 任何人可向你的频道写消息（垃圾/伪造 sender 名） | 只可写入不可读取；一键重置 Secret；限流 + 每频道每日条数上限 + 可疑内容本地标记；`sender_id` 白名单模式（只接受已登记的发送方） |
+| Android 被 ROM 杀后台 | 消息延迟数分钟到数小时 | 完整保活引导（§7.2）+ 常驻通知 + WorkManager 兜底 + "我的 → 后台常驻"实时显示存活状态；P2 可选厂商推送 |
+| 永久保留导致膨胀 | 文字 32KB 上限 + FTS 索引；图片由服务端转存进 S3，**转存后不再受外链生命周期影响，但存储成本转移到我们桶里** | 容量报表（条数/字节/最早时间/图片字节）、按会话手动清空、同 sha256 去重复用、可选"仅归档不索引"；不做静默删除（尊重 D3） |
+| **服务端被抓图当 SSRF 跳板** | 第三方给内网 URL，让服务端替它访问敏感端口/元数据接口（我们的 RustFS 就在 `<存储机>`，属 `100.64.0.0/10` 段，风险真实存在） | §4.5 硬性校验：仅 http/https、DNS 解析后钉 IP 再连、私网/环回/链路本地/CGNAT 段默认全禁、每跳重定向复校验、拒 SVG 与魔数不符、大小与超时截断、`allow-hosts` 精确白名单；P2 进一步用独立出网 socket 与抓取指标告警；§13 有一组 SSRF 负例必测 |
+| 图片抓取失败/延迟 | 带图消息的通知最多晚 `media-wait`（3s）；抓取全失败时用户看到"图片已失效"占位，误以为丢消息 | 失败对**下发**是终态 ⇒ 消息照发（D24 的窗口是"到齐即发"，不是"等满 3s"）；`MediaRetryService` 在 `retry-max` 内定时重抓，救回来的图以 `media_ready` 原地补齐；占位可点开重试；纯文字消息零影响；频道级抓图频率单独限流 + 队列有界，不拖垮主链路 |
+| **图文同步带来的通知延迟（D24 代价）** | 带图消息的通知最多晚 `media-wait`（3s）到达；图床慢时体感"消息来得慢" | 窗口只对**带 images 的消息**生效，纯文字零延迟；窗口是"到齐即发"不是"等满 3s"；抓取队列有界 + 失败即终态，绝不阻塞；若日后嫌慢，把 `pb.notify.media-wait` 调到 1s 或给单消息加 `notify_when:"now"` 逃逸口（P2 再评估，不提前实现） |
+| 自签 CA 运维负担（D1=B） | 根 CA 泄露=可中间人；证书到期或换 IP 导致客户端连不上、第三方 webhook 批量失败 | 根 CA 私钥离线保存、只签短期服务端证书（1–2 年）；根 CA 打进 Android `network_security_config` 而非允许用户 CA；"我的 → 数据"显示到期时间；接入文档写清 `--cacert` 用法；**PC 端接法已三态实测（2026-10-15，W15）**：代码侧零改动（裸 `HttpClient`/`ClientWebSocket`，全项目没有任何绕过校验的回调），只有 `certutil -addstore -user Root ca.cer` 这一个动作（当前用户、不需要管理员），而**换证书或新装根证书后要重启应用**——已经在跑的进程不会回头重读根存储，WS 断线重连仍在同一进程里不算新进程（§8.2 第 62 条、`docs/Windows开发环境安装教程.md` §5.4） |
+| 单点自托管宕机 | 期间无法接收 | 发送方凭 `msg_key` 幂等重试；服务端不丢已入库消息，客户端重连 `since_seq` 补拉 |
+| 服务器数据丢失 | 历史与图片不可恢复（服务端是唯一归档源） | 定时 `mysqldump` + RustFS 卷打包，异地加密备份；导出 JSON 到本地 |
+| RustFS 特性缺口（**已实测，风险大幅收敛**） | 实测：基础读写/多部分/预签名/匿名拒读/生命周期规则全部可用；**SSE-S3 需服务端配 `RUSTFS_SSE_S3_MASTER_KEY` 才可用**，SSE-C 开箱可用 | 对象加密已于 2026-10-14 接线：`pb.s3.object-encrypt` 两态 `none|sse-c`，客户钥封装（61 字节）存 `media_objects.sse_key_wrapped`/`senders.sse_key_wrapped`，主钥缺失直接拒绝启动、绝不静默退回明文；宽限期以服务端 `media sweep` 为主、桶生命周期为兜底；对象访问只走 S3 协议（`aws-sdk-java-v2`），必要时切 MinIO/OSS 只改配置 |
+| 目标 MySQL 实例是共享业务库（同机跑着 gitea/halo/lsky 等） | 误操作或权限过大会波及他人库 | 应用只用 `pushbox@%`（权限仅限本库）；Flyway 迁移脚本禁止出现 `USE`/跨库引用；root 弱口令需整改（§11.1） |
+| 时区/时钟漂移 | 签名时间窗拒收 | 服务端返回 `server_time`，SDK 自动校准一次；引导发送方开 NTP |
+
+---
+
+## 15. 附录：接入示例（复制即用）
+
+curl —— 这就是完整接入，无需任何额外步骤：
+
+```bash
+curl -sS -X POST "https://pushbox.example.com/message" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "channel": "83271504",
+    "secret":  "4f9c1e8a2b7d4c6e9f01a3b5c7d9e1f3",
+    "type":    "markdown",
+    "content": "主机 **prod-03** 近5分钟 CPU 均值 92%\n> [查看面板](https://grafana.local/d/abc)",
+    "sender_id":   "grafana",
+    "sender_name": "Grafana 告警",
+    "title": "[严重] CPU > 90%",
+    "level": "error",
+    "images": ["https://grafana.local/render/panel-7.png?height=400"],
+    "msg_key": "cpu-prod03-firing"
+  }'
+# → {"ok":true,"id":"01JZK…","seq":18482,"summary":"[严重] CPU > 90%",
+#    "media_status":"queued","media_count":1,"level":"error"}
+#   200 立即返回；服务端在合并窗口（默认 3s）内抓完图，再把图文齐全的一条帧推给设备（D24）。
+#   抓不到图只把该图位标 failed，消息与通知照常发，正文不受影响。
+```
+
+最小形式（4 个字段）：
+
+```bash
+curl -sS -X POST "https://pushbox.example.com/message" -H "Content-Type: application/json" \
+  -d '{"channel":"83271504","secret":"4f9c…","type":"text","content":"备份任务完成"}'
+```
+
+Python（无依赖，requests 即可；官方 SDK 也只是薄封装）：
+
+```python
+import requests
+requests.post("https://pushbox.example.com/message", json={
+    "channel": "83271504", "secret": "4f9c…",
+    "type": "text", "content": "构建 #1287 失败：go test ./...",
+    "sender_id": "ci", "sender_name": "CI", "level": "error",
+}, timeout=5).raise_for_status()
+```
+
+Java SDK（复用 `pushbox-core` 的 DTO 与序列化）：
+
+```java
+PushBox pb = PushBox.builder()
+    .baseUrl("https://pushbox.example.com")
+    .channel("83271504").secret("4f9c…")
+    .build();
+
+pb.send(SendRequest.builder()
+    .senderId("ci").senderName("CI").type(MsgType.TEXT).level(Level.ERROR)
+    .content("构建 #1287 失败：日志末尾如下")
+    .image("https://ci.local/artifacts/1287/chart.png")   // 可多次调用，最多 4 张
+    .msgKey("build-1287")              // 重试不会重复投递
+    .build());
+```
+
+带图告警（Alertmanager / Grafana 渲染图常见形态，只是多一个字段，接入流程不变）：
+
+```python
+requests.post("https://pushbox.example.com/message", json={
+    "channel": "83271504", "secret": "4f9c…",
+    "type": "markdown", "content": "**disk /data** 剩余 3%",
+    "sender_id": "alertmanager", "sender_name": "Alertmanager", "level": "error",
+    "images": ["https://grafana.local/render/panel-12.png"],   # 服务端抓取转存
+}, timeout=5)
+```
+
+各平台现成集成（P0 交付时逐个给可粘贴的片段）：Grafana / Zabbix / Prometheus Alertmanager webhook、Jenkins `curl` 后置步骤、GitHub Actions `curl` step、群晖 DSM 通知脚本、NAS 定时任务、Home Assistant `rest` service、Windows 计划任务 `Invoke-RestMethod`。
+
+---
+
+## 16. 决策确认结果（第五轮，已全部拍板）
+
+以下 11 项已由你选定，**不再是开放问题**；右列是对文档的连带修改，均已落到对应章节。
+
+| # | 议题 | 你的选择 | 落档位置 |
+|---|------|----------|----------|
+| 1 | 对外地址 | **开发 A：`http://<内网IP>:8080` 直连**；**生产 B：自签/内部 CA 的 HTTPS**（不追公网证书） | §11.1、§11.2、Android `BuildConfig.DEBUG` 才允许明文 HTTP（§7.5） |
+| 2 | 频道号码 | **A：8 位纯数字**（`channel_no CHAR(8)`，好记可口述）；防枚举靠统一 401 + 失败锁定 + 32 字符 secret | §3.2、§4.4 |
+| 3 | `level` 权限 | **B：分级 + 频道级上限** —— 第三方照常带 `level`，服务端按该频道 `max_level` 截断后才下发 | §3.2 `channels.max_level`、§5.1、§7.3 |
+| 4 | App 锁 | **B：PIN/生物识别，默认关闭**；开启后通知内容降级为"收到 1 条消息" | §7（P1 交付项） |
+| 5 | 设备数上限 | **5 台**（按 `group_id` 计活动设备），超出返回 `device_limit_reached` | §4.2、§5.2 |
+| 6 | Web 管理台 | **A：不做**，管理只靠 Android"我的" + 服务端 CLI（**后续已推翻**：改为新增跨空间只读 Web 管理台，见 §1 D28） | §12 P2 |
+| 7 | 多语言 | **A：仅中文**，但所有用户可见串必须走 `strings.xml`（不硬编码），将来加英文是纯翻译活 | §9、§12 P2 |
+| 8 | Java 取向 | **持久层：MyBatis-Flex**（放弃 JdbcTemplate/jOOQ）；**构建：Java 侧（`core`+`server`）Maven，Android 侧 Gradle Kotlin DSL + Version Catalog**，`pushbox-core` 源码唯一、两侧各挂一份构建脚本且都锁 `release=17`（详见 §10.1）；**数据库已建好**（库 `pushbox` + 账号 `pushbox@%`，§11.1） | §10.1、§11.1、§13 |
+| 9 | 内网图床 | **图片来源全部公网可访问（已确认）** ⇒ `allow-hosts` 恒为空、私网/CGNAT 段无例外；该配置项保留为将来接内网渲染服务的逃生阀（精确 `host[:port]`，且判断在 IP 校验之前） | §4.5、§11.1 |
+| 10 | `data:` 内联图 | **不支持**，出现非 `http/https` scheme 直接 `400 invalid_param` | §5.1 |
+| 11 | 通知时机 | **B：图文同步推送** —— 带 `images` 的消息在服务端等抓取到齐（预算 3s）再一起下发 | §4.5、§5.1、§5.3、§6.1（见下方说明） |
+
+**第 11 项的实现要点（改了默认时序，务必看）**：
+
+- "图文同步"发生在**服务端 → 客户端**这一跳；**第三方 → 服务端**的 `POST /message` 仍然立即返回 200（第三方普遍设 5–10s 超时，不能被我们的抓取拖黄）。
+- 服务端对带图消息建一个"待发通知"的合并窗口：全部 URL 到终态 **或** `pb.notify.media-wait` 预算（默认 3s）到期，才发出 `message` 帧（此时 `media[]` 已是 `ready/failed` 真实状态，Android 收到即可直接带图发通知）。
+- 预算到期但仍有未完成的：先把已有结果作为 `message` 帧发出（正文 + 已到的图），剩下的完成后用 `media_ready` 帧**原地补图，不重复发通知**。这条路径是兜底，不是常态。
+- 抓取失败（404/防盗链/SSRF 拦截/超时）计为终态 ⇒ **消息永远不会因为抓不到图而"卡住不发"**。
+- 纯文字消息零影响：无 `images` 就没有合并窗口，仍是毫秒级到账（P0 验收标准 ① 不变）。
+
+**剩余待补的真实输入：无**（§16 全部关闭，可以开工）。
+
+- ~~a. 内网图床精确 host~~ ✅ 已确认**图片来源全部为公网可访问地址** ⇒ `allow-hosts` 保持空列表，SSRF 私网全禁无例外（§4.5）。
+- ~~b. RustFS 的 AK/SK~~ ✅ 已用于实测（§4.5 结论表），凭据只留在部署机环境变量，未写进仓库。
+- ~~MySQL 建库~~ ✅ 已执行：库 `pushbox` 与账号 `pushbox@%` 就绪、`ngram_token_size=2` 已生效（§11.1）。
+
+> 一处需要留意的连带影响：§5.1 / §7 里以 **Grafana / Alertmanager 渲染图**为例，这类图 URL 必须**从公网（或从 `<存储机>` 这台服务器能公网路由到的地址）可达**。如果日后 Grafana 只暴露内网地址，抓取会被 SSRF 拦掉并在 3s 窗口内记为 `failed`（通知仍正常发出，只是不带图）—— 届时再按上面的逃生阀精确放行该 host，现在不预开任何口子。
+
+---
+
+## 17. 下一步建议顺序
+
+1. ~~建库 + RustFS 实测~~ ✅ **已完成（2026-10-13）**：库 `pushbox` + 账号 `pushbox@%` 就绪、`ngram_token_size=2` 中文全文实测命中；RustFS 基础读写/多部分/预签名/匿名拒读/**生命周期**全通过，**SSE-S3 未配主密钥不可用、SSE-C 可用** ⇒ 对象加密路线定为 `sse-c`（结论已写进 §4.5 与 §11.1）。
+   §16 待确认项已全部关闭，无阻塞输入的遗留问题。
+2. ~~搭骨架~~ ✅ **已完成（2026-10-13，与 §10.1 的偏离已回写进该节）**：根 `pom.xml`（`packaging=pom` 聚合 + `dependencyManagement` import `spring-boot-dependencies` BOM，Spring Boot 3.5.16 / MyBatis-Flex 1.11.8 / BC 1.86 / mysql-connector-j 9.7.0 / Flyway 11.7.2）+ `core/`（纯 JVM，**`release=17`**，**只用 Bouncy Castle lightweight** + Jackson，`CryptoVectorsTest` 产出 `testvectors/vectors.json`）+ `server/`（`release=21`）；`android/` 独立 Gradle 工程（Gradle 9.6.1 / AGP 9.2.1 内置 Kotlin / KSP 2.3.12 / Compose BOM 2026.02.01 / Room 2.7.2 / OkHttp 4.12.0），**中转模块是 `:pbcore` 而不是 `:core`**，用 `rootProject.file("../core/src/main/java")` 把同一份源码挂进来；`deploy/` 目前是 `run-dev.sh` + `env/local.env`（不入库）+ `probe/`，compose/Caddyfile 留到 P2。验证命令：`mvn -B -pl core test`（P0 时 16/16，2026-10-15 补入 W3b 的 canonical/密封盒用例后 **26/26 绿**）、`./gradlew :app:assembleDebug`、`node deploy/probe/p0-e2e.mjs`。
+   **Windows 开发环境两个必须记住的坑**：① 机器默认 `JAVA_HOME` 指向 JDK 8，所有 Maven/Gradle 调用都要显式给 `JAVA_HOME=D:/Apps/DE/Java/jdk-21.0.8`；② `android/local.properties` 里 **`sdk.dir` 只能用正斜杠**（`sdk.dir=D:/Apps/DE/Android/Sdk`）—— `Properties` 会把 `\A` 这类转义吃掉，写成 `D\:\Apps\...` 会让 AGP 拿到 `D:AppsDEAndroidSdk`，于是在 `SdkLocator` 抛一个"文件名、目录名或卷标语法不正确"的 `IOException`，堆栈完全不指向配置文件。
+3. **打通 P0 最小闭环**：curl 发**纯文字**消息 → Java 服务端入库并摘要 → WS 帧加密下发 → Android 出系统通知（带图链路与合并窗口属 P1）。
+   **当前状态（2026-10-14）**：`deploy/probe/p0-e2e.mjs`（一个"软件版 Android 设备"：自己生成两把密钥、逐字节复刻 §4.3/§4.4 的签名与帧加密）**22/22 全绿**，而且 `object-encrypt=none` 与 `sse-c` 两种服务端配置各跑过一遍。§12 的 ②③④⑤ 与幂等、凭据不泄露频道存在性、断线补齐、恢复码全量回放、跨分组隔离、设备上限 5、吊销即时失效、`max_level` 截断、`images[]` 校验与 `data:` 拒收全部通过；服务端侧另已覆盖 D24 图文同帧与 `media_ready`（⑭）、媒体读接口 200 代理回字节与"不带签名就 401"（⑮）、宽限期后真删对象并把槽位标成 `purged`（⑯）、服务端搜索（⑰）、清空整会话/整频道的 scope tombstone（⑱）、抓取失败重试补帧（⑲）、`sender_avatar` 转存与头像读接口（⑳）。**①「1s 内出通知」实测 49ms**（阈值 1000ms 未放宽），前提是把 dev 的 MySQL 换到本机 `127.0.0.1:3306` —— 之前它在远端库上稳定 4.4–8.6s，归因是"受理路径 4–5 次串行 SQL 往返 × 366ms RTT"，而"受理后到帧到达"两种拓扑下都是 0ms（完整对照表见 §11.1.1）。`pushbox-core` 单测 24/24 绿，`pushbox-server` 单测 130/130 绿（其中 DB/S3 类用例挂 `PB_S3_ACCESS_KEY` 门控，需要先 `source deploy/env/local.env`）。
+**同日另外收掉的两件事**：① **凭据外置**——`application-dev.yml` 里那个明文 MySQL 口令已改成 `${PB_DB_PASSWORD}`（值一直只在 `deploy/env/local.env`，`run-dev.sh` 已 source；改之前它会随仓库和 `mvn package` 的 jar 一起出去），现在配置文件里没有任何凭据，`password` 不留默认值是故意的：忘了 source 就该启动失败，而不是拿空口令去连库再被误判成"权限问题"。② **观测端点**——`/healthz` + `/actuator/prometheus` 按 §5.2 挂上并收成内网 only（实现细节与两个 YAML/测试坑见 §5.2 末尾）。
+   **服务端 JVM 用例补齐（69 → 112）**：新增 `FrameAssemblerCapTest`(6)、`ChannelServiceTest`(7)、`AbuseControlServiceTest`(6)、`IngestServiceTest`(11)、`DeviceGuardTest`(9)、`RequestsTest`(2)，把 §13 里"最值钱的判定都在库里/字节里"的那批断言从探针下沉到了 `mvn test`：`max_level` 截断与响应回显、`msg_key` 幂等只落一行、"频道不存在与密钥错同为 401"、错满 5 次进锁定期后**连正确凭据也 403**、归档频道拒写而历史保留、`images[]` 的 scheme/长度/条数校验发生在任何写库之前、`ts` 秒/毫秒/缺省三态归一；设备侧覆盖 Bearer 与四个签名头的缺失、±300s 窗口、nonce 长度与 409 重放（含"缓存键带 `device_id`，别的设备同 nonce 不受牵连"）、签名对 body/query/method/密钥四段的覆盖、吊销即刻失效、`seal` 五键齐全且设备侧能用 enc 私钥解回明文。**顺带修掉一个真实缺陷**：`FrameAssembler.capFrame` 旧实现按"超出的字节数"删**字符**，纯中文正文会一次删掉三倍需求量——7KB 的中文消息下发时正文被删空只剩一个省略号；已改为二分定位安全长度并回退半个代理对（`FrameAssemblerCapTest` ③④⑥ 是它的回归网）。仍然只有探针覆盖的：`resume_gap`（在 `PushboxWsHandler` 私有 `replay()` 里，脱离真 `WebSocketSession` 没法断言）、帧加密跨界、Android 侧行为。
+   **抓取队列有界（同日）**：`newFixedThreadPool` 的无界队列换成 `concurrency` 个 worker + `pb.media.queue-capacity`（默认 256）个等待位，并定义了"排不进去"的三种降级（窗口记 `queue_full` 并照常发第一帧 / sweep 放开 `running` 闸 / 头像回收在跑标记）——三条各自的漏法都不一样，写在一起是为了下次一眼看得出谁没收尾。契约与用例见 §4.5 的"有界语义"框，`server` 单测随之 110 → 112。
+   **对象加密接线（112 → 130，`core` 16 → 24）**：§4.5 的 `sse-c` 从"设计里的一句话"变成跑通的整条链路，读侧同时从 302 预签名改成服务端代理。四步各自的判分点：
+   - `core/KeyWrap`（8 例）：主钥封装格式定长 **61 字节 = `0x01 ‖ iv(12) ‖ ct(32) ‖ tag(16)`**，P3 的 C# 端要按同一格式对齐；错主钥/被篡改的任意一字节/不认识的版本号一律解不出（返回 `null` 而不是抛异常，好让调用方能按"退回未找到"处理）；`masterKeyFromConfig` 标准与 URL-safe base64 都收，非 32 字节一律拒。
+   - `MediaObjects`（桶上 7 例 + 配置 4 例）：三件套 SSE-C 头一次不带齐就是 400，**KeyMD5 必须自己算**；**"不带钥读必失败"这条断言写成 `statusCode()==400`**，它是"桶里落的是密文"的唯一直接证据；`DeleteObject` 在 SDK 2.55.15 里根本没有 SSE-C setter，实测无钥删除 SSE-C 对象就是 204，所以宽限期真删不受加密影响；`object-encrypt` 只认 `none|sse-c`，缺主钥/未知取值在**构造阶段**抛异常让进程起不来（已实测：`--pb.s3.object-encrypt=sse-c` 不给主钥，`mvn spring-boot:run` 直接失败），未知取值也不给"大概能用"的机会。
+   - `MediaSsePipelineTest`（7 例）：抓取即密文 → 代理读回明文；**一个槽位一把钥**（原图与缩略图共用同一列 `sse_key_wrapped`）；去重复用时把 `enc_mode`+封装钥一起复制，只复制对象键换来的是"永远读不出的图"；头像同桶同机制（`V3__sender_avatar_encryption.sql` 给 `senders` 补两列），覆盖写用 `reuseKey()` 延用旧钥以消除"新字节 + 库里旧钥"的读侧空窗；库里记 `none` 的历史明文行在开关打开后照样读得出（切换只影响新对象）；槽位状态 `deleted` → `purged` 的提示分工。
+   - 探针 `p0-e2e.mjs`：⑮ 从"302 + 匿名预签名取字节"改成"200 + 服务端代理字节 + 不带签名 401"，⑯ 的真删判据改成"槽位被标成 `purged`"（`markMediaPurged` 只在 `DeleteObject` 成功之后写，所以它等价于"桶里字节已删"；桶级证据仍在 `MediaPurgeServiceTest` ② 与 `MediaObjectsTest`），⑲/⑳ 去掉 `location`/`X-Amz-Signature`。**两种配置各跑一遍 22/22**：`none`（默认）与 `sse-c`（`--pb.s3.object-encrypt=sse-c --pb.s3.master-key=<测试用 base64>`）。
+   仍未收口的两处：① 桶里**现有对象全是明文**（`enc_mode='none'`），要它们变密文只能重新抓取/重写，本期不做历史迁移；② 生产主钥还没落地——`PB_S3_MASTER_KEY` 目前是空占位，开启前要用 `openssl rand -base64 32` 生成一份**并且永不轮换**（换了主钥，旧封装钥就解不开，等于图片全丢）。
+   **探针 ㉑（2026-10-16，第二十一轮）**：补拉那一圈循环此前只由代码读得出来，没有判据钉着。判法是"断开设备 → 发 12 条 → 用 `backlog[0].seq - 1` 重连"，断的是**12 条全到、只回一次 `resume_ok`、不误报 `resume_gap`、重放帧一律 `notify=false`**；批大小做成 `pb.ws.replay-batch`（默认 500），跑法 `--pb.ws.replay-batch=5` 与 ⑬ 的 `rotate-after-frames` 同一套路（默认值下"落后条数 > 一批"这条路要攒够 501 条才看得见）。同一轮服务端 `mvn -o test` **174/174**（0 skipped，先 `source deploy/env/local.env`），探针在默认配置下 **21/21**（⑬/⑯/⑲ 是环境变量门控的分支，不计入这一轮的跑法）。
+   Android 侧 `:app:assembleDebug` 通过、APK 产出，`dexdump` 已确认 record 与 `java.util.Base64` 脱糖真实发生。**剩下的收口必须落到真机**（当前没有 adb 设备连着，通知/重连/重装这三项无法由软件层代替——探针证明的是"服务端与协议正确"，不是"Android 的 Room 入库与通知实现正确"）：手机与开发机同网段 → 注册页填 `http://<开发机局域网>:8080` → 抄下恢复码并确认 → "新建频道"拿 `channel_no` + `secret` → 用页面回显的 curl 发一条 → 验 ①；开飞行模式 30min 再关，验 ② 补齐且不重复；卸载重装输恢复码，验 ③ 历史文字 100% 回来；再拿一台**不注册**的设备，验 ④ 它什么都拿不到。
+   **P1 的 Android 收口已落到真机（2026-10-16 模拟器 Pixel 形态，第二十一轮）**：① 头像 200 那一支实测写出 `files/avatars/6011fc58…`（= `sha256("verify-bot")`）并让通知带上 `largeIcon=Icon(typ=BITMAP size=132x132)`，负缓存标记 `dcf1f059….absent`（= `sha256("ci-bot")`）跨启动仍在；② 4 张图排成 2×2，第 2/4 格各自显"已失效"而 1/3 正常渲染（每槽状态）；③ 静音会话既不出通知也不进角标，点进会话后那一组通知被撤（活动记录 8→4、前台服务 `number=0`）；④ 全局搜索命中 → 会话滚动到那条并高亮，"原图"对话框渲染出真图；⑤ **断网重连补齐**：黑洞期间服务端日志仍记了"在线下发=1"（seq 1963 打进死链），撤掉规则后带 `since_seq=1846` 重连，那条消息出现在会话里——这是 ㉑ 那条循环在客户端侧的对应证据。
+4. 补 P1 Android 体验（图文同步下发/筛选/搜索/通知分组/App 锁/保活实测矩阵），期间并行准备 P2 的指标与备份演练（**此处原写"不做 Web 管理台"，后续已推翻并落地跨空间只读管理台，见 §1 D28**）。
+5. Windows（P3）**已启动，不再等协议冻结**：`vectors.json` 的 C# 对齐已于 2026-10-15 跑绿（§13，现全量 `dotnet test` 556/556、向量取证 21 条），工程骨架、四原语封装、`FrameChannel`（WS 信封，由 W1 的 `FrameCodec` 换掉）与 `RestCanonical`/`RestSeal`（REST canonical + 密封盒）、§5.3 帧 DTO 绑定（W3c）、`IdentityStore`（W4）、首启 register/join 两屏（W5）、§5.3 一条连接的握手/验签/心跳/断因（W6）、§3.3 本地库 `DeviceStore`（W7：SQLite + FTS5，游标与消息同事务、未读由游标推导）、§7.2/§6.2 的 `SyncEngine`（W8：退避重连 + `resume_gap` 转 REST 补拉 + 按 `msg_id` 去重 + tombstone 两形态 + `media_ready` 原地回填）、§5.2 的 `ReadReporter`（W9：已读上报 + 离线攒批 + 游标只增不减）、§4.5 的 `MediaCache`/`MediaLoader`（W10：服务端代理取字节 + 两级缓存"先问缓存" + 404 hint 映射成对应占位 + 头像只进内存）与 §7.4/§3.2 的搜索（W11：`SearchService` 两段合并 + `SearchText` 的 snippet/高亮 + `DeviceClient.SearchAsync` 签名 GET）与 §8.1/§9 的 UI 骨架（W12：`MainWindow` 双栏 + 窄窗退化、`Themes/` 两份 token 字典跟随系统深浅色、`Data/Markdown` 解析 + `Controls/` 渲染、`Views/MainModel` 判定）与 §8.1 的系统集成（W13：`H.NotifyIcon.Wpf` 托盘 + 裸 WinRT `ToastNotificationManager` + `Settings/ClientSettings` 落盘 + `Integration/InstanceHandoff` 单实例 + `pushbox:` 协议唤起会话 + `HKCU\...\Run` 自启与静默时段）均已落地（§8.4 W1–W13）；§5.2/D13 的删除与清空（W14：`DeleteReporter` 的乐观移除 + 回滚票 + 确认后驱逐媒体缓存，两发签名 DELETE 打在真服务端上）也已落地（§8.4 W14）。**W6 验收里"拔网线 30s 恢复后补齐缺失 seq"已成立，且整条链路已在真服务端上量过一遍**：`PushBox.LiveCheck`（§12 P3 十二条判据、真 `ClientWebSocket` + 真 Java 服务端）10/10 通过，其中验收②「本机已读 → 他端红点消失」实测 33–47 ms（W14 复跑三次 33–37 ms，没有因为多了两发 DELETE 而退化），第 ⑦ 条是带 `size=thumb` 的签名取图打到真 `MediaController`（404 hint=`media` → 「图片已失效」占位，失败的取图不落盘），第 ⑧ 条是用户真会打出来的那种词（中文 + 空格 + `%` + `&`）打到真 `SearchController`：转义后的 query 被原样验签、密封盒解得开、本地那半 3 条不因合并而丢，第 ⑨/⑩ 条是两发 §5.2 签名的 DELETE 打到真验签上（故意打在服务端并没有的行上）：`404 hint=message` 读成"本来就没有这条、不回滚"，`deleted=0` 读成"幂等成功、回滚票没用上"。**§12 P3 验收③「与 Android 同一条消息渲染结果一致」随 W12 达成，而且判据是断言不是人眼**：渲染拆成 `Data/Markdown`（§9.2 支持集：标题/粗体/行内码/代码块/列表/链接/引用/表格，无斜体、无 `---`、表格要有表头分隔行，与 Android 的 Markwon 口径一致）与 `Controls/MarkdownView`+`BubbleView`+`MediaStrip`（度量全在常量里：正文 15/23、行高 64、头像 44 圆角 6、气泡内边距 12×10、竖条 3px、图位 220×165），判定全在 `Views/MainModel`（不碰 WPF），所以 `RenderTest`/`MarkdownTest`/`MainModelTest` 能在 STA 线程上拿一份合成的 `MarkdownStyle` 逐条断言；头像色复刻 Android 的 31 多项式哈希并把 `"hello".hashCode()==99162322` 钉成固定向量（§8.2 第 33 条）。W12 里两处**刻意的未完成**：会话行头像仍是首字占位（W13 把那批字节消费在了 toast 的 `appLogoOverride` 上，**会话列表那一侧的异步填图仍然没做**（§9.2 那个 44dp 圆角 6 的头像图在 PC 上目前还是首字占位，它不属于 §8.4 的任何一项，W15 之后要单独收））、§9.3 的 200ms 骨架屏没做（本机 SQLite 读在 50ms 内，占位反而闪）。**W13 已落地（2026-10-15，本步 +132 例、全量 442/442 绿，真服务体检仍 8/8 不退化）**：`INotifier` 的空实现换成了 `Notify/ToastNotifier`（引擎一行没改），通知按"判定（`AlertPolicy`）→ 计划（`ToastPlan`）→ 转录（`ToastXml`）→ 交给系统"分四层，静音是 `<audio displayOnly="true">` 而不是省略 `<audio>`（§8.2 第 39 条）；点击回会话走 `pushbox:` 协议 + 单实例命名管道，未打包 WPF 要自己写 AUMID 与协议那两处 HKCU；免打扰那条门照 Android 留在引擎，`IsMuted` 按 `(channel_no, sender_id)` 读。**两条验收的实测**：① "Toast 点击能定位到具体会话"——`--notify-smoke` 量到 `registered=True` 且协议指向当前 exe，URI 编解码（`ToastProtocolTest` 22 例）、真命名管道转发（`SystemIntegrationTest`）与"URI 真落在那一条会话"（`MainWindowTest` 的 STA 用例）各有断言，只剩"系统在真点击时把进程叫起来"这一段要人点一次；② "`max_level` 截断过的消息在 PC 端强度与手机端一致"——PC 读的就是截断后的 `level`，三档映射与 Android 的 `IMPORTANCE_HIGH/DEFAULT/LOW` 一一对应、不认识的值落低端，静默窗内 `info`/`warning` 降级而 `error` 豁免（真机实测 `quiet_info=Silent quiet_error=HeadsUp`）。**W15 已落地（2026-10-15，本步 +38 例、全量 517/517 绿）**，三件事各自的判法：① **日志脱敏**——`Logging/AppLog` 是全局唯一能写日志的一页，每个公开入口只收类型化小字段（错误码/计数/游标/毫秒/异常**类型名**），所以"把正文传进来"在签名层面就没有路，落盘前再由 `PrivacyGate` 那五层网兜（敏感键名 → 120 字符以上**整值替换而不是截断** → `k=v`/JSON/URL query 三种转储形状 → ≥40 b64 或 ≥32 hex 的凭据形状 → 异常只留类型名与堆栈）；**验收「抓 log 目录 grep 不到任何 `body` 片段」不是"记得别打正文"，而是把临时日志目录里的每本文件读回来 grep**（边写边读要 `FileShare.ReadWrite`）。崩溃两个挂钩只写文件，这一页没有 `HttpClient` 也没有 URL——"崩溃上报关闭"在代码里就不成立为反例。接入点是五处（同步循环、删除、媒体、通知、App 装配），顺带修掉一个真实缺陷：`SaveLastAppliedSeq` 在身份文件缺失时把同步循环带崩在收工那一行（§8.2 第 56 条）。② **安装包**——`windows/installer/PushBox.iss` + `build-installer.sh`（`dotnet publish -c Release -r win-x64 --self-contained true` → 56MB 包），三条拍板都写在脚本注释里：self-contained（"干净机器"不接受"请先装运行时"，证据是 `{app}` 里那五本 DLL）、per-user（`PrivilegesRequired=lowest` + `{localappdata}`，因为这一版要写的 HKCU 与要落的库本来就在当前用户下，实测全程无 UAC）、版本号只从 csproj 的 `<Version>` 来。装/覆盖/卸载三段 `/VERYSILENT` 退出码全 0；卸载只删**确实指向 `{app}`** 的那三处 HKCU，`%LOCALAPPDATA%\PushBox` 刻意保留（DPAPI 绑用户，删了就没有"重装认回同一个 Space"）；`AppMutex` 没用，因为单实例那把锁按 exe 全路径派生，没有静态名可写。**装机版 + 一个 `pushbox:` 参数在没注册的机器上冷启动会崩在 dispatcher**（`HandleTarget` 直接去开主窗 → `identities.Load()` 抛 `FileNotFoundException`）——这是打真包才撞得见的第二个真实缺陷，已改成"没身份就什么都不做"（§8.2 第 57、58、61 条）。③ **自签 CA**——代码侧零改动（裸 `new HttpClient()` / `new ClientWebSocket()`，全项目没有任何绕过校验的回调），接法只有一种：`certutil -addstore -user Root ca.cer`（当前用户，不需要管理员）；三态实测（一次性 CA + Node HTTPS 靶子 + 临时探针，跑完全拆）给出两条运维口径：**换证书要重启应用**（正在跑的进程不回头重读根存储，WS 重连不算新进程），`PartialChain` 只意味着根没装或装到了别的用户名下。环境搭法与目录约定见 §8.3 与 `docs/Windows开发环境安装教程.md`（其 §5 是 Inno 的实测装法与验收表）。**至此 §8.4 的 17 项全部 ✅，P3 不再有"下一步"**：剩下的只有 W12 那两处**刻意的未完成**（会话行头像填图、§9.3 的 200ms 骨架屏，判断依据在原处）与运维侧的两件事（生产主钥 `PB_S3_MASTER_KEY` 落地、真实 CA 下发），都不属于本节。

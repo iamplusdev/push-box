@@ -1,0 +1,9 @@
+<Application x:Class="PushBox.Windows.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:PushBox.Windows">
+    <!-- 没有 StartupUri：§7.5 要先判断本机是否已有设备身份，首启两屏和主窗口只能有一个被 Show -->
+    <Application.Resources>
+
+    </Application.Resources>
+</Application>

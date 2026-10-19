@@ -1,0 +1,75 @@
+{
+  "uid": "pushbox-ops",
+  "title": "PushBox 运维",
+  "tags": ["pushbox"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "在线设备数",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "pushbox_ws_online" }],
+      "description": "持有加密长连接的设备数，掉斜线就是掉线潮（§10.1 WS 掉线率）"
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "抓取队列深度",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "pushbox_media_queue_depth" }],
+      "description": "外链抓取排队中的任务数，涨高就是积压（§10.1 队列积压）"
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "限流命中（按维度）",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "rate(pushbox_ratelimit_rejected_total[5m])", "legendFormat": "{{dim}}" }],
+      "description": "channel/ip/device 三维限流命中速率（§10.1 限流命中）"
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "入站拒绝（配额/白名单/凭据锁/抓图频控）",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "rate(pushbox_ingest_quota_exceeded_total[5m])", "legendFormat": "日配额" },
+        { "refId": "B", "expr": "rate(pushbox_ingest_sender_rejected_total[5m])", "legendFormat": "白名单" },
+        { "refId": "C", "expr": "rate(pushbox_ingest_credential_locked_total[5m])", "legendFormat": "凭据锁定" },
+        { "refId": "D", "expr": "rate(pushbox_media_fetch_rejected_total[5m])", "legendFormat": "抓图频控" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "受理速率与耗时",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(http_server_requests_seconds_count{uri=\"/message\"}[5m]))", "legendFormat": "POST /message req/s" },
+        { "refId": "B", "expr": "sum(rate(http_server_requests_seconds_sum{uri=\"/message\"}[5m])) / sum(rate(http_server_requests_seconds_count{uri=\"/message\"}[5m]))", "legendFormat": "p~avg 秒" }
+      ],
+      "description": "验收①（1s 内）看这条平均耗时；uri 标签以实际 Boot 归一化为准"
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "JVM 堆与 GC",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(jvm_memory_used_bytes{area=\"heap\"})", "legendFormat": "堆已用" },
+        { "refId": "B", "expr": "rate(jvm_gc_pause_seconds_sum[5m])", "legendFormat": "GC 停顿/秒" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,157 @@
+# §11.2 生产部署。两种拓扑二选一，都靠 .env 里的地址区分，本文件不用改：
+#   A. 复用外部已有的 MySQL/RustFS —— 只起 pushbox-server + caddy，
+#      PB_DB_URL 指 jdbc:mysql://<DB_HOST>:3306/...、PB_S3_ENDPOINT 指 http://<S3_HOST>:7101。
+#   B. 完全独立部署 —— 取消下方 mysql/rustfs 两段注释，地址改成 http 服务名
+#      jdbc:mysql://mysql:3306/... 与 http://rustfs:9000。
+#      端口别照抄拓扑 A：rustfs/rustfs:latest 镜像监听 9000(S3)/9001(Console)，
+#      而 A 那台在跑的实例挂在 7101。配错了 /healthz 仍然会说 storage=up（它只判配置非空，
+#      见 HealthzController.storageConfigValid），要到第一条带图的消息才炸。
+#      同一段里桶 pushbox 也不会自动出现，需要建一次：mc mb local/pushbox（步骤见 deploy/QUICK-START.md）。
+#   具体主机名与 TLS 口径写在 deploy/env/prod.env.example（模板里不放任何真实地址）。
+# 监控栈（prometheus + grafana）单独一本文件，想要监控时才多传一个 -f：
+#   docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
+# 为什么不留在本文件里挂 profile：见 docker-compose.monitoring.yml 顶部说明。
+# 凭据一律来自 env（见 deploy/env/prod.env.example），禁止写进本文件、禁止提交。
+
+name: pushbox
+
+services:
+  pushbox-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    # 引用 CI 推到 Docker Hub 的那个名字，本文件同时留 build: 段：镜像在远端存在就拉，
+    # 拉不到（自己 fork、离线、改了代码）才本地编。写成本地名 pushbox/server 的话，
+    # 用户 clone 下来 up 的一定是自己编译的产物，CI 打的 latest/semver/sha 标签对使用者毫无意义。
+    image: docker.io/iamplusdev/push-box:1.1.0
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      # 这里只透传 PB_* 名字，映射到 spring.datasource.* 的唯一地点是 application-prod.yml。
+      # 写成 SPRING_DATASOURCE_PASSWORD 也能跑，但环境变量优先级压过 yml，等于两个地方各声称
+      # 拥有同一个键；排查时盯 yml 会看不出真实取值来自哪。
+      # 地址不给默认值：内置任何一套拓扑的地址，另一套就要等到 JDBC/SDK 超时才发现配漏，
+      # 而在 compose 解析阶段报错是免费的。两套拓扑的取值写在上面和第 1 节的注释里。
+      PB_DB_URL: ${PB_DB_URL:?PB_DB_URL 未设置}
+      PB_DB_USERNAME: ${PB_DB_USERNAME:-pushbox}
+      PB_DB_PASSWORD: ${PB_DB_PASSWORD:?PB_DB_PASSWORD 未设置}
+      # 这三项从 ${VAR:?} 改成可空：PB_STORAGE_TYPE=local（拓扑 C，不配对象存储）时它们本来就不该有值，
+      # 而解析阶段的硬拦会把这条拓扑直接堵死。空值不会静默——S3Config 在 s3 模式下逐个点名
+      # "pb.s3.endpoint 不能为空"并拒绝启动，只是从 compose 解析挪到了进程启动，仍然早于第一条消息。
+      PB_S3_ENDPOINT: ${PB_S3_ENDPOINT:-}
+      PB_S3_REGION: ${PB_S3_REGION:-us-east-1}
+      PB_S3_BUCKET: ${PB_S3_BUCKET:-pushbox}
+      PB_S3_ACCESS_KEY: ${PB_S3_ACCESS_KEY:-}
+      PB_S3_SECRET_KEY: ${PB_S3_SECRET_KEY:-}
+      # 存储拓扑开关：s3（默认，用上面那组 PB_S3_*）| local（用下面的目录，不碰对象存储）。
+      # local 模式下 PB_STORAGE_LOCAL_PATH 指向的目录必须对 uid 10001 可写，本文件已把 ./data/media 挂进去。
+      PB_STORAGE_TYPE: ${PB_STORAGE_TYPE:-s3}
+      PB_STORAGE_LOCAL_PATH: ${PB_STORAGE_LOCAL_PATH:-/app/data/media}
+      PB_S3_PATH_STYLE: ${PB_S3_PATH_STYLE:-true}
+      # none|sse-c；填 sse-c 时 PB_S3_MASTER_KEY 必须是 base64 的 32 字节，缺失/长度不对进程拒绝启动。
+      # 这一项带默认值，所以 ${VAR:?} 卡不住"忘配加密"——prod 里 object-encrypt=none 会由
+      # ProdPlaintextMediaGuard 在启动时拒绝：要么填 sse-c，要么显式打开下面的迁移期逃生阀。
+      PB_S3_OBJECT_ENCRYPT: ${PB_S3_OBJECT_ENCRYPT:-none}
+      PB_S3_MASTER_KEY: ${PB_S3_MASTER_KEY:-}
+      # 只在迁移期用：承认"新对象继续按明文写"。留空（默认）即明文配置直接启动失败，
+      # 因为明文桶不会报错、健康检查照过，唯一的后果是图片/头像在对象存储里裸奔。
+      PB_ALLOW_PLAINTEXT_MEDIA: ${PB_ALLOW_PLAINTEXT_MEDIA:-}
+      # Web 管理台登录口令：生产环境必须设置强随机值（openssl rand -base64 32），留空则禁用管理台。
+      # 管理台经 Caddy 公网可达，弱口令等于裸奔；口令错到阈值会按来源 IP 锁定（返回 429）。
+      PB_ADMIN_SECRET: ${PB_ADMIN_SECRET:?PB_ADMIN_SECRET 未设置，请使用 openssl rand -base64 32 生成强随机值并填入 .env 文件}
+      # JWT 的 HS256 签名钥：与 PB_ADMIN_SECRET 必须是两个不同的值，否则改口令等于作废全部 token、
+      # 换签名钥等于改口令，两边都轮换不动。至少 32 字节；短了或留空都拒绝启动。
+      # 生成：openssl rand -base64 32
+      PB_ADMIN_JWT_SECRET: ${PB_ADMIN_JWT_SECRET:?PB_ADMIN_JWT_SECRET 未设置，请使用 openssl rand -base64 32 生成（必须与 PB_ADMIN_SECRET 不同）}
+      # §5.2 运维端点准入的额外网段（逗号分隔 CIDR）。默认口径是"只放行环回"，所以这里的默认值是空。
+      # 以前它默认 172.16.0.0/12，代价是"留空 = 把 172.16~172.31 整整 100 万个地址放进门"：
+      # ${VAR:-default} 在变量为空串时也会用上默认值，所以在 .env 里写 PB_SECURITY_INTERNAL_CIDRS=
+      # （想按文档口径收成"只放行环回"）实际得到的是那条整段——2026-10-19 的生产实跑就是这么撞出来的。
+      # 要跑 Prometheus 抓取，就显式写这条 compose 网络实际分到的子网：
+      #   docker network inspect <project>_default -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}'
+      # （抓取目标是 pushbox-server:7404/actuator/prometheus，端口写死在 deploy/monitoring/prometheus.yml，
+      #  改了 PB_SERVER_PORT 要同步改那里。）
+      # 另外服务端只看 getRemoteAddr()（不看 X-Forwarded-For，prod 里 forward-headers-strategy: none），
+      # 所以 Caddy 在前面时这一条判的是"Caddy 那台容器/那个网段算不算内网"，不是客户端。
+      PB_SECURITY_INTERNAL_CIDRS: ${PB_SECURITY_INTERNAL_CIDRS:-}
+      # prod profile 不是 dev，logback 的滚动文件 appender 会生效，落在这条路径下。
+      # 卷必须是 named volume：镜像里 /app/logs 属 pushbox(10001)，而 Docker 新建的宿主目录属 root，
+      # 用 ./data/logs 绑定挂载会把那个 chown 覆盖掉，进程就写不进日志了。
+      PB_LOG_DIR: /app/logs
+      # 端口这一项必须一起透传：本文件的端口映射、上面的 healthcheck、Caddy 的上游三处都读它。
+      # 只透传其中两处的话，改 PB_SERVER_PORT 会让容器起在 7404、映射却指向新端口，
+      # 探活一直失败，Caddy 又因为 depends_on: service_healthy 永远不起。
+      PB_SERVER_PORT: ${PB_SERVER_PORT:-7404}
+    volumes:
+      - server_logs:/app/logs
+      # 本地文件系统存储模式需要挂载数据目录（PB_STORAGE_TYPE=local 时生效）
+      - ./data/media:/app/data/media
+    healthcheck:
+      # 只做 TCP 探活：JRE 镜像里没有 curl/wget，而 /healthz 会真连库，
+      # 用业务探活做 healthcheck 等于让一次数据库抖动就把容器判死。
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${PB_SERVER_PORT:-7404}"]
+      interval: 10s
+      timeout: 3s
+      start_period: 40s
+      retries: 6
+    restart: unless-stopped
+    # 业务流量只经 Caddy：反代在同网桥按服务名访问 pushbox-server:${PB_SERVER_PORT}，公网侧看不到 ${PB_SERVER_PORT}。
+    # 这里把 ${PB_SERVER_PORT} 绑到环回，是为了让文档里的 `curl http://localhost:${PB_SERVER_PORT}/healthz` 真的能通
+    # （机器外仍然打不开，TLS/Caddy 的那三道门一个没绕）。
+    # 需要"手机直连明文 ${PB_SERVER_PORT}"调试时再放开下面那行，代价很清楚：明文链路 + 绕过 Caddy 的证书、
+    # /actuator 屏蔽与请求体上限，用完记得注释回去。
+    ports:
+      - "127.0.0.1:${PB_SERVER_PORT:-7404}:${PB_SERVER_PORT:-7404}"
+      # - "${PB_SERVER_PORT:-7404}:${PB_SERVER_PORT:-7404}"
+
+  caddy:
+    image: caddy:2
+    # Caddyfile 里的站点地址与后端端口各读一个变量：都只在 .env 改一次，不在文件里改两处。
+    # 给默认值是刻意的——Caddy 的 {$VAR:default} 兜底同义，但让 compose 的渲染结果一眼可见。
+    environment:
+      PB_CADDY_HOST: ${PB_CADDY_HOST:-pushbox.internal}
+      PB_SERVER_PORT: ${PB_SERVER_PORT:-7404}
+    ports:
+      - "${PB_HTTP_PORT:-80}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      pushbox-server:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---- 拓扑 B 才需要：独立 MySQL / RustFS ----
+  # mysql:
+  #   image: mysql:8.4
+  #   # ngram_token_size=2 是 §3.2 中文全文索引的前提，必须在初始化时就带上。
+  #   command: --ngram_token_size=2
+  #   environment:
+  #     MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD 未设置}
+  #     MYSQL_DATABASE: pushbox
+  #     MYSQL_USER: pushbox
+  #     MYSQL_PASSWORD: ${PB_DB_PASSWORD:?PB_DB_PASSWORD 未设置}
+  #   volumes:
+  #     - ./data/mysql:/var/lib/mysql
+  #   restart: unless-stopped
+  #
+  # rustfs:
+  #   image: rustfs/rustfs:latest
+  #   environment:
+  #     RUSTFS_ACCESS_KEY: ${PB_S3_ACCESS_KEY:?PB_S3_ACCESS_KEY 未设置}
+  #     RUSTFS_SECRET_KEY: ${PB_S3_SECRET_KEY:?PB_S3_SECRET_KEY 未设置}
+  #   volumes:
+  #     - ./data/rustfs:/data   # 宿主目录必须 chown 10001:10001，否则 RustFS 拒绝写
+  #   restart: unless-stopped
+
+  # prometheus / grafana 不在这里，见 docker-compose.monitoring.yml。
+  # 原因是 compose 的 ${VAR:?} 插值发生在"整本文件"层面，跟 profile 有没有激活无关：
+  # grafana 那句 GRAFANA_ADMIN_PASSWORD:? 会把"没开监控"的常规部署也一起卡死 ——
+  # docker compose up -d pushbox-server 在解析阶段就报 "required variable ... is missing"，
+  # 而按本文件顶部与 prod.env.example 的口径，这个变量只在跑监控时才需要。
+  # 把监控两个服务挪到单独一本文件，主文件的必填项就只剩"真的必填"的那七个。
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
+  server_logs: {}

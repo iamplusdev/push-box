@@ -1,0 +1,39 @@
+# §10.1 监控栈。必须与主文件一起用，且只有想要监控时才传：
+#   docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
+#
+# 为什么单独一本文件（而不是留在主文件里挂 profile "monitoring"）：
+# compose 的 ${VAR:?} 插值作用于整本文件，跟 profile 有没有被激活无关。grafana 那句
+# GRAFANA_ADMIN_PASSWORD:? 一旦写在主文件里，"只起服务端"这条最常见的部署路径就会在解析阶段
+# 直接报 required variable is missing —— 一个永远不会被启动的容器，把主流程要掉了必填项的命。
+# 挪出来之后，主文件的必填项就只剩 prod.env.example 顶部承诺的那七个。
+#
+# 抓取路径：prometheus 在本项目的 default 网络上直连 pushbox-server:7404/actuator/prometheus，
+# 不经 Caddy（Caddyfile 对 /actuator/* 一律 respond 403）。服务端那一侧的准入默认只放行环回
+# （主文件的 PB_SECURITY_INTERNAL_CIDRS 默认为空），所以开监控必须把这条网络实际分到的子网写进 .env：
+#   docker network inspect pushbox_default -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}'
+# 不写的话进程会好好的、指标一个也抓不到（403），而 Caddy 那侧本来就该 403 —— 两边都对，只是没接通。
+
+name: pushbox
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./data/prometheus:/prometheus
+    # 只绑回环：指标端点不经鉴权，别把它裸露到局域网。反过来说 /actuator 本身也没鉴权，
+    # 生产要么只在内网抓取、要么在 Caddy 上给 /actuator 加基本认证。
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD 未设置}
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./data/grafana:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped

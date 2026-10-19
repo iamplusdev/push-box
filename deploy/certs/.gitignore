@@ -1,0 +1,6 @@
+# deploy/ca/gen-ca.sh 的产物：私钥与证书一律不入库。
+# 尤其 pushbox_ca.key 是根 CA 私钥，生成后应立即离线保存，本机/仓库都不该留。
+*.key
+*.crt
+*.csr
+*.srl

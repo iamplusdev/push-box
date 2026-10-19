@@ -1,0 +1,303 @@
+<resources>
+    <string name="app_name">PushBox</string>
+
+    <!-- 常驻服务（§7.2） -->
+    <string name="notif_channel_service_name">后台监听</string>
+    <string name="notif_channel_service_desc">保持与 PushBox 服务端的长连接，让消息能随时到达。</string>
+    <string name="notif_channel_service_text">正在监听 PushBox 消息</string>
+
+    <!-- 会话通知（§7.3） -->
+    <string name="notif_group_name">PushBox 消息</string>
+    <string name="notif_self_name">我</string>
+    <string name="notif_conversation_desc">来自 %1$s 的消息</string>
+    <string name="notif_hidden_title">PushBox</string>
+    <string name="notif_hidden_text">收到 1 条新消息</string>
+    <string name="notif_action_mark_all_read">全部已读</string>
+    <string name="notif_big_picture">点击查看大图</string>
+
+    <string name="state_disconnected">未连接</string>
+    <string name="state_connecting">连接中</string>
+    <string name="state_connected">已连接</string>
+    <string name="empty_conversations">还没有会话，去「频道」创建第一个频道</string>
+    <string name="empty_messages">还没有消息</string>
+    <string name="tab_messages">消息</string>
+    <string name="tab_channels">频道</string>
+    <string name="tab_me">我的</string>
+    <string name="mine_tab_access">接入</string>
+    <string name="mine_tab_settings">设置</string>
+
+    <!-- 复制 -->
+    <string name="copy">复制</string>
+    <string name="copied">已复制到剪贴板</string>
+
+    <!-- 服务器历史（§11.1：换网络就换地址，记住最近的省得重打） -->
+    <string name="server_history_title">最近使用</string>
+
+    <!-- 首启（§7.5） -->
+    <string name="enroll_title">连接你的 PushBox</string>
+    <string name="enroll_server">服务器地址</string>
+    <string name="enroll_server_hint">自建服务端地址，如 https://push.example.com 或 http://192.168.1.10:8080</string>
+    <string name="enroll_server_required">请先填写服务器地址</string>
+    <string name="enroll_server_invalid">地址要带 http:// 或 https:// 前缀，中间不要有空格</string>
+    <string name="enroll_device_name">设备名称</string>
+    <string name="enroll_recovery_code">恢复码（可选）</string>
+    <string name="enroll_create">创建我的空间</string>
+    <string name="enroll_join">我有恢复码</string>
+    <string name="enroll_working">正在注册…</string>
+    <string name="recovery_code_title">这是你的恢复码</string>
+    <string name="recovery_code_body">它是找回全部历史与设备的唯一凭据，泄露等于任何人可读你的消息。抄下来再离开这一页。</string>
+    <string name="recovery_code_confirm">我已抄好</string>
+    <string name="channel_create">新建频道</string>
+    <string name="channel_name">频道名称</string>
+    <string name="channel_created">接入信息（密钥只显示这一次）</string>
+    <string name="channel_curl_hint">把下面这行填进第三方软件即可推送：</string>
+    <string name="channel_list_title">我的频道</string>
+    <string name="channel_loading">加载频道中…</string>
+    <string name="channel_none">还没有频道，点上方「新建频道」创建，或用频道号+密钥「加入频道」</string>
+    <string name="channel_unnamed">未命名频道</string>
+    <string name="channel_rotate">重置密钥</string>
+    <string name="channel_max_level">提醒强度上限</string>
+    <string name="channel_archive">归档</string>
+    <string name="channel_archive_title">归档此频道？</string>
+    <string name="channel_archive_desc">归档后该频道停止接收新消息（第三方投递会收到 403），历史消息保留。此操作不可撤销。</string>
+    <string name="channel_rename">重命名</string>
+    <string name="channel_rename_title">重命名频道</string>
+    <string name="channel_rename_hint">频道名称</string>
+    <string name="channel_clear">清空</string>
+    <string name="channel_clear_title">清空此频道？</string>
+    <string name="channel_clear_desc">删除该频道下的全部历史消息与图片（各端同步移除），频道本身与接入地址保留。此操作不可撤销。</string>
+    <string name="channel_rotate_working">重置中…</string>
+    <string name="field_channel_no">频道号</string>
+    <string name="field_channel_secret">频道密钥</string>
+    <string name="field_curl">接入命令</string>
+    <string name="secret_once_hint">密钥只显示这一次，请立即复制保存。</string>
+    <string name="channel_name_optional">频道名称（留空则用设备名）</string>
+
+    <!-- 「我的」设置页 -->
+    <string name="section_connection">连接状态</string>
+    <string name="section_server">服务器</string>
+    <string name="section_device">设备信息</string>
+    <string name="section_appearance">外观</string>
+    <string name="theme_system">跟随系统</string>
+    <string name="theme_light">浅色</string>
+    <string name="theme_dark">深色</string>
+    <string name="appearance_font_scale">字号</string>
+    <string name="font_small">小</string>
+    <string name="font_normal">标准</string>
+    <string name="font_large">大</string>
+    <string name="appearance_summary_lines">摘要行数</string>
+    <string name="summary_lines_1">1 行</string>
+    <string name="summary_lines_2">2 行</string>
+    <string name="section_data">数据</string>
+    <string name="data_local_count_label">本地消息数</string>
+    <string name="data_local_size_label">本地占用</string>
+    <string name="data_clear">清空本地缓存</string>
+    <string name="data_clear_desc">只删除本机已缓存的消息记录，不影响服务器数据，也不影响设备身份。</string>
+    <string name="data_clear_confirm">将清空本机所有会话与消息缓存，身份与服务器地址保持不变。确定继续？</string>
+    <string name="data_clear_media">清理已读图片缓存</string>
+    <string name="data_clear_media_desc">只清本机已读消息关联的图片文件：未读消息图片、消息正文、会话列表与设备身份都不动。下次进对话页需要图片时会自动重取。</string>
+    <string name="data_clear_media_confirm">将清掉本机所有已读消息关联的图片磁盘缓存，消息正文与身份保持不变。确定继续？</string>
+    <string name="data_export">导出为 JSON</string>
+    <string name="data_export_desc">把本机缓存的全部消息导出成一份 JSON 文件，用于离线归档或迁移；不含图片本体。</string>
+    <string name="data_export_ok">导出完成</string>
+    <string name="data_export_failed">导出失败</string>
+    <string name="section_app_lock">App 锁</string>
+    <string name="app_lock_enable">启用 App 锁</string>
+    <string name="app_lock_desc">打开后用 PIN 解锁；切到后台或重启后需重新输入。</string>
+    <string name="app_lock_set_pin">设置解锁 PIN</string>
+    <string name="app_lock_disable">关闭 App 锁</string>
+    <string name="app_lock_pin">PIN（4-6 位）</string>
+    <string name="app_lock_pin_confirm">再次输入 PIN</string>
+    <string name="app_lock_pin_mismatch">两次输入的 PIN 不一致</string>
+    <string name="app_lock_current_pin">输入当前 PIN</string>
+    <string name="app_lock_unlock_title">PushBox 已锁定</string>
+    <string name="app_lock_unlock">解锁</string>
+    <string name="app_lock_wrong_pin">PIN 不正确</string>
+    <string name="app_lock_verifying">校验中…</string>
+    <string name="app_lock_retry_in">PIN 不正确，请 %1$d 秒后再试</string>
+    <string name="app_lock_use_biometric">指纹 / 面容解锁</string>
+    <string name="app_lock_use_pin">改用 PIN</string>
+    <string name="app_lock_biometric_title">解锁 PushBox</string>
+    <string name="app_lock_biometric_subtitle">请验证指纹或面容以继续</string>
+    <string name="app_lock_biometric_enable">生物识别解锁</string>
+    <string name="app_lock_biometric_desc">允许用指纹 / 面容解锁，PIN 仍作为兜底方式。</string>
+    <string name="app_lock_biometric_unavailable">未检测到可用的指纹 / 面容，请先在系统设置中录入。</string>
+    <string name="section_notification">通知</string>
+    <!-- §7.4 D17 对话页筛选 -->
+    <string name="conv_filter_title">筛选</string>
+    <string name="filter_all">全部</string>
+    <string name="filter_unread">未读</string>
+    <string name="filter_read">已读</string>
+    <string name="filter_hint_all">当前显示全部消息</string>
+    <string name="filter_hint_unread">当前只看未读 · 点此处显示全部</string>
+    <string name="filter_hint_read">当前只看已读 · 点此处显示全部</string>
+    <string name="filter_empty">该筛选下没有消息</string>
+    <!-- §7.4 会话内搜索（与未读/已读筛选正交） -->
+    <string name="conv_search_entry">在会话中搜索</string>
+    <string name="conv_search_hint">搜索本会话消息</string>
+    <string name="conv_search_close">关闭</string>
+    <string name="conv_search_hits">命中 %1$d 条 · 点按清除筛选</string>
+    <string name="conv_search_none">本会话没有匹配的消息</string>
+    <string name="section_about">关于</string>
+    <string name="current_server">当前地址</string>
+    <string name="change_server">更换服务器</string>
+    <string name="change_server_desc">更换地址会清空本机身份、会话与消息，并用新地址重新注册。</string>
+    <string name="device_name_label">设备名称</string>
+    <string name="device_id_label">设备 ID</string>
+    <string name="section_devices">设备与同步</string>
+    <string name="devices_loading">正在加载设备列表…</string>
+    <string name="devices_none">没有其他设备</string>
+    <string name="devices_refresh">刷新</string>
+    <string name="device_current">当前设备</string>
+    <string name="device_revoked">已吊销</string>
+    <string name="device_revoke">吊销</string>
+    <string name="device_revoke_title">吊销此设备？</string>
+    <string name="device_revoke_desc">吊销后该设备的令牌立即失效并强制下线，需凭恢复码重新加入。此操作不可撤销。</string>
+    <string name="device_last_seen">最近在线</string>
+    <string name="recovery_code_label">恢复码</string>
+    <string name="recovery_none">本机未保存恢复码</string>
+    <string name="recovery_qr">二维码</string>
+    <string name="recovery_qr_title">恢复码二维码</string>
+    <string name="recovery_qr_hint">在新设备的"我有恢复码"页扫这枚码即可加入同一空间。</string>
+    <string name="recovery_qr_failed">无法生成二维码，请改用文本复制。</string>
+    <string name="enroll_scan">扫码填入</string>
+    <string name="enroll_scan_prompt">对准另一台设备上的恢复码二维码</string>
+    <string name="reveal">显示</string>
+    <string name="hide">隐藏</string>
+    <string name="notif_new_message">新消息通知</string>
+    <string name="notif_new_message_desc">关闭后消息仍会接收，只是不再弹出通知。</string>
+    <string name="notif_quiet_title">静默时段</string>
+    <string name="notif_quiet_desc">时段内非紧急消息只进通知栏，不响铃、不横幅；error 级别仍可打扰。</string>
+    <string name="notif_quiet_start">开始</string>
+    <string name="notif_quiet_end">结束</string>
+    <string name="about_api_doc_title">第三方接入 API 摘要</string>
+    <string name="about_api_doc_body">唯一入口：POST {当前服务器}/message（HTTP JSON）。必填 channel/secret/type/content；可选 sender_id/sender_name/sender_avatar/title/level/url/images[]/msg_key/ts。第三方不需要注册设备、不参与帧加密；一次 POST 即完成投递，凭据只写在 body、绝不进 URL 或 header。</string>
+    <string name="about_log_desensitized">日志（脱敏）：本机不落消息正文与凭据；异常堆栈只保留 tag 与主机名。</string>
+    <!-- 版本自更新（GitHub Releases）：检查→下载→拉起系统安装面板，安装这步系统强制用户确认 -->
+    <string name="update_current_version">当前版本</string>
+    <string name="update_check">检查更新</string>
+    <string name="update_checking">检查中…</string>
+    <string name="update_latest">已是最新版本</string>
+    <string name="update_available">发现新版本 %1$s</string>
+    <string name="update_download">下载并安装</string>
+    <string name="update_downloading">下载中… %1$s</string>
+    <string name="update_failed">更新失败：%1$s</string>
+    <string name="update_no_release">GitHub Releases 里没有可安装的 APK（发布可能还没打包完成）。</string>
+    <string name="update_install_hint">安装面板打开后，按提示允许"安装未知应用"并确认即可覆盖升级，聊天记录不会丢。</string>
+    <string name="update_source">来自 GitHub Releases</string>
+    <string name="update_confirm_body">是否下载更新？下载完会拉起系统安装面板，聊天记录不会丢。</string>
+    <string name="update_later">稍后</string>
+    <string name="update_auto_check">启动时自动检查更新</string>
+    <string name="update_auto_check_desc">开着才会在冷启动时安静地查一次 GitHub Releases；关掉就只能在这里手动点。</string>
+    <string name="confirm_ok">确定</string>
+    <string name="confirm_cancel">取消</string>
+
+    <!-- 后台常驻引导（§7.2 D18：保活靠系统白名单，不是我们自己硬拉 FGS） -->
+    <string name="section_keepalive">后台常驻</string>
+    <string name="keepalive_battery">忽略电池优化</string>
+    <string name="keepalive_battery_desc">加入电池优化白名单，待机时系统才不会冻结消息通道。</string>
+    <string name="keepalive_request">去设置</string>
+    <string name="keepalive_status_on">已允许后台运行</string>
+    <string name="keepalive_status_off">仍可能被系统休眠冻结</string>
+    <string name="keepalive_notification">通知渠道设置</string>
+    <string name="keepalive_notification_desc">在系统设置里确认各会话渠道的提醒强度。</string>
+    <string name="keepalive_autostart">自启动与后台锁定</string>
+    <string name="keepalive_autostart_desc">国产 ROM 需在应用信息里允许自启动，常驻才不会被清理。</string>
+    <string name="keepalive_polling">极致省电轮询模式</string>
+    <string name="keepalive_polling_desc">关闭常驻长连接，改为每隔约 15 分钟批量补拉。更省电，但消息可能延迟到达。</string>
+    <string name="banner_polling">已开启极致省电轮询模式：消息可能延迟约 15 分钟到达。</string>
+    <string name="banner_power_save">系统处于省电模式：后台通道可能被冻结，通知可能延迟。</string>
+    <string name="keepalive_guide_title">让消息随时到达</string>
+    <string name="keepalive_guide_desc">PushBox 靠后台长连接实时收消息。国产 ROM 会积极冻结后台，建议现在完成下面几步；也可以稍后在「我的 → 后台常驻」里再处理。</string>
+    <string name="keepalive_guide_lock">锁定最近任务</string>
+    <string name="keepalive_guide_lock_desc">在最近任务（多任务）里下拉或长按 PushBox 卡片，点锁形图标把它固定，避免一键清理时误杀。</string>
+    <string name="keepalive_guide_battery_settings">关闭智能省电 / 应用休眠</string>
+    <string name="keepalive_guide_battery_settings_desc">在系统"电池 / 应用启动管理"里把 PushBox 设为"允许后台活动 / 不限制"，否则仍会被休眠。</string>
+    <string name="keepalive_guide_done">我已知晓，进入 PushBox</string>
+
+    <!-- 会话长按菜单（§7.3：置顶 / 免打扰 / 重命名 / 清空） -->
+    <string name="conv_action_pin">置顶</string>
+    <string name="conv_action_unpin">取消置顶</string>
+    <string name="conv_action_mute">免打扰</string>
+    <string name="conv_action_unmute">取消免打扰</string>
+    <string name="conv_action_rename">重命名</string>
+    <string name="conv_action_set_avatar">设头像</string>
+    <string name="conv_action_clear">清空聊天记录</string>
+    <string name="conv_action_lock_private">锁屏隐藏内容</string>
+    <string name="conv_action_unlock_private">取消锁屏隐藏</string>
+    <string name="conv_pinned_flag">置顶</string>
+    <string name="conv_muted_flag">静音</string>
+    <string name="conv_private_flag">锁屏隐藏</string>
+    <string name="rename_title">重命名会话</string>
+    <string name="rename_save">保存</string>
+    <string name="clear_dialog_title">清空聊天记录</string>
+    <string name="clear_dialog_body">将删除该会话在本机的全部消息，服务端仍保留历史，此操作不可在本机恢复。</string>
+
+    <!-- 消息长按操作（§7.3：复制 / 删除） -->
+    <string name="message_actions_title">消息</string>
+    <string name="message_action_copy">复制文本</string>
+    <string name="message_action_save_image">保存图片</string>
+    <string name="message_action_raw_json">查看原始 JSON</string>
+    <string name="message_action_delete">删除</string>
+    <string name="delete_dialog_title">删除这条消息</string>
+    <string name="delete_dialog_body">本机立即隐藏该消息，并通知服务端落 tombstone 同步到其他设备；此操作不可撤销。</string>
+    <string name="message_open_link">打开链接</string>
+    <string name="message_fulltext">展开全文</string>
+    <string name="message_fulltext_loading">全文取回中…</string>
+
+    <!-- 频道治理（§14：App 是唯一控制台，D28） -->
+    <string name="channel_governance">治理设置</string>
+    <string name="channel_governance_title">频道治理</string>
+    <string name="channel_governance_save">保存</string>
+    <string name="channel_governance_saved">已保存</string>
+    <string name="channel_governance_failed">保存失败</string>
+    <string name="channel_g_max_images">单次最多图片数</string>
+    <string name="channel_g_rate_limit">每分钟条数上限</string>
+    <string name="channel_g_body_bytes">单条正文最大字节</string>
+    <string name="channel_g_daily_msg">每日条数上限</string>
+    <string name="channel_g_daily_image">每日图片上限</string>
+    <string name="channel_g_daily_bytes">每日字节上限</string>
+    <string name="channel_g_strict_auth">强制校验 sender</string>
+    <string name="channel_g_muted">频道静默（不再弹通知）</string>
+    <string name="channel_g_whitelist">只允许白名单发送者</string>
+    <string name="channel_g_hint_zero">填 0 表示沿用服务端默认值</string>
+    <string name="channel_capacity">容量报表</string>
+    <string name="channel_capacity_loading">统计中…</string>
+    <string name="channel_capacity_body">消息 %1$d 条 / 正文 %2$s；图片 %3$d 张 / %4$s；最早一条 %5$s</string>
+    <string name="channel_reset_no">换发新频道号</string>
+    <string name="channel_reset_no_title">换发新的频道号码？</string>
+    <string name="channel_reset_no_desc">旧的对外号码即刻作废，第三方必须改用新号码投递（往旧号发会收到 401/404）；历史消息随迁、密钥不变。本机该频道下的会话设置会丢失并重新拉取历史。</string>
+    <string name="channel_senders">发送者白名单</string>
+    <string name="channel_senders_title">白名单发送者</string>
+    <string name="channel_senders_empty">名单为空。开启"只允许白名单"前必须先加至少一个发送者。</string>
+    <string name="channel_senders_add">添加</string>
+    <string name="channel_senders_hint">sender_id</string>
+    <string name="channel_senders_enabled">已允许</string>
+    <string name="channel_senders_disabled">已停用</string>
+    <!-- §5.2 频道接入（订阅）：频道号 + 密钥把这台设备登记到频道的接收集 -->
+    <string name="channel_join_title">加入频道</string>
+    <string name="channel_join_desc">填别人给你的频道号与密钥即可接收该频道的消息。密钥只用来确认号码写对了，它不是读取凭据；跨 Space 的频道号服务端一律回 404。</string>
+    <string name="channel_join_no_hint">频道号（8 位数字）</string>
+    <string name="channel_join_secret_hint">频道密钥（32 位）</string>
+    <string name="channel_join_working">接入中…</string>
+    <string name="channel_join_done">已接入，稍后该频道的消息会出现在会话列表</string>
+    <string name="channel_join_needs_both">频道号和密钥都要填</string>
+    <string name="channel_subscribed">已接入</string>
+    <string name="channel_not_subscribed">未接入（这台设备仍能收到，除非开启「只接收已接入的频道」）</string>
+    <string name="channel_subscribe">接入</string>
+    <string name="channel_unsubscribe">取消接入</string>
+    <string name="channel_unsubscribe_done">已取消接入</string>
+    <string name="channel_filter_only">只接收已接入的频道</string>
+    <string name="channel_filter_only_desc">开启后这台设备只收已接入频道的消息，其余频道仍在服务器上好着，只是这台不弹。关掉即恢复全收，接入关系不会丢。</string>
+    <string name="channel_filter_only_empty">已开启「只接收已接入的频道」，但一台都没接入——这台设备现在收不到任何消息。</string>
+    <string name="channel_senders_toggle">停用/启用</string>
+    <string name="recovery_code_rotate">轮换恢复码</string>
+    <string name="recovery_code_rotate_title">轮换恢复码？</string>
+    <string name="recovery_code_rotate_desc">旧恢复码即刻失效，已经用它登录的设备不受影响；新码只显示这一次。</string>
+
+    <!-- 本地即时搜索（§7.4：服务端 /search 到位前离线可查缓存消息） -->
+    <string name="search_hint">搜索消息</string>
+    <string name="search_none">没有匹配的消息</string>
+    <string name="search_from_local">本机</string>
+    <string name="search_from_server">服务端</string>
+</resources>

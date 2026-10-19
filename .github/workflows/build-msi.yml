@@ -1,0 +1,166 @@
+name: Build Windows Installer
+
+# 推 main 打包 setup.exe 挂成 workflow artifact；打 v* 标签时额外发布到 GitHub Release。
+# 构建入口复用 windows/installer/build-installer.sh（dotnet publish self-contained win-x64 → Inno 压包），
+# 版本号只从 PushBox.Windows.csproj 的 <Version> 取，与脚本一致。
+# tag 事件不再带 paths 过滤（否则只改了其它目录的 commit 打 tag 会静默不发布）。
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: msi-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  msi:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      # Inno Setup 6 通过 Chocolatey 装（windows runner 自带 choco）；ISCC.exe 落在 Program Files (x86)。
+      # build-installer.sh 用 ISCC 环境变量指认编译器，不设则回落到本机 D:/Apps 那个路径（CI 上不存在）。
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      # 统一版本号注入
+      - name: Set version from git tag
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.1.0-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "📦 Version: $VERSION"
+
+      - name: Inject version into Windows build
+        shell: bash
+        run: |
+          # 正式 tag（X.Y.Z）才注入；main/dispatch 的 0.1.0-<run> 非正式版本脚本会判失败，
+          # 这里容忍并沿用 csproj/iss 已提交默认，保证 main 每次都能产出安装包。
+          bash scripts/set-version.sh "${{ steps.version.outputs.version }}" \
+            || echo "⚠️ 非正式版本（${{ steps.version.outputs.version }}）跳过注入，沿用已提交 <Version>。"
+
+      - name: Build installer
+        shell: bash
+        env:
+          ISCC: "C:/Program Files (x86)/Inno Setup 6/ISCC.exe"
+        run: bash windows/installer/build-installer.sh
+
+      # 先收集，再签名：签名必须落在最终要上传的 dist-msi 副本上。
+      # （若在 Collect 之前签名，Collect 会从 windows/installer/Output/ 重新拷贝未签名 exe 覆盖掉签名。）
+      - name: Collect installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-msi
+          found=0
+          for f in windows/installer/Output/PushBox-Setup-*-win-x64.exe; do
+            [ -f "$f" ] || continue
+            cp "$f" dist-msi/
+            found=1
+          done
+          [ "$found" = 1 ] || { echo "没在 Output 里找到 setup.exe"; exit 1; }
+          ls -l dist-msi
+
+      # Windows 代码签名（可选：未配置证书时跳过，安装包仍可发布但会触发 SmartScreen 警告）
+      # Secrets 需要配：
+      #   CODESIGN_CERT_BASE64  - PFX 证书的 base64 编码
+      #   CODESIGN_PASSWORD     - PFX 密码
+      - name: Sign installer (optional)
+        shell: pwsh
+        env:
+          CERT_B64: ${{ secrets.CODESIGN_CERT_BASE64 }}
+          CERT_PWD: ${{ secrets.CODESIGN_PASSWORD }}
+        if: env.CERT_B64 != ''
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 还原 PFX 证书
+          $certBytes = [Convert]::FromBase64String($env:CERT_B64)
+          $certPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+
+          # 查找 signtool.exe（Windows SDK 自带）
+          $signTool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -First 1
+          if (-not $signTool) {
+            Write-Error "未找到 signtool.exe，请安装 Windows SDK"
+            exit 1
+          }
+
+          # 签名最终要上传的 dist-msi 里的每个 exe
+          $exes = @(Get-ChildItem "dist-msi\*.exe")
+          if ($exes.Count -eq 0) {
+            Write-Error "dist-msi 下没有 exe 可签名"
+            exit 1
+          }
+          foreach ($exe in $exes) {
+            Write-Host "Signing: $($exe.FullName)"
+            & $signTool.FullName sign `
+              /f $certPath `
+              /p $env:CERT_PWD `
+              /tr http://timestamp.digicert.com `
+              /td sha256 `
+              /fd sha256 `
+              /d "PushBox" `
+              $exe.FullName
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "签名失败: $($exe.Name)"
+              exit 1
+            }
+          }
+
+          # 用 PowerShell 原生校验最终产物签名状态（必须 Valid），否则终止发布
+          foreach ($exe in $exes) {
+            $sig = Get-AuthenticodeSignature $exe.FullName
+            Write-Host "Signature status: $($sig.Status) - $($exe.Name)"
+            if ($sig.Status -ne 'Valid') {
+              Write-Error "签名验证未通过（$($exe.Name) 状态=$($sig.Status)），终止发布。"
+              exit 1
+            }
+          }
+
+          Write-Host "✅ 所有安装包已签名并通过 Get-AuthenticodeSignature 校验"
+
+      # 未配置证书时显式跳出并大声告警：产物未签名，用户下载会触发 SmartScreen。
+      - name: Warn installer unsigned (signing skipped)
+        shell: pwsh
+        env:
+          CERT_B64: ${{ secrets.CODESIGN_CERT_BASE64 }}
+        if: env.CERT_B64 == ''
+        run: |
+          $msg = "未配置 CODESIGN_CERT_BASE64：本次上传的安装包未签名，用户下载后会触发 SmartScreen 警告。"
+          Write-Host "::warning::$msg"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## ⚠️ 未签名安装包`n`n$msg`n"
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist-msi/
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release (tag push only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          gh release create "$TAG" --target "$SHA" --title "PushBox $TAG" --notes "自动构建产物：Android APK / Windows 安装包 / Docker 镜像 iamplusdev/push-box:$TAG" --verify-tag 2>/dev/null || true
+          shopt -s nullglob
+          gh release upload "$TAG" dist-msi/*.exe --clobber

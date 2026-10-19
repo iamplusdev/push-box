@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PushBox · 自托管消息推送系统</title>
+<meta name="description" content="PushBox：任何程序一条 POST /message 就能推送到你自己的 Android 与 Windows。服务端存明文可搜索，链路上加密下发，不接厂商推送、不经第三方转发。">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="site-header">
+  <div class="bar">
+    <a class="logo" href="index.html"><span class="mark">P</span><b>PushBox</b><span class="ver">1.0.0</span></a>
+    <button id="navBtn" type="button" aria-label="打开菜单">☰</button>
+    <nav class="links">
+      <a href="overview.html">概览</a>
+      <a href="install.html">安装</a>
+      <a href="usage.html">使用</a>
+      <a href="api.html">入站 API</a>
+      <a href="client-api.html">客户端 API</a>
+      <a href="protocol.html">协议</a>
+      <a href="#repos">仓库</a>
+      <a href="../docs/开发指南.md">开发指南</a>
+      <a href="../docs/测试指南.md">测试指南</a>
+    </nav>
+    <button class="theme-toggle" id="themeBtn" type="button">☾ 深色</button>
+  </div>
+</header>
+<div class="scrim"></div>
+
+<main id="main">
+
+  <section class="hero">
+    <span class="eyebrow">自托管 · 单向消息推送</span>
+    <h1 class="display">PushBox</h1>
+    <p class="tagline">任何程序一条 <code>POST /message</code>，消息就推送到你自己的手机和电脑。服务端存下来、抓图转存、加密下发，多端几乎同时到账。</p>
+    <div class="cta">
+      <a class="btn primary" href="install.html">快速上手 <span aria-hidden="true">→</span></a>
+      <a class="btn ghost" href="overview.html">了解它怎么工作 <span aria-hidden="true">📄</span></a>
+    </div>
+    <ul class="facts">
+      <li>三端源码：Java 服务端 · Android · Windows</li>
+      <li>只依赖 MySQL 8 与一个 S3 兼容桶</li>
+      <li>不接厂商推送，不经第三方转发</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <div class="head">
+      <h2>它做的三件事</h2>
+      <p>把"第三方产生的消息"送到"你人在的那块屏幕"上，中间不留别人的服务器。</p>
+    </div>
+    <div class="pillars">
+      <div class="card">
+        <span class="n">01</span>
+        <b>收得进来</b>
+        <p>一个频道号加一个密钥，任何脚本、Grafana、CI、cron 都能发。凭据只写不读，重复提交按 <code>msg_key</code> 幂等。</p>
+      </div>
+      <div class="card">
+        <span class="n">02</span>
+        <b>存得明白</b>
+        <p>正文与图片都存在你自己的 MySQL 与对象存储里，全文索引能搜、摘要服务端生成、外链图片抓取转存。</p>
+      </div>
+      <div class="card">
+        <span class="n">03</span>
+        <b>送得到位</b>
+        <p>长连接加密下发到每台设备，手机与 PC 同时出通知；一边点开会话，另一边红点随即消失。断线按游标补齐，每台设备还可以只收自己接入的那几条频道。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="head">
+      <h2>一条消息走过的路</h2>
+      <p>受理只写库、立刻回执；图片抓取与加密下发都在回执之后，第三方等不起的那几秒不由它承担。</p>
+    </div>
+    <div class="pipe">
+      <div class="step d"><b>你的程序</b><span>Grafana、CI、cron、内网服务，只需一个频道号 + 密钥</span></div>
+      <div class="step a"><b>受理</b><span>校验凭据、幂等、分配 <code>seq</code>、生成摘要，立即 200 回执</span></div>
+      <div class="step b"><b>抓图转存</b><span>外链图片并发抓取 → 缩略图 → 存进对象存储（超预算先出正文）</span></div>
+      <div class="step a"><b>加密下发</b><span>每台设备自己的会话钥加密同一帧，多端同时到达</span></div>
+      <div class="step c"><b>客户端</b><span>入库、出通知，点进会话把已读报回去，别的端红点随之消失</span></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="head">
+      <h2>装在你机器上的样子</h2>
+      <p>单向接收：气泡统一左对齐，不做"发送方 / 接收方"双色；告警级别只用气泡左侧一条 3px 色条表达。</p>
+    </div>
+    <div class="mocks">
+      <div class="phone">
+        <div class="bar"><span>消息</span><span>🔍 ＋</span></div>
+        <div class="chat-row">
+          <span class="av" style="background:#b06900">G</span>
+          <span class="tx"><b>Grafana 告警</b><span>[严重] CPU 使用率超过 90%</span></span>
+          <span class="meta">09:41<br><i class="dot">3</i></span>
+        </div>
+        <div class="chat-row">
+          <span class="av" style="background:#07c160">C</span>
+          <span class="tx"><b>CI 流水线</b><span>order-svc 发布成功，耗时 42s</span></span>
+          <span class="meta">昨天</span>
+        </div>
+        <div class="chat-row">
+          <span class="av" style="background:#8a8a8a">备</span>
+          <span class="tx"><b>备份任务</b><span>[图片] db 体积 2.1GB</span></span>
+          <span class="meta">周一</span>
+        </div>
+      </div>
+
+      <div class="timeline">
+        <div class="when">09:41</div>
+        <div class="row"><div class="bubble err"><span class="lv"></span><div class="t">[严重] CPU 使用率超过 90%</div><div>主机 prod-03 · 近 5 分钟均值 92.4%</div><div class="d">Grafana 告警</div>
+          <div class="strip">
+            <i style="background:linear-gradient(135deg,#4a6b52,#2f4a38)">监控图</i>
+            <i style="background:#8a8a8a">已失效</i>
+            <i style="background:linear-gradient(135deg,#3d5a80,#2b405c)">拓扑</i>
+            <i style="background:linear-gradient(135deg,#6b5a4a,#4a3d33)">日志</i>
+          </div>
+        </div></div>
+        <p style="font-size:12.5px;color:var(--fg-2);margin:14px 0 0">
+          四张图排成 2×2 而不是横排长条，<b>每一格的状态独立</b>——抓取失败的那一格可以单独重试，其余照常渲染。
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="repos">
+    <div class="head">
+      <h2>源码仓库</h2>
+      <p>三端与文档都在同一个仓库里。下面这份清单由 <code>site/repos.json</code> 配置，加一个镜像只改那个文件。</p>
+    </div>
+    <div class="repo-grid" id="repoGrid"></div>
+    <p class="repo-hint" id="repoHint" hidden></p>
+  </section>
+
+  <section class="section">
+    <div class="head">
+      <h2>先发一条试试</h2>
+      <p>入站接口是 <code>POST {base}/message</code>，<b>不在</b> <code>/api/v1</code> 下，凭据放在请求体里。</p>
+    </div>
+    <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:8080/message \
+  -H 'Content-Type: application/json' \
+  --data-binary @payload.json</code></pre>
+    <div class="keys">
+      <div><b>49 ms</b><span>受理 → 通知到账（同机 MySQL 实测，验收线 1s）</span></div>
+      <div><b>197 / 553</b><span>Java 单测 / C# 单测，另有 23 项端到端探针与 12 项真机连接判据</span></div>
+      <div><b>3 s</b><span>图文合并窗口：正文先到，抓好的图并进同一帧</span></div>
+    </div>
+    <p>完整起步命令与三端各自的安装步骤见 <a href="install.html">安装与部署</a>；字段全表、响应形状与错误码见 <a href="api.html">入站 API</a>。</p>
+  </section>
+
+  <section class="section">
+    <div class="head">
+      <h2>一个绕不开的取舍</h2>
+      <p>服务端到客户端这一跳是加密的（X25519 + AES-256-GCM 帧通道，REST 响应走一次性 sealed-box）；服务端库里存的是明文。</p>
+    </div>
+    <div class="grid c3">
+      <div class="card"><b>明文是刻意的</b><p style="font-size:13px;color:var(--fg-2)">只有这样全文索引才能命中正文、服务端才能生成摘要、才能替你抓取外链图片。</p></div>
+      <div class="card"><b>密钥只能写不能读</b><p style="font-size:13px;color:var(--fg-2)">拿到 <code>secret</code> 能往这个频道推，但读不到任何历史；读历史要设备密钥或恢复码。"加入频道"用的也是这一对凭据，它只把这条频道登记进<b>这台设备</b>的接收集，不多给任何读权限。</p></div>
+      <div class="card"><b>请上 HTTPS</b><p style="font-size:13px;color:var(--fg-2)">帧加密补的是链路，TLS 补的是"服务端本身可信"，两者互不替代。<code>deploy/Caddyfile</code> 给了两条路。</p></div>
+    </div>
+    <p>端到端加密被评估过并否决了——它的代价正是上面三件功能。展开版在 <a href="overview.html#trust">概览 · 信任边界</a>。</p>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="bar">
+    <nav>
+      <b>文档</b>
+      <a href="overview.html">概览</a>
+      <a href="install.html">安装与部署</a>
+      <a href="usage.html">使用说明</a>
+      <a href="../docs/开发指南.md">开发指南</a>
+      <a href="../docs/测试指南.md">测试指南</a>
+    </nav>
+    <nav>
+      <b>接口</b>
+      <a href="api.html">入站 API</a>
+      <a href="client-api.html">客户端 API</a>
+      <a href="protocol.html">长连接与加密</a>
+    </nav>
+    <nav>
+      <b>仓库</b>
+      <a href="https://github.com/iamplusdev/push-box">GitHub</a>
+      <a href="https://gitee.com/iamplus/push-box">Gitee</a>
+      <a href="https://gitea.iamplus.cn/iamplus/push-box">Gitea</a>
+    </nav>
+    <p class="note">本页零构建：普通 HTML + 一个 CSS + 一个 JS，仓库里双击 <code>site/index.html</code> 就能看。内容取自三端 README 与 <code>docs/PushBox-软件设计方案.md</code>，协议与字段以代码为准。</p>
+  </div>
+</footer>
+</body>
+</html>

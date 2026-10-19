@@ -1,0 +1,60 @@
+target/
+build/
+.gradle/
+**/generated/
+*.class
+*.jar
+!.mvn/wrapper/*.jar
+!android/gradle/wrapper/gradle-wrapper.jar
+
+# 本机凭据与联调配置，绝不入库
+deploy/env/local.env
+deploy/env/*.env
+# WSL 联调那套也是同一性质：值本身是测试值，但进了公开仓就等于把"这套部署的口令位长什么样"发出去，
+# 而且 copy-paste 是双向的——总有人把测试 env 直接当模板用在真机上。入库的是 .example。
+deploy/wsl-test.env
+# 但上面那两条会顺手盖掉模板，模板是必须入库的
+!deploy/env/*.env.example
+!deploy/wsl-test.env.example
+application-local.yml
+.env
+local.properties
+
+# 签名密钥与证书只活在本机或 CI 的临时文件里；连文件名都不进仓库
+*.jks
+*.keystore
+*.p12
+*.pvk
+keystore.properties
+android/dev/
+
+# compose 里 mysql/rustfs/prometheus/grafana 的 bind mount 宿主目录。
+# pushbox-server 的日志用的是 named volume，不落在这里。
+deploy/data/
+
+# 本地文件系统存储数据（PB_STORAGE_TYPE=local 时）
+deploy/media/
+
+.idea/
+*.iml
+.DS_Store
+node_modules/
+
+# Windows 客户端（P3）W15：自包含发布物与安装包，各上百 MB，只在本机 build-installer.sh 现编
+windows/installer/publish/
+windows/installer/Output/
+
+# Windows 编译产物
+windows/**/bin/
+windows/**/obj/
+windows/**/*.user
+windows/**/*.suo
+windows/bin/
+
+# CI/CD 工作流配置：v1.1.0 起入库（.github/workflows/ci.yml 是 PR 门禁，不入库就等于门禁不存在）。
+
+# 临时日志与调试产物
+*.log
+*.tmp
+# Kotlin 编译缓存与错误报告（errors/ 与 sessions/ 都是每次构建重生的）
+android/.kotlin/

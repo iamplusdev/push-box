@@ -1,0 +1,94 @@
+name: Build and Push Docker Image
+
+# 服务端镜像 = Spring Boot API + 烘进去的 Web 管理台（web-admin/dist），同源跑在 8080。
+# 构建上下文必须是仓库根（Dockerfile 要 core/ + server/ + web-admin/ + 根 pom.xml），dockerfile 用 deploy/Dockerfile。
+# Secrets：DOCKERHUB_USERNAME / DOCKERHUB_TOKEN（access token，不是登录密码）。
+# 质量闸就是"镜像能编出来"：多阶段里 mvn package 会编译 core+server、npm run build 会 tsc 前端。
+# 不在这里跑 mvn verify —— 服务端测试要连外部 MySQL/RustFS（见项目约定），CI 上没库会误红。
+# tag 事件不再带 paths 过滤（否则只改了其它目录的 commit 打 tag 会静默不发布）。
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: docker.io
+  IMAGE: docker.io/iamplusdev/push-box
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 早于任何构建/推送先校验凭据，缺 DOCKERHUB_USERNAME/DOCKERHUB_TOKEN 立刻失败并给出清晰原因，
+      # 避免在跑完 mvn/npm 后才在登录步骤红掉。
+      - name: Validate Docker Hub credentials
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DOCKERHUB_USERNAME}" ] || [ -z "${DOCKERHUB_TOKEN}" ]; then
+            echo "::error::缺少 DOCKERHUB_USERNAME 或 DOCKERHUB_TOKEN，无法登录/推送镜像。请在仓库 Settings→Secrets 配置后重试。"
+            exit 1
+          fi
+          echo "✅ Docker Hub 凭据已配置"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 统一版本号注入（确保 Dockerfile 构建时使用正确版本）
+      - name: Set version from git tag
+        id: version
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.1.0-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # 正式 tag（X.Y.Z）才注入 docker-compose 镜像标签；非正式版本脚本判失败，这里容忍。
+          bash scripts/set-version.sh "$VERSION" \
+            || echo "⚠️ 非正式版本（$VERSION）跳过注入，沿用已提交 docker-compose 镜像标签。"
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            # 分支（main）：main + sha-<短>
+            type=ref,event=branch
+            type=sha,prefix=sha-,format=short
+            # 打 v1.2.3 标签时：1.2.3 与 1.2（type=semver 只匹配合法 semver 标签，非 semver 的 v 标签自动忽略）
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            # latest 只给正式（非预发布）标签：v1.0.0 更新 latest，v1.0.0-rc1 不覆盖。
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions 层缓存：源码没动的阶段（如 node 依赖层）下次复用。
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,scope=server,mode=max

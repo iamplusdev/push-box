@@ -1,0 +1,29 @@
+# §11.2 反向代理。Caddy 只做 HTTP 反代，不管理 SSL 证书。
+#
+# HTTPS 由用户自行通过 Nginx / Traefik / 其他反向代理配置，本项目只暴露端口（默认 80）。
+# 如需 HTTPS：
+#   - Nginx 示例见 README.md "部署到生产环境" 章节
+#   - 或让 Caddy 监听 80，前面再挂一层 Nginx 做 TLS 终止
+#
+# 主机名只需要改一处：.env 里的 PB_CADDY_HOST。compose 把它透传成 Caddy 容器的环境变量。
+# 后端端口也可自定义：.env 里设 PB_SERVER_PORT（默认 7404），Caddy 会自动读这个值反代过去。
+
+{$PB_CADDY_HOST:pushbox.internal}:80 {
+	# 入站 body 只有 JSON 与若干 URL，没有 multipart 上传口；64MB 给 images[] 留足余量。
+	request_body {
+		max_size 64MB
+	}
+
+	# reverse_proxy 自动透传 WebSocket Upgrade。默认即永不设读超时，长连接不会被掐掉；
+	# 应用层主动心跳（约 25s 间隔）负责探活与保活，反代侧无需再调超时。
+	# 注意：read_timeout / idle_timeout 在 caddy:2（v2.11.7）的 reverse_proxy 与 transport http
+	# 两处都不是合法子指令（v2.16 才提升到顶层），写上去会导致配置加载失败、容器重启循环。
+	# 图片抓取是服务端主动出网，不经过 Caddy，反代侧无需为它调超时。
+	reverse_proxy pushbox-server:{$PB_SERVER_PORT:7404}
+
+	# actuator 未鉴权，只从内网 Prometheus 来抓，公网一律挡掉。
+	# 服务端侧还有第二道门（InternalAccessFilter 只放行环回 + PB_SECURITY_INTERNAL_CIDRS），
+	# 两道门任一道生效即可，但别只依赖其中一道。
+	@metrics path /actuator/*
+	respond @metrics 403
+}

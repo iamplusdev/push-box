@@ -1,0 +1,182 @@
+name: Build Android APK
+
+# 推 main 打包并挂成 workflow artifact（每次都能下载测试）；打 v* 标签时额外发布到 GitHub Release。
+# 需要配的 Secrets（release 必须签名：未配置或误用 debug 签名一律判失败，不再回退 debug）：
+#   ANDROID_KEYSTORE_BASE64   release keystore 的 base64（keytool 生成后 base64 -w0 keystore.jks）
+#   ANDROID_KEYSTORE_PASSWORD keystore 口令
+#   ANDROID_KEY_ALIAS         别名
+#   ANDROID_KEY_PASSWORD      私钥口令（多数与 keystore 口令相同）
+# tag 事件不再带 paths 过滤（否则只改了其它目录的 commit 打 tag 会静默不发布）。
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # tag 事件里 gh release 建/传资产用；main 事件用不到但不影响
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      # secrets 不能直接写进步骤 if，映射到 env 再用 env.* 判空。
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 统一版本号注入（从 git tag 或 run number 提取）
+      - name: Set version from git tag
+        id: version
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"  # v1.0.0 -> 1.0.0
+          else
+            VERSION="0.1.0-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "📦 Version: $VERSION"
+
+      - name: Inject version into Android build
+        run: |
+          # 正式 tag（X.Y.Z）才注入；main/dispatch 的 0.1.0-<run> 非正式版本脚本会判失败，
+          # 这里容忍并沿用已提交默认，保证 main 每次都能产出可下载 artifact。
+          bash scripts/set-version.sh "${{ steps.version.outputs.version }}" \
+            || echo "⚠️ 非正式版本（${{ steps.version.outputs.version }}）跳过注入，沿用已提交 versionCode/versionName。"
+
+      - name: Put build-tools on PATH (for apksigner)
+        run: |
+          BT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          echo "$BT" >> "$GITHUB_PATH"
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      # release APK 由 build.gradle.kts 的 env 驱动 signingConfig 直接签名产出（不再走 debug 兜底）。
+      - name: Build release APK
+        working-directory: android
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      # 廉价校验：release APK 必须由正式 keystore 签名。未签名（app-release-unsigned.apk）
+      # 或误用 debug 签名的产物一律判失败，绝不把不能安装的包发出去。
+      - name: Verify release APK signature
+        working-directory: android
+        run: |
+          set -euo pipefail
+          out="app/build/outputs/apk/release"
+          apk="$out/app-release.apk"
+          [ -f "$apk" ] || apk="$out/app-release-unsigned.apk"
+          [ -f "$apk" ] || { echo "❌ 未生成 release APK（$out 下没有 app-release*.apk）"; exit 1; }
+          case "$apk" in
+            *unsigned*) echo "❌ release APK 未签名（$apk）：请配置 ANDROID_KEYSTORE_* secrets 后重试。"; exit 1;;
+          esac
+          echo "校验 $apk 的签名证书："
+          certs="$(apksigner verify --print-certs "$apk")"
+          echo "$certs"
+          if echo "$certs" | grep -qi 'android debug'; then
+            echo "❌ release APK 使用的是 debug 签名，不能作为正式产物发布。"; exit 1
+          fi
+          echo "✅ release APK 已用正式密钥签名"
+
+      - name: Resolve version label
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=0.1.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Collect APKs
+        run: |
+          set -euo pipefail
+          mkdir -p dist-apk
+          v="${{ steps.ver.outputs.value }}"
+          rel="android/app/build/outputs/apk/release/app-release.apk"
+          [ -f "$rel" ] || { echo "❌ 没有已签名的 release APK，终止发布（绝不上传 debug/未签名产物）。"; exit 1; }
+          cp "$rel" "dist-apk/pushbox-release-${v}.apk"
+          ls -l dist-apk
+
+      - name: Calculate mapping.txt checksum
+        id: mapping_sha
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          MAPPING_FILE="android/app/build/outputs/mapping/release/mapping.txt"
+          if [ -f "$MAPPING_FILE" ]; then
+            SHA256=$(sha256sum "$MAPPING_FILE" | cut -d' ' -f1)
+            echo "value=$SHA256" >> "$GITHUB_OUTPUT"
+            echo "mapping.txt SHA256: $SHA256"
+          else
+            echo "value=未生成" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload mapping.txt to S3 (tag push only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT: https://s3.iamplus.cn
+          S3_BUCKET: pushbox
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -uo pipefail
+          MAPPING_FILE="android/app/build/outputs/mapping/release/mapping.txt"
+          if [ ! -f "$MAPPING_FILE" ]; then
+            echo "⚠️  mapping.txt 不存在，跳过上传"
+            exit 0
+          fi
+
+          # 上传到 S3
+          aws s3 cp "$MAPPING_FILE" \
+            "${AWS_ENDPOINT}/${S3_BUCKET}/mapping/mapping-${TAG}.txt" \
+            --endpoint-url "${AWS_ENDPOINT}" \
+            --acl private
+
+          echo "✅ mapping.txt 已上传到 S3: ${S3_BUCKET}/mapping/mapping-${TAG}.txt"
+          echo "🔐 访问需要 Tailscale 密钥认证"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: dist-apk/
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release (tag push only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          MAPPING_SHA256: ${{ steps.mapping_sha.outputs.value }}
+        run: |
+          set -uo pipefail
+          # 两个构建工作流可能在同一 tag 上并发建 release：create 撞已存在就吞掉，
+          # 资产用 --clobber 覆盖上传，保证并发安全。
+          gh release create "$TAG" --target "$SHA" --title "PushBox $TAG" \
+            --notes "自动构建产物：Android APK / Windows 安装包 / Docker 镜像 iamplusdev/push-box:$TAG
+        
+          ## Mapping File（用于还原线上崩溃堆栈）
+          - 位置：S3 pushbox/mapping/mapping-${TAG}.txt
+          - 访问：需要 Tailscale 密钥认证
+          - SHA256: ${MAPPING_SHA256:-未计算}
+          - 工具：retrace.sh mapping.txt crash_stacktrace.txt" \
+            --verify-tag 2>/dev/null || true
+          shopt -s nullglob
+          gh release upload "$TAG" dist-apk/*.apk --clobber

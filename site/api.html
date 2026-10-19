@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>入站 API（写入） · PushBox</title>
+<meta name="description" content="PushBox 入站 API：第三方唯一写入口 POST /message。请求体字段全表、响应、错误码、幂等、限流、strict_auth 签名与 curl 生成器。">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<div class="scrim"></div>
+<div class="shell">
+
+<nav class="side">
+  <a class="brand" href="index.html">
+    <span class="mark">P</span>
+    <span><b>PushBox</b><span>1.0.0 · 自托管推送</span></span>
+  </a>
+  <h3>文档</h3>
+  <ul>
+    <li><a href="index.html">首页</a></li>
+    <li><a href="overview.html">概览</a></li>
+    <li><a href="install.html">安装与部署</a></li>
+    <li><a href="usage.html">使用说明</a></li>
+    <li><a href="api.html" aria-current="page">入站 API（写入）</a></li>
+    <li><a href="client-api.html">客户端 API（读取）</a></li>
+    <li><a href="protocol.html">长连接与加密</a></li>
+  </ul>
+  <h3>仓库</h3>
+  <ul>
+    <li><a href="https://github.com/iamplusdev/push-box">GitHub</a></li>
+    <li><a href="https://gitee.com/iamplus/push-box">Gitee</a></li>
+    <li><a href="https://gitea.iamplus.cn/iamplus/push-box">Gitea</a></li>
+  </ul>
+  <h3>本页</h3>
+  <div id="toc"></div>
+  <button class="theme-toggle" id="themeBtn" type="button">☾ 深色</button>
+</nav>
+
+<main id="main">
+<div class="wrap">
+
+  <div class="topbar">
+    <button id="navBtn" type="button" aria-label="打开菜单">☰</button>
+    <b>入站 API（写入）</b>
+  </div>
+
+  <h1>入站 API：第三方写入</h1>
+  <p class="lede">整个入站面只有<b>一个</b>端点。第三方不需要注册设备、不持有任何加密材料、不参与帧加密——一次 <code>POST</code> 就完成投递。</p>
+
+  <h2 id="entry">端点</h2>
+  <div class="card">
+    <p style="margin:0"><span class="tag post">POST</span> &nbsp; <code>{base}/message</code></p>
+  </div>
+  <ul>
+    <li><b>路径是 <code>/message</code>，不在 <code>/api/v1</code> 下。</b>前缀由 <code>pb.ingest.base-path</code> 配置（默认 <code>/message</code>），反代可以整段改名。<b>没有 <code>/message/media</code> 之类的第二个写入口</b>——图片走同一个端点的 <code>images[]</code> 字段。</li>
+    <li>请求头只需要 <code>Content-Type: application/json</code>。<b>凭据全部在 body 里，绝不进 URL 或 header</b>：URL 会落进访问日志、反代日志和浏览器历史，而消息正文与凭据一旦进日志就是泄露（这也是服务端访问日志默认关的原因）。</li>
+    <li><code>GET /healthz</code> 是无鉴权的存活探针，<b>不依赖任何对象存储或数据库往返</b>，可直接当 K8s liveness。</li>
+  </ul>
+
+  <h2 id="fields">请求体字段</h2>
+  <table>
+    <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>channel</code></td><td>string</td><td><span class="tag req">必填</span></td><td>频道号（8 位数字）。与 <code>secret</code> 一起构成凭据</td></tr>
+      <tr><td><code>secret</code></td><td>string</td><td><span class="tag req">必填</span></td><td>频道密钥。<b>只在创建/重置那一次响应里出现过</b>，忘了只能重置</td></tr>
+      <tr><td><code>content</code></td><td>string</td><td><span class="tag req">必填</span></td><td>正文。上限 32768 字节（UTF-8，频道可下调）；超出即 413，<b>不会被静默截断后收下</b></td></tr>
+      <tr><td><code>type</code></td><td>string</td><td><span class="tag opt">可选</span></td><td><code>text</code>（默认）/ <code>markdown</code> / <code>link</code> / <code>file</code>。<b>未知值降级为 <code>text</code>，不拒绝整条消息</b></td></tr>
+      <tr><td><code>level</code></td><td>string</td><td><span class="tag opt">可选</span></td><td><code>info</code>（默认）/ <code>warning</code> / <code>error</code>。会被频道 <code>max_level</code> <b>向下</b>截断，响应回显的是生效值</td></tr>
+      <tr><td><code>sender_id</code></td><td>string</td><td><span class="tag opt">可选</span></td><td>发送方标识，<b>会话线的分界线</b>；省略或空归到 <code>unknown</code>（也就是同一个会话）。截断 64 字符。可以含中文与 <code>/</code>——它不会进 URL，头像接口用的是它的 sha256</td></tr>
+      <tr><td><code>sender_name</code></td><td>string</td><td><span class="tag opt">可选</span></td><td>显示名，截断 64 字符。同一 <code>sender_id</code> 后续可以改，客户端看到的就是最新那份</td></tr>
+      <tr><td><code>sender_avatar</code></td><td>string</td><td><span class="tag opt">可选</span></td><td>头像<b>外链</b>（http/https），由服务端抓回落对象存储。抓取失败不拦消息，只是这条不带头像</td></tr>
+      <tr><td><code>title</code></td><td>string</td><td><span class="tag opt">可选</span></td><td>标题，截断 512 字符。服务端生成 <code>summary</code> 时优先用它</td></tr>
+      <tr><td><code>url</code></td><td>string</td><td><span class="tag opt">可选</span></td><td>附带的跳转链接，客户端"打开链接"按钮的目标</td></tr>
+      <tr><td><code>images[]</code></td><td>string[]</td><td><span class="tag opt">可选</span></td><td>图片<b>外链</b>数组，默认最多 4 条、单条 URL ≤1024 字符、只允许 http/https（<code>data:</code> 内联图明确不支持）。详见<a href="#media">图片</a></td></tr>
+      <tr><td><code>msg_key</code></td><td>string</td><td><span class="tag opt">可选</span></td><td>幂等键，截断 64 字符，<b>频道内唯一</b>。见<a href="#idem">幂等</a></td></tr>
+      <tr><td><code>ts</code></td><td>number</td><td><span class="tag opt">可选</span></td><td>业务时间，<b>秒或毫秒都收</b>（&lt;1e11 视为秒）。见<a href="#ts">时间戳</a></td></tr>
+      <tr><td><code>nonce</code></td><td>string</td><td><span class="tag opt">条件</span></td><td rowspan="2">仅当频道开启 <code>strict_auth</code> 时必填，且 <code>ts</code>/<code>nonce</code>/<code>sign</code> 三件套必须同时给。见<a href="#strict">strict_auth</a></td></tr>
+      <tr><td><code>sign</code></td><td>string</td><td><span class="tag opt">条件</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn">
+    <p><b>未知字段会被忽略，不会报错</b></p>
+    <p>服务端反序列化关闭了 <code>fail-on-unknown-properties</code>。好处是老脚本多带几个字段不会被拒；代价是<b>拼错字段名不会有任何提示</b>——"我明明传了 <code>sendername</code> 为什么没显示名字"这类问题，先核对拼写。</p>
+  </div>
+
+  <h2 id="response">响应</h2>
+  <p>受理成功一律 <b><code>200</code></b>（<b>不是 201</b>，幂等重放也是 200，客户端不必区分）。含义是"正文与抓取任务已入库"，<b>不代表任何一台设备已收到</b>。</p>
+  <pre class="code" data-code="json"><code>{
+  "ok": true,
+  "id": "01J8ZK3Q7M2XW4V9HTNBSFY6PA",   // ULID，可直接用于 GET /api/v1/messages/{id}
+  "seq": 1042,                          // Space 内单调递增水位号
+  "summary": "服务端生成的摘要",          // 标题优先，按 pb.notify.summary-chars 截断
+  "media_status": "pending",            // 库里那份聚合值：无图=none，有图受理瞬间=pending
+  "media_count": 2,                     // 图片槽位数（头像不占槽位）
+  "level": "warning"                    // max_level 截断后的实际生效值
+}</code></pre>
+  <ul>
+    <li><code>summary</code> 由服务端算，保证<b>各端与通知栏用的是同一句话</b>；上限 <code>pb.notify.summary-chars</code>（默认 60 字符）。</li>
+    <li>幂等重放命中历史记录时，返回的是<b>那条原始记录</b>的 id/seq/summary——不是重新生成的。</li>
+    <li>错误响应形状固定：<code>{"ok":false,"error":"invalid_credential","hint":null}</code>。<b>任何错误都不会回显你提交的字段值</b>（防泄露、防枚举）。</li>
+  </ul>
+
+  <h2 id="errors">错误码</h2>
+  <table>
+    <thead><tr><th>HTTP</th><th><code>error</code></th><th>什么时候</th><th>该怎么做</th></tr></thead>
+    <tbody>
+      <tr><td>400</td><td><code>invalid_param</code></td><td><code>channel</code>/<code>secret</code> 缺失、<code>content</code> 空、<code>images</code> 超条数或非 http(s)、body 不是合法 JSON</td><td>修脚本，重试没有意义</td></tr>
+      <tr><td>401</td><td><code>invalid_credential</code></td><td>频道不存在<b>与</b>密钥错<b>共用这一句话</b>——不给枚举频道号码留缝隙</td><td>核对频道号与密钥；连错 5 次会触发锁定</td></tr>
+      <tr><td>403</td><td><code>channel_locked</code></td><td>凭据错误累计到阈值被锁（默认 <b>5 次 / 5 分钟窗口</b>，锁 5 分钟），或频道已归档</td><td>等窗口过去；归档则这个频道不会再开</td></tr>
+      <tr><td>403</td><td><code>forbidden</code></td><td>频道开了"只允许白名单发送者"，而这个 <code>sender_id</code> 不在名单里</td><td>去客户端频道 →「发送者白名单」加进去</td></tr>
+      <tr><td>413</td><td><code>too_large</code></td><td><code>content</code> 超过频道 <code>max_body_bytes</code></td><td>正文自己裁，或调频道治理上限</td></tr>
+      <tr><td>429</td><td><code>rate_limited</code></td><td>来源 IP / 频道 / 日配额任一超限。<code>hint</code> 是可重试秒数（频道与 IP 是 <code>60</code>，日配额是 <code>86400</code>）</td><td>按 <code>hint</code> 退避；日配额只能等次日</td></tr>
+      <tr><td>400</td><td><code>clock_skew</code></td><td>strict_auth 频道没给 <code>ts</code>，或 <code>ts</code> 越出 ±300s</td><td>校时；非 strict 频道不会遇到</td></tr>
+      <tr><td>400</td><td><code>replay</code></td><td>strict_auth 下 <code>nonce</code> 10 分钟内重复</td><td>每次请求生成新 nonce</td></tr>
+      <tr><td>500</td><td>—</td><td>服务端异常</td><td>响应不带 stacktrace 与 message，看服务端脱敏日志（正文不会在里面）</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="idem">幂等：<code>msg_key</code></h2>
+  <p>同一频道内相同 <code>msg_key</code> 重复提交，服务端<b>直接返回原结果</b>：不重复入库、不重复通知、不重复抓图。给任何会重试的投递方（Alertmanager、队列消费者、CI runner）都该带上它。</p>
+  <pre class="code" data-code="bash"><code># 用告警的 fingerprint 当幂等键，重启/resend 风暴就不会刷屏
+"msg_key": "{{ .CommonLabels.alertname }}-{{ .CommonLabels.instance }}"</code></pre>
+  <p>不传 <code>msg_key</code> 就是纯"至多一次入库"：网络超时后你自己重试，很可能落两条。</p>
+
+  <h2 id="ts">时间戳 <code>ts</code></h2>
+  <ul>
+    <li>省略或 <code>≤0</code> → 用服务端接收时间。</li>
+    <li>秒或毫秒都收（<code>&lt; 1e11</code> 视为秒并自动乘 1000）——这是对外形状，两种都得接。</li>
+    <li><b>越出 ±300s 的 ts 一律回落到服务端时间。</b>消息落在时间线哪一格是<b>事实</b>，不该由提交方说了算：第三方脚本的时钟漂移、甚至一个随手填的年份，都会把消息甩到几天前，让"最新一条"永远不是最新。</li>
+  </ul>
+  <p>因此 <code>ts</code> 只适合表达"事件在 5 分钟内发生的哪一刻"，不适合回填历史。<b>要回填历史，就把 <code>ts</code> 省略掉、把真实时间写进正文</b>。</p>
+
+  <h2 id="strict"><code>strict_auth</code>：可选的 HMAC 签名</h2>
+  <p>默认关闭——频道密钥本身已经是"知道就能写"的凭据。开启后（频道治理 →「强制校验 sender」）请求必须带 <code>ts</code>/<code>nonce</code>/<code>sign</code>：</p>
+  <pre class="code" data-code="text"><code>canonical = channel + "\n" + ts + "\n" + nonce + "\n" + sha256_hex(content)
+sign      = hex( HMAC-SHA256( key = secret, data = canonical ) )</code></pre>
+  <ul>
+    <li><code>sha256_hex(content)</code> 是正文 UTF-8 字节的小写十六进制 sha256——<b>签的是正文本身</b>，所以中间人改不了内容也伪造不了来源。</li>
+    <li><code>ts</code> 必须存在且在 ±300s 内；<code>nonce</code> 10 分钟内不得重复（服务端有去重缓存）。</li>
+    <li>签名不匹配回 <code>401 invalid_credential</code>，与密钥错同一句话——签名校验失败本身也不该成为可探测信号。</li>
+    <li>比较是<b>常量时间</b>的，不给侧信道留缝。</li>
+  </ul>
+  <pre class="code" data-code="python"><code>import hashlib, hmac, json, time, urllib.request, uuid
+
+secret, channel = "&lt;频道密钥&gt;", "12345678"
+content = "构建失败：unit-test 3 个用例不过"
+ts, nonce = int(time.time() * 1000), uuid.uuid4().hex
+
+canonical = "\n".join([channel, str(ts), nonce,
+                       hashlib.sha256(content.encode()).hexdigest()])
+sign = hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+
+body = json.dumps({"channel": channel, "secret": secret, "content": content,
+                   "type": "text", "level": "error", "sender_id": "ci",
+                   "ts": ts, "nonce": nonce, "sign": sign}).encode()
+req = urllib.request.Request("https://push.example.com/message", body,
+                             {"Content-Type": "application/json"})
+print(urllib.request.urlopen(req).read().decode())</code></pre>
+
+  <h2 id="media">图片：<code>images[]</code> 与 <code>sender_avatar</code></h2>
+  <p>两个字段传的都是<b>外链</b>，图片本体一律由服务端抓回来转存进对象存储。桶是私有的，第三方给的 URL 不会出现在客户端里。</p>
+  <h3>入站校验</h3>
+  <table>
+    <thead><tr><th>规则</th><th>默认</th><th>可调配</th></tr></thead>
+    <tbody>
+      <tr><td>条数上限</td><td>4</td><td><code>pb.media.max-images</code> + 频道 <code>max_images</code></td></tr>
+      <tr><td>单条 URL 长度</td><td>1024 字符</td><td>硬编码</td></tr>
+      <tr><td>scheme</td><td>只允许 <code>http</code>/<code>https</code>；<code>data:</code> 内联图明确不支持</td><td>硬编码</td></tr>
+      <tr><td>单张大小 / 单条消息总大小</td><td>10MB / 32MB</td><td><code>pb.media.max-image-bytes</code> / <code>max-total-bytes</code></td></tr>
+      <tr><td>抓取超时 / 跳数</td><td>10s / 2</td><td><code>pb.media.timeout</code> / <code>max-redirects</code></td></tr>
+    </tbody>
+  </table>
+  <h3>SSRF 闸</h3>
+  <p>默认 <b>禁抓私网与 <code>100.64.0.0/10</code></b>（CGNAT，Tailscale 就在这段里）。要让服务端去抓内网图片，必须把 host <b>显式</b>加进 <code>pb.media.allow-hosts</code>——它是<b>精确 <code>host</code> 或 <code>host:port</code></b>，不是前缀匹配，留空就是"当前图片来源全为公网"。</p>
+  <h3>异步与状态</h3>
+  <ul>
+    <li>200 <b>绝不等抓图</b>。槽位先落 <code>pending</code>，抓取线程池排队（等待位有上限 <code>pb.media.queue-capacity</code>，排不进去当场记 <code>queue_full</code> 并照常下发消息——绝不无界堆积，也绝不让消息卡在"永远没有第一帧"）。</li>
+    <li>带图的消息进<b>合并窗口</b>（<code>pb.notify.media-wait</code>，默认 3s）：图文齐全只发一条帧，纯文字立刻下发。</li>
+    <li>重试：<code>pb.media.retry-max</code> 是<b>含入站首次在内</b>的总抓取次数（默认 3），用完就停在 <code>failed</code> 不再打扰；两次尝试至少隔 <code>retry-interval</code>。</li>
+    <li>删除后对象不会立刻真删：<code>delete-grace</code>（默认 168h）之后由巡检真删，状态从 <code>deleted</code> 变 <code>purged</code>。探针 ⑯ 就是靠这个变化确认桶里的字节真被删掉了。</li>
+  </ul>
+  <div class="callout">
+    <p><b>图片是"尽力而为"的附件</b></p>
+    <p>正文可用性永远优先：抓图失败不会让消息消失，坏头像也不会拒绝整条投递。客户端把失败的格子画成「已失效」，而不是留一个转圈。</p>
+  </div>
+
+  <h2 id="limits">限流与配额</h2>
+  <table>
+    <thead><tr><th>闸门</th><th>默认</th><th>配置键</th></tr></thead>
+    <tbody>
+      <tr><td>每频道每分钟</td><td>60 + <b>突发 20</b></td><td><code>pb.ratelimit.per-channel-per-min</code> / <code>burst</code> / 频道 <code>rate_limit</code></td></tr>
+      <tr><td>每来源 IP 每分钟</td><td>120 + 同一份突发量</td><td><code>pb.ratelimit.per-ip-per-min</code></td></tr>
+      <tr><td>每设备每分钟（读侧）</td><td>300，<b>不叠突发</b></td><td><code>pb.ratelimit.per-device-per-min</code></td></tr>
+      <tr><td>每频道图片抓取</td><td>见配置</td><td><code>pb.media.fetch-rate-per-channel-per-min</code>（独立于消息条数闸门）</td></tr>
+      <tr><td>每日条数 / 图片 / 字节</td><td>0 = 不限</td><td>频道治理 <code>daily_msg_limit</code> / <code>daily_image_limit</code> / <code>daily_bytes_limit</code></td></tr>
+      <tr><td>凭据错误锁定</td><td>5 次 / 5 分钟窗口 → 锁 5 分钟</td><td><code>pb.ingest.credential-fail-lock</code> / <code>lock-window</code></td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn">
+    <p><b>闸门是进程内 60 秒滚动窗口，不是分布式限流</b></p>
+    <p>多实例部署时，实际放行量约等于「单实例阈值 × 实例数」。这一版没有引 Redis 做全局限流：自托管的常态是单实例，多实例部署时把它当成"每实例各自的保护"就够，别把它当成对外承诺的配额。</p>
+  </div>
+  <p>每道闸门被拒都有指标：<code>pushbox.ingest.rate_limited{gate=channel|ip|device}</code>、<code>pushbox.ingest.quota_exceeded{type=daily}</code>、白名单拒绝计数等，见服务端 README 的指标表。</p>
+
+  <h2 id="gen">curl 生成器</h2>
+  <p>填下面这张表，右下角实时生成命令。<b>它只改前端预览，不发任何请求</b>；密钥请自己填，也不要截图这份表单。</p>
+  <form class="gen card" id="genForm" onsubmit="return false">
+    <div class="row2">
+      <div>
+        <label for="g-base">服务器地址</label>
+        <input id="g-base" name="base" value="http://127.0.0.1:8080" autocomplete="off">
+      </div>
+      <div>
+        <label for="g-type">type</label>
+        <select id="g-type" name="type">
+          <option value="markdown">markdown</option>
+          <option value="text">text</option>
+          <option value="link">link</option>
+          <option value="file">file</option>
+        </select>
+      </div>
+    </div>
+    <div class="row2">
+      <div>
+        <label for="g-channel">channel（频道号）</label>
+        <input id="g-channel" name="channel" value="12345678" autocomplete="off">
+      </div>
+      <div>
+        <label for="g-secret">secret（频道密钥）</label>
+        <input id="g-secret" name="secret" value="&lt;频道密钥&gt;" autocomplete="off">
+      </div>
+    </div>
+    <div class="row2">
+      <div>
+        <label for="g-sid">sender_id</label>
+        <input id="g-sid" name="sender_id" value="grafana" autocomplete="off">
+      </div>
+      <div>
+        <label for="g-sname">sender_name</label>
+        <input id="g-sname" name="sender_name" value="Grafana 告警" autocomplete="off">
+      </div>
+    </div>
+    <div class="row2">
+      <div>
+        <label for="g-level">level</label>
+        <select id="g-level" name="level">
+          <option value="error">error</option>
+          <option value="warning">warning</option>
+          <option value="info">info</option>
+        </select>
+      </div>
+      <div>
+        <label for="g-title">title（留空则不带这一项）</label>
+        <input id="g-title" name="title" value="node-3 CPU 持续 &gt; 90%" autocomplete="off">
+      </div>
+    </div>
+    <label for="g-content">content</label>
+    <textarea id="g-content" name="content">### 触发规则
+`HighCpu` 5 分钟平均值 **93.2%**</textarea>
+    <div class="row2">
+      <div>
+        <label for="g-url">url（可选）</label>
+        <input id="g-url" name="url" placeholder="https://grafana/d/ab12" autocomplete="off">
+      </div>
+      <div>
+        <label for="g-key">msg_key（可选，幂等键）</label>
+        <input id="g-key" name="msg_key" placeholder="alertnode-3" autocomplete="off">
+      </div>
+    </div>
+    <label for="g-avatar">sender_avatar（可选，头像外链）</label>
+    <input id="g-avatar" name="sender_avatar" placeholder="https://example.com/logo.png" autocomplete="off">
+    <label for="g-images">images（可选，一行一个外链）</label>
+    <textarea id="g-images" name="images" placeholder="https://example.com/chart.png"></textarea>
+    <p style="margin:16px 0 0"><button class="pill" type="button" onclick="document.getElementById('genOut').select()">选中命令</button></p>
+    <h4>payload.json</h4>
+    <pre class="code" data-code="json"><code id="genFile">{}</code></pre>
+    <h4>命令</h4>
+    <pre class="code" data-code="bash"><code id="genOut"></code></pre>
+  </form>
+  <p>为什么用 <code>--data-binary @payload.json</code> 而不是 <code>-d '{…}'</code> 内联：<b>Windows 的 Git Bash 会把单引号里的 JSON 改动</b>，服务端只会回"请求体必须是合法 JSON"；带中文与换行的正文本来也不适合塞进命令行。</p>
+
+  <h2 id="integrations">接入形态</h2>
+  <table>
+    <thead><tr><th>来源</th><th>怎么接</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td>shell / cron 脚本</td><td>直接 <code>curl --data-binary @file</code></td><td>带上 <code>msg_key</code>，脚本重跑不会刷屏</td></tr>
+      <tr><td>Grafana / Alertmanager</td><td>Webhook 接收器里用<b>自定义模板</b>把 <code>channel</code>/<code>secret</code> 放进 body</td><td>这两个字段必须是常量字段，所以不能"原样转发告警 JSON"；<code>msg_key</code> 用告警 fingerprint</td></tr>
+      <tr><td>CI（GitHub Actions / Jenkins…）</td><td>一步 <code>curl</code> job</td><td>密钥进 CI 的 secret 变量，<b>不要写进 workflow 文件</b>；<code>level</code> 按构建结果给</td></tr>
+      <tr><td>n8n / Node-RED</td><td>HTTP Request 节点，body 用 JSON</td><td>失败重试用它自己的机制，配 <code>msg_key</code> 才安全</td></tr>
+      <tr><td>只有 URL 的旧系统</td><td><b>接不了</b></td><td>入站没有 GET 口，凭据也不该进 query。加一层转换服务，或改那个系统</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="curl">仓库里的现成脚本</h2>
+  <pre class="code" data-code="bash"><code># 往服务端发若干条，覆盖中文长正文、图片、幂等、归档等场景
+PB_BASE=http://127.0.0.1:8081 node deploy/probe/third-party-test.mjs
+
+# 端到端验收探针（23 条判据，含注册、签名、密封盒、重放、宽限期真删、频道接入过滤）
+PB_BASE=http://127.0.0.1:8081 node deploy/probe/p0-e2e.mjs</code></pre>
+  <p>两个脚本都从环境变量取地址与凭据，跑法与坑见 <a href="install.html#server">安装与部署 → 服务端</a>。</p>
+
+  <div class="foot">读侧接口：<a href="client-api.html">客户端 API（读取）</a> —— 设备签名、密封盒与端点全表。它和本页是<b>两套完全不同的鉴权</b>。</div>
+</div>
+</main>
+</div>
+</body>
+</html>

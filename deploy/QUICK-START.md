@@ -1,0 +1,259 @@
+# PushBox Docker 部署快速参考
+
+> 5 分钟上线你的私有消息推送服务
+
+---
+
+## 🚀 最简流程（复制粘贴即可）
+
+### 方式一：S3/MinIO/RustFS 对象存储（推荐生产环境）
+
+```bash
+# 1. 克隆并进入部署目录
+git clone https://github.com/iamplusdev/push-box.git
+cd push-box/deploy
+
+# 2. 准备配置文件
+cp env/prod.env.example .env
+
+# 3. 一键生成所有密钥（Linux/macOS）
+source <(cat <<'EOF'
+PB_DB_PASSWORD=$(openssl rand -base64 24)
+PB_S3_ACCESS_KEY=$(openssl rand -hex 16)
+PB_S3_SECRET_KEY=$(openssl rand -base64 32)
+PB_ADMIN_SECRET=$(openssl rand -base64 32)
+PB_ADMIN_JWT_SECRET=$(openssl rand -base64 32)
+PB_S3_MASTER_KEY=$(openssl rand -base64 32)
+
+sed -i "s|^PB_DB_PASSWORD=.*|PB_DB_PASSWORD=$PB_DB_PASSWORD|" .env
+sed -i "s|^PB_S3_ACCESS_KEY=.*|PB_S3_ACCESS_KEY=$PB_S3_ACCESS_KEY|" .env
+sed -i "s|^PB_S3_SECRET_KEY=.*|PB_S3_SECRET_KEY=$PB_S3_SECRET_KEY|" .env
+sed -i "s|^PB_ADMIN_SECRET=.*|PB_ADMIN_SECRET=$PB_ADMIN_SECRET|" .env
+sed -i "s|^PB_ADMIN_JWT_SECRET=.*|PB_ADMIN_JWT_SECRET=$PB_ADMIN_JWT_SECRET|" .env
+sed -i "s|^PB_S3_MASTER_KEY=.*|PB_S3_MASTER_KEY=$PB_S3_MASTER_KEY|" .env
+
+# 只报"填了几行"，不把值打到屏幕上：这一步的输出会留在终端回滚缓冲里，
+# 顺手粘进聊天工具或 CI 日志的概率比抄错一位口令高得多。
+echo "✅ 6 个密钥已生成并填入 .env（PB_DB_PASSWORD / PB_S3_*×3 / PB_ADMIN_SECRET / PB_ADMIN_JWT_SECRET）"
+echo "   管理台登录用 PB_ADMIN_SECRET 那一行，自己从 .env 里看；PB_ADMIN_JWT_SECRET 是签名钥，永远用不到人眼看。"
+EOF
+)
+
+# 4. 编辑 .env，填写实际的 S3/MinIO/RustFS 地址
+# vi .env  # 修改 PB_DB_URL、PB_S3_ENDPOINT 等
+
+# 5. 启动服务
+docker compose up -d
+
+# 6. 等待就绪（约 60 秒）
+sleep 60
+
+# 7. 验证
+curl http://localhost:7404/healthz
+```
+
+预期输出：`{"status":"UP","db":"up","storage":"up"}`
+
+### 方式二：本地文件系统存储（零依赖单机部署）
+
+```bash
+# 1-2. 同上
+
+# 3. 使用本地存储配置
+cat > .env <<'EOF'
+PB_DB_URL=jdbc:mysql://<DB_HOST>:3306/pushbox?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=utf8
+PB_DB_USERNAME=pushbox
+PB_DB_PASSWORD=<强口令>
+PB_STORAGE_TYPE=local
+PB_STORAGE_LOCAL_PATH=/app/data/media
+PB_S3_OBJECT_ENCRYPT=none
+PB_ADMIN_SECRET=<强随机值>
+PB_ADMIN_JWT_SECRET=<不同的强随机值>
+EOF
+
+# 4. 启动服务（会自动挂载 ./data/media 目录）
+docker compose up -d
+
+# 5-7. 同上
+```
+
+**优势**：无需部署 MinIO/RustFS，图片直接落盘到 `./deploy/data/media`，适合个人或小团队轻量级部署。
+**注意**：本地存储模式下仍需 MySQL 数据库，只是不需要对象存储服务。
+
+---
+
+## 📋 关键配置项速查
+
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `PB_DB_URL` | 数据库地址 | `jdbc:mysql://<DB_HOST>:3306/pushbox?...` |
+| `PB_DB_PASSWORD` | 数据库密码 | `<openssl rand -base64 24>` |
+| `PB_S3_ENDPOINT` | 对象存储地址 | `http://<S3_HOST>:7101` |
+| `PB_S3_ACCESS_KEY` | S3 Access Key | `<openssl rand -hex 16>` |
+| `PB_S3_SECRET_KEY` | S3 Secret Key | `<openssl rand -base64 32>` |
+| `PB_ADMIN_SECRET` | 管理台登录口令 | `<openssl rand -base64 32>` ⚠️ **必填** |
+| `PB_ADMIN_JWT_SECRET` | 管理台登录票据的签名钥 | `<openssl rand -base64 32>`，⚠️ **必填且不能与上面同值** |
+| `PB_S3_OBJECT_ENCRYPT` | 对象加密模式 | `sse-c`（prod 默认要求；`none` 需显式开下一个开关） |
+| `PB_ALLOW_PLAINTEXT_MEDIA` | 允许明文对象存储 | 留空即不开；只给迁移期用 `1` |
+| `PB_S3_MASTER_KEY` | SSE-C 主钥 | `<openssl rand -base64 32>`（sse-c 必填，且落库后不可轮换） |
+| `PB_SECURITY_INTERNAL_CIDRS` | 能访问 `/actuator`、`/healthz` 的网段 | 留空=只放行容器环回（默认）；跑监控时显式写这条 compose 网络分到的子网 |
+
+模板里所有主机都是占位符（`<DB_HOST>`、`<S3_HOST>`），要换成自己的地址；真实内网地址不要提交回仓库。
+`PB_ADMIN_JWT_SECRET` 短于 32 字节、留空、或与 `PB_ADMIN_SECRET` 同值，容器都会在启动阶段直接拒绝运行。
+
+`PB_S3_ENDPOINT` 的端口跟着拓扑走，别互相抄：`rustfs/rustfs:latest` 镜像监听 **9000**（S3）/ 9001（Console），
+而 §11.1 那台远端存储机把实例挂在 **7101**。配错端口时 `/healthz` 仍然回 `storage=up`——
+它只判"配置项非空"，不探测可达性（`HealthzController.storageConfigValid`），
+所以错地址会一路绿灯，直到第一条带图的消息在抓取阶段停在 `failed` 才看得见。
+
+---
+
+## 🪣 桶要建一次（S3 模式）
+
+服务端不会自动建桶（代码里没有 CreateBucket），仓库里也没有任何 provisioning 步骤，
+所以 `PB_S3_BUCKET` 指向的桶必须先存在。用 `mc`（或 RustFS 控制台）建一次：
+
+```bash
+mc alias set pb "$PB_S3_ENDPOINT" "$PB_S3_ACCESS_KEY" "$PB_S3_SECRET_KEY"
+mc mb --ignore-existing "pb/${PB_S3_BUCKET:-pushbox}"
+mc ls pb            # 能看到桶才算这一步过了
+```
+
+判据别看 `/healthz`，看这条 `mc ls`；CI 的服务端 job（`.github/workflows/ci.yml`）里同一动作是自动做的。
+
+---
+
+## 🔧 常用命令
+
+```bash
+# 查看日志
+docker compose logs -f pushbox-server
+
+# 重启服务
+docker compose restart
+
+# 升级版本
+docker compose pull && docker compose up -d
+
+# 备份数据库（拓扑 B）
+docker compose exec mysql mysqldump -u pushbox -p"$PB_DB_PASSWORD" pushbox > backup.sql
+
+# 停止并清理
+docker compose down -v  # -v 会删除数据卷，谨慎使用！
+```
+
+---
+
+## 🆘 故障排查
+
+### 容器启动失败
+
+```bash
+# 查看详细错误
+docker compose logs pushbox-server | tail -50
+
+# 常见原因：
+# ❌ PB_ADMIN_SECRET / PB_ADMIN_JWT_SECRET 未设置或同值 → 编辑 .env 各填一个强随机值
+# ❌ PB_S3_OBJECT_ENCRYPT=none（或留空）→ 配成 sse-c + PB_S3_MASTER_KEY；确要明文再显式设 PB_ALLOW_PLAINTEXT_MEDIA=1
+# ❌ 数据库连接失败 → 检查 PB_DB_URL 和密码
+# ❌ S3 存储不可达 → 检查 PB_S3_ENDPOINT 和网络连通性
+```
+
+### Web 管理台 403 / 429
+
+```bash
+# 403 = 口令不对。先看 .env 里那一行还在不在（重生成过就会对不上）
+grep PB_ADMIN_SECRET .env
+
+PB_ADMIN_SECRET=$(openssl rand -base64 32)
+sed -i "s|^PB_ADMIN_SECRET=.*|PB_ADMIN_SECRET=$PB_ADMIN_SECRET|" .env
+docker compose restart pushbox-server
+
+# 429 = 同一来源 IP 连错口令到阈值后被锁（默认 5 次 / 5 分钟），响应里的 hint 会写还要等多久。
+# 这不是故障，是限速在起作用；等一下或换一个来源 IP。
+# 注意 PB_ADMIN_JWT_SECRET 也一起换的话，所有已登录会话会当场失效、需要重新登录——
+# 这正是把它和登录口令拆成两把的目的：换口令不该顺手作废签名钥，反之也一样。
+```
+
+### 健康检查 db=down
+
+```bash
+# 进入容器测试数据库连接
+docker compose exec pushbox-server bash
+apt-get update && apt-get install -y default-mysql-client
+mysql -h <DB_HOST> -u pushbox -p"$PB_DB_PASSWORD" pushbox -e "SELECT 1"
+```
+
+---
+
+## ⚙️ 自定义端口（可选）
+
+默认端口：
+- 后端服务：7404
+- Caddy HTTP：80
+
+如需修改（避免与其他服务冲突）：
+
+```bash
+# 编辑 .env，添加以下行
+PB_SERVER_PORT=8888      # 改后端端口为 8888
+PB_HTTP_PORT=8080        # 改 Caddy HTTP 端口为 8080
+
+# 重启服务
+docker compose up -d
+```
+
+**注意：**
+- 修改后健康检查地址变为 `http://localhost:${PB_SERVER_PORT}/healthz`
+- Caddy 会自动反代到新的后端端口，无需修改 Caddyfile
+
+---
+
+## 🔐 HTTPS 配置（可选）
+
+本项目 Caddy 只监听 80 端口做 HTTP 反代，**不管理 SSL 证书**。如需 HTTPS，请在前面挂 Nginx / Traefik 等做 TLS 终止。
+
+### Nginx 反向代理示例
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name pushbox.example.com;
+
+    ssl_certificate     /etc/nginx/ssl/pushbox.crt;
+    ssl_certificate_key /etc/nginx/ssl/pushbox.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:80;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+}
+```
+
+**客户端配置：**
+- Android/Windows 服务端地址填 `https://pushbox.example.com`
+
+### 内网/Tailscale 场景
+
+直接使用 HTTP，无需 HTTPS：
+- 客户端地址：`http://IP:端口` 或 `http://域名`
+
+---
+
+## 📚 延伸阅读
+
+- [完整部署文档](../README.md#-docker-一键部署推荐)
+- [用户使用手册](../docs/用户使用手册.md)
+- [软件设计方案](../docs/PushBox-软件设计方案.md)
+
+---
+
+**最后更新**: 2026-10-19

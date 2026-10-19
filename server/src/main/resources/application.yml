@@ -1,0 +1,75 @@
+spring:
+  application: { name: pushbox-server }
+  profiles: { active: dev }
+  jackson:
+    default-property-inclusion: non_null
+    deserialization: { fail-on-unknown-properties: false }
+  datasource:
+    # 数据库可能在几百毫秒 RTT 之外（本机联调走 Tailscale），连接必须常驻保温：
+    # 新建一条 MySQL 连接本身就要好几个来回，冷连接池会把单条消息的端到端延迟拖到秒级。
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 10
+      connection-timeout: 15000
+      keepalive-time: 20000
+      max-lifetime: 900000
+  flyway: { enabled: true, out-of-order: false, baseline-on-migrate: true }
+
+server:
+  port: 7404
+  compression: { enabled: false }
+  # 入站 body 只可能是 JSON 与若干 URL（没有 multipart 上传口），留足余量即可
+  tomcat:
+    max-swallow-size: 8MB
+    accesslog:
+      # §13：正文不能出现在"任何"日志里，访问日志也是日志。默认 pattern 的 %r 含完整查询串，
+      # 于是 /search?q=关键词 会把用户搜的内容落到另一个文件——所以默认关闭。
+      # 运维要开的话（-Dserver.tomcat.accesslog.enabled=true），只能用下面这条没有 %q/%r 的 pattern。
+      enabled: false
+      pattern: '%h %l %u %t "%m %U %H" %s %b'
+  error: { include-message: never, include-stacktrace: never }
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # 必须加引号：flow 风格里逗号是条目分隔符，{ include: health, info } 实际只绑到 health。
+        include: "health,info,prometheus"
+  endpoint:
+    health:
+      # 组件明细（库、磁盘、连接池）会写进 /actuator/health 的响应，这个端点不鉴权，所以只回 status。
+      show-details: never
+      show-components: never
+
+# 日志格式不在这里配：见 logback-spring.xml。那边用 %pbmsg/%pbex 替代 %msg，
+# 落盘前统一过 LogMasking；logging.pattern.console 一旦写回来就会绕过脱敏，所以这里只留说明。
+# logging.level.* 仍然生效（Boot 在 logback 配置之后应用），需要临时调级别用 -Dlogging.level.dev.pushbox=DEBUG。
+
+pb:
+  ingest: { base-path: /message, credential-fail-lock: 5, lock-window: 5m }
+  # 单帧削正文（truncated）不在这里配：它按 frame-max-bytes 字节驱动，永远开着，
+  # 关掉就等于允许无界大帧。见 FrameAssembler.capFrame 与 GET /api/v1/messages/{id}。
+  ws: { heartbeat-sec: 25, frame-max-bytes: 32768,
+        rotate-after-frames: 4294967296 }
+  notify: { summary-chars: 60, media-wait: 3s }
+  # §4.5 抓取重试：retry-max 是含入站首次在内的总抓取次数，用完就停在 failed 不再打扰；
+  # 退避就是巡检间隔本身，所以同一张图两次尝试之间至少隔 retry-interval。
+  # queue-capacity 是抓取线程池的**等待位**（一个任务＝一条消息的全部图片）：排不进去就当场把该消息
+  # 的 pending 槽位记成 queue_full 并照常下发，绝不无界堆积、也绝不把消息卡在"永远没有第一帧"。
+  media: { retry-max: 3, retry-initial-delay: 2m, retry-interval: 5m, queue-capacity: 256 }
+  channels: { channel-no-length: 8, default-max-level: error, default-max-images: 4, secret-bytes: 16 }
+  devices: { max-per-group: 5 }
+  retention: { max-message-bytes: 32768 }
+  # 抓图频率不在这里：那是 pb.media.fetch-rate-per-channel-per-min，管的不是"提交几条"而是"替它取几张"。
+  ratelimit: { per-channel-per-min: 60, burst: 20, per-ip-per-min: 120, per-device-per-min: 300 }
+  # §5.2 运维端点（/healthz、/actuator/**）的准入白名单：默认空=只放行环回，
+  # 要放开别的源段就显式写 CIDR（逗号分隔，如 172.16.0.0/12），写错当场拒绝启动。
+  # prod 由 PB_SECURITY_INTERNAL_CIDRS 覆盖（见 application-prod.yml 与 deploy/docker-compose.yml）。
+  security: { internal-cidrs: "" }
+  # §14 日计数器回收（DailyCounterSweep）：只按天累计、从不回收的表跑一年就是每频道 365 行死字节。
+  counters: { retention-days: 90, sweep-interval: 24h }
+  # 定时推送扫描。扫表间隔决定触发精度（cron 到分以下不会更准），batch-size 限制单轮最多投递几条。
+  scheduled: { sweep-interval: 15s, sweep-initial-delay: 20s, batch-size: 50 }
+  # D19 服务端全文搜索。fulltext=false 时一律 LIKE（临时绕开 ngram 索引问题用）；
+  # max-limit 夹住客户端传的 limit，搜索是单条大查询，不能由客户端决定扫多少行。
+  search: { fulltext: true, min-query-len: 1, max-limit: 200 }

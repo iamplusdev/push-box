@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>安装与部署 · PushBox</title>
+<meta name="description" content="PushBox 安装说明：服务端（MySQL 8 + 对象存储 + Flyway + 探针）、Android 构建与真机连接、Windows 安装包与自签 CA。">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<div class="scrim"></div>
+<div class="shell">
+
+<nav class="side">
+  <a class="brand" href="index.html">
+    <span class="mark">P</span>
+    <span><b>PushBox</b><span>1.0.0 · 自托管推送</span></span>
+  </a>
+  <h3>文档</h3>
+  <ul>
+    <li><a href="index.html">首页</a></li>
+    <li><a href="overview.html">概览</a></li>
+    <li><a href="install.html" aria-current="page">安装与部署</a></li>
+    <li><a href="usage.html">使用说明</a></li>
+    <li><a href="api.html">入站 API（写入）</a></li>
+    <li><a href="client-api.html">客户端 API（读取）</a></li>
+    <li><a href="protocol.html">长连接与加密</a></li>
+  </ul>
+  <h3>仓库</h3>
+  <ul>
+    <li><a href="https://github.com/iamplusdev/push-box">GitHub</a></li>
+    <li><a href="https://gitee.com/iamplus/push-box">Gitee</a></li>
+    <li><a href="https://gitea.iamplus.cn/iamplus/push-box">Gitea</a></li>
+  </ul>
+  <h3>本页</h3>
+  <div id="toc"></div>
+  <button class="theme-toggle" id="themeBtn" type="button">☾ 深色</button>
+</nav>
+
+<main id="main">
+<div class="wrap">
+
+  <div class="topbar">
+    <button id="navBtn" type="button" aria-label="打开菜单">☰</button>
+    <b>安装与部署</b>
+  </div>
+
+  <h1>安装与部署</h1>
+  <p class="lede">先跑服务端，再装两端。三端各自都可以独立构建——服务端与 Android/Windows 之间没有构建依赖，只有协议依赖。</p>
+
+  <h2 id="prereq">前置要求</h2>
+  <table>
+    <thead><tr><th>组件</th><th>用途</th><th>要求</th></tr></thead>
+    <tbody>
+      <tr><td>JDK</td><td>构建与运行服务端</td><td>21（<code>core</code> 编译下限 17）</td></tr>
+      <tr><td>Maven</td><td>Java 侧构建</td><td>3.9+</td></tr>
+      <tr><td>MySQL</td><td>主存储与全文索引</td><td>8.0 / 8.4，且 <code>ngram_token_size=2</code></td></tr>
+      <tr><td>对象存储</td><td>图片与头像转存</td><td>任意 S3 兼容（本项目实测 RustFS）</td></tr>
+      <tr><td>Node.js</td><td>验收探针</td><td>18+，探针目录里 <code>npm install</code> 一次即可</td></tr>
+      <tr><td>Android SDK</td><td>客户端构建</td><td>compileSdk 36、AGP 9.2.1、Gradle 9.6.1</td></tr>
+      <tr><td>.NET SDK</td><td>PC 客户端</td><td>8.0，仅 Windows（Win10 <code>19041</code> 起）；打包另需 Inno Setup 6</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="server">服务端</h2>
+
+  <h3>① 建库</h3>
+  <p>表结构交给 Flyway（首次启动自动执行 <code>V1…V5</code>），但库和账号要先建好。<b>中文全文检索的前提是 <code>ngram_token_size=2</code></b>——它不在默认值上时，建库脚本跑不通或搜索退化成 LIKE。</p>
+  <pre class="code" data-code="sql"><code>CREATE DATABASE IF NOT EXISTS pushbox
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER IF NOT EXISTS 'pushbox'@'%' IDENTIFIED BY '&lt;自行生成强口令&gt;';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES
+  ON pushbox.* TO 'pushbox'@'%';        -- Flyway 需要 DDL 权限；只给 pushbox 库，不给全局
+FLUSH PRIVILEGES;
+
+-- 确认分词器（8.4.6 与 8.0.46 实测默认已是 2）
+SELECT @@ngram_token_size;              -- 期望 2</code></pre>
+  <p>本机实例上把 <code>'pushbox'@'%'</code> 换成 <code>'pushbox'@'localhost'</code> + <code>'pushbox'@'127.0.0.1'</code> 更贴切：JDBC 走 TCP 到 127.0.0.1 时 MySQL 认的主机名是 <code>localhost</code>，两个都建才不会因为解析方式而连不上。</p>
+
+  <h3>② 凭据：只走环境变量</h3>
+  <p>这是一条硬规则。配置文件里出现明文口令就算事故——它会随仓库和 <code>mvn package</code> 打出来的 jar 一起出去。</p>
+  <pre class="code" data-code="bash"><code>cp deploy/env/prod.env.example deploy/env/local.env    # local.env 已在 .gitignore
+# 要填：PB_DB_PASSWORD、PB_S3_ACCESS_KEY、PB_S3_SECRET_KEY（开 sse-c 再加 PB_S3_MASTER_KEY）</code></pre>
+  <p><code>application-dev.yml</code> 里 <code>password: ${PB_DB_PASSWORD}</code><b>刻意不留默认值</b>：忘了 source 就该启动失败，而不是拿空口令去连库、把配置问题伪装成 <code>Access denied</code>。</p>
+
+  <h3>③ 对象存储</h3>
+  <ul>
+    <li>建一个私有桶（默认名 <code>pushbox</code>）。<b>桶不需要匿名可读</b>——读侧走服务端代理，客户端拿签名 GET 要字节。</li>
+    <li><code>pb.s3.path-style: true</code> 不是可选项：endpoint 是裸 IP 时虚拟主机风格（<code>bucket.&lt;存储机&gt;:7101</code>）无法解析。</li>
+    <li>想开桶内加密（SSE-C）：<code>openssl rand -base64 32</code> 生成主钥填进 <code>PB_S3_MASTER_KEY</code>，再 <code>--pb.s3.object-encrypt=sse-c</code>。<b>主钥一旦有对象落库就永不轮换</b>（换了旧封装钥解不开，等于图片全丢）；缺失或长度不对时进程在构造期直接拒绝启动，不会静默写明文。</li>
+    <li>桶能力回归（可选）：<code>node deploy/probe/rustfs-capability.mjs</code>。</li>
+  </ul>
+
+  <h3>④ 构建与运行</h3>
+  <pre class="code" data-code="bash"><code>export JAVA_HOME=/path/to/jdk-21        # 机器默认 JAVA_HOME 常常是 JDK 8
+mvn -B -DskipTests package              # server/target/pushbox-server-1.0.0.jar
+bash deploy/run-dev.sh                  # 默认 8080；脚本自己 source deploy/env/local.env</code></pre>
+  <p>换端口、改配置一律往后加参数即可（Spring 的命令行覆盖比改 YAML 更适合联调）：</p>
+  <pre class="code" data-code="bash"><code>bash deploy/run-dev.sh --server.port=8081 \
+  --pb.ws.replay-batch=5 \
+  --pb.s3.delete-grace=2s --pb.s3.purge-interval=5s</code></pre>
+
+  <h3>⑤ 自检</h3>
+  <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:8080/healthz
+cd deploy/probe &amp;&amp; npm install          # 只需一次（依赖 ws）
+node p0-e2e.mjs                         # 默认打 127.0.0.1:8080；23/23 才算这套装对了
+PB_BASE=http://127.0.0.1:8081 node p0-e2e.mjs</code></pre>
+  <p>探针是一个"软件版 Android 设备"：自己生成两把密钥，逐字节复刻握手、签名、帧加密、补拉与频道接入过滤。它跑通之后，客户端侧只剩 UI 与存储，不会再有协议层意外。</p>
+
+  <h3>⑥ 单元测试的跑法与两个坑</h3>
+  <pre class="code" data-code="bash"><code>source deploy/env/local.env
+mvn -B -pl core,server test             # 197/197（core 26 + server 171）</code></pre>
+  <ul>
+    <li><b>必须 <code>-pl core,server</code> 同 reactor</b>：单跑 <code>server</code> 会用本地仓库里的旧 <code>core</code> jar，新加的类报 <code>NoClassDefFoundError</code>。</li>
+    <li>碰库/碰桶的用例挂 <code>@EnabledIfEnvironmentVariable(named="PB_S3_ACCESS_KEY")</code>，忘了 source 就是<b>静默 skip</b>。看到用例总数变小先查环境变量，不要改测试。</li>
+  </ul>
+
+  <h2 id="prod">生产部署</h2>
+
+  <h3>容器（拓扑 A / B）</h3>
+  <p><code>deploy/Dockerfile</code> 是多阶段构建（Maven 构建层 → <code>temurin:21-jre</code> 运行层，非 root UID 10001）。<code>docker-compose.yml</code> 给两种拓扑：</p>
+  <table>
+    <thead><tr><th>拓扑</th><th>起什么</th><th>怎么切</th></tr></thead>
+    <tbody>
+      <tr><td>A（默认）</td><td><code>pushbox-server</code> + <code>caddy</code></td><td>把 <code>SPRING_DATASOURCE_URL</code> / <code>PB_S3_ENDPOINT</code> 指到已有的那台 MySQL / 桶</td></tr>
+      <tr><td>B（完全独立）</td><td>再加上 <code>mysql:8.4</code>（带 <code>--ngram_token_size=2</code>）与 <code>rustfs</code></td><td>取消 compose 里那两段的注释，地址改回 service-name</td></tr>
+    </tbody>
+  </table>
+  <pre class="code" data-code="bash"><code>cd deploy
+cp env/prod.env.example .env            # 填真值；.env 不提交
+docker build -t pushbox/server:1.0.0 -f Dockerfile ..
+docker compose up -d
+docker compose --profile monitoring up -d   # 另起 Prometheus + Grafana（指标只绑 127.0.0.1）</code></pre>
+  <div class="callout warn"><b>诚实说明</b><p>这套资产做过 Dockerfile/compose/Caddyfile 的语法与 YAML 解析校验，但<b>没有在本机 <code>docker compose up</code> 实跑过</b>（本机不在 PATH 里装 Docker）。第一次上生产请留一次现场验证的余量。</p></div>
+
+  <h3>HTTPS 与自签 CA</h3>
+  <p>当前联调走的是裸 HTTP（内网）。生产要么用 Caddy 的 Let's Encrypt，要么走自签根 CA。<b>两端接证书的方式完全不同</b>：</p>
+  <pre class="code" data-code="bash"><code># 在一台"管理机"上跑，不在部署机上跑
+PUSHBOX_HOST=pushbox.internal PUSHBOX_IP=<部署机IP> deploy/ca/gen-ca.sh
+# 只把 certs/pushbox.crt、pushbox.key、pushbox_ca.crt 拷到部署机的 deploy/certs/
+# 根 CA 私钥 pushbox_ca.key 离线保存，绝不进仓库、绝不上部署机</code></pre>
+  <table>
+    <thead><tr><th>端</th><th>接法</th><th>要注意</th></tr></thead>
+    <tbody>
+      <tr><td>Android</td><td>把根 CA 写进 <code>res/xml/network_security_config.xml</code>，release 构建连 <code>http://</code> 必须失败</td><td>系统 CA 里的自签证书不应被接受，只信任内置那一份</td></tr>
+      <tr><td>Windows</td><td>代码侧零改动（裸 <code>HttpClient</code> / <code>ClientWebSocket</code>），唯一入口是系统根存储：<br><code>certutil -addstore -user Root ca.cer</code></td><td><code>-user</code> = 当前用户，不需要管理员。<b>已经在跑的进程不会回头重读根存储</b>，WS 重连不算新进程 ⇒ 换证书的动作是"退出再起一次"。撤销要按指纹删，按 CN 删会被系统确认框拦掉且没删成</td></tr>
+      <tr><td>服务端</td><td><code>deploy/Caddyfile</code> 里 <code>tls</code> 指向那三本证书，WS 的 read/idle 300s、body 64MB、<code>/actuator</code> 不外泄</td><td>叶子到期用同一根 CA 重签即可，各端已信任的根不用动</td></tr>
+    </tbody>
+  </table>
+  <p><b>绝不绕过证书校验。</b>全项目 grep 不到 <code>ServerCertificateCustomValidationCallback</code> / <code>DangerousAcceptAnyServerCertificate</code> / <code>ServicePointManager</code>——"没有绕过"是靠没有代码来保证的。</p>
+
+  <h3>备份</h3>
+  <pre class="code" data-code="bash"><code>MYSQL_HOST=<DB_HOST> PB_DB_PASSWORD=... PB_S3_ACCESS_KEY=... \
+AGE_RECIPIENT=&lt;age 公钥或 ssh 公钥&gt; [RUSTFS_DATA_DIR=/path/to/data/rustfs] \
+  deploy/backup/backup.sh</code></pre>
+  <p>产物是 <code>pushbox-&lt;UTC&gt;.sql.gz.age</code>（<code>mysqldump --single-transaction</code>，InnoDB 一致性快照，不锁表）与 <code>rustfs-&lt;UTC&gt;.tar.age</code>。<b>因为库里是明文，异地上传前必须加密</b>；桶是唯一图片源，丢了不可恢复。挂 cron / systemd timer 定时跑。</p>
+
+  <h3>观测</h3>
+  <ul>
+    <li><code>GET /healthz</code> 与 <code>/actuator/health|info|prometheus</code>，<b>内网 only</b>（环回 + RFC1918 + 链路本地，公网来源 403），健康详情 <code>show-details: never</code>。</li>
+    <li>Grafana 面板用真实指标名 <code>pushbox_*</code>（含 <code>pushbox_media_queue_depth</code>，这个名字<b>只有一处</b>在写，别双写撞车）。</li>
+  </ul>
+
+  <h2 id="android">Android 客户端</h2>
+  <pre class="code" data-code="bash"><code>cd android
+./gradlew :app:assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk</code></pre>
+  <p>构建前先确认三件事，都是本机踩过的：</p>
+  <ol>
+    <li><b><code>android/local.properties</code> 里的 <code>sdk.dir</code> 只能用正斜杠</b>（<code>sdk.dir=D:/Apps/DE/Android/Sdk</code>）。<code>Properties</code> 会把 <code>\A</code> 这类转义吃掉，写成 <code>D:\Apps\...</code> 会让 AGP 拿到 <code>D:AppsDEAndroidSdk</code>，然后在 <code>SdkLocator</code> 抛一个"文件名、目录名或卷标语法不正确"的 <code>IOException</code>——堆栈完全不指向配置文件。</li>
+    <li><b><code>gradle-wrapper.properties</code> 的 <code>distributionUrl</code> 目前指向本地 zip</b>。换机器或要公开构建时改回 <code>https://services.gradle.org/distributions/gradle-9.6.1-all.zip</code>。</li>
+    <li><code>settings.gradle.kts</code> 写死了阿里云镜像（全局 <code>~/.gradle/init.gradle</code> 够不到 <code>pluginManagement</code>），内网构建时按需调整。</li>
+  </ol>
+  <p><b>连接地址</b>在首启页填：<code>http://10.0.2.2:8080</code>（模拟器访问宿主机）或开发机的局域网地址（真机，须与服务器同网段）。填完走"注册新 Space"或"用恢复码加入"。</p>
+  <p>装机后建议立即做完 <a href="usage.html#keepalive">保活引导</a>——这是本项目体验成败的关键，不依赖厂商推送就要付出让 ROM 放行的代价。</p>
+
+  <h2 id="windows">Windows 客户端</h2>
+  <h3>开发运行</h3>
+  <pre class="code" data-code="powershell"><code>dotnet build windows/PushBox.sln
+dotnet run --project windows/PushBox.Windows</code></pre>
+  <h3>安装包（推荐给别人用时）</h3>
+  <pre class="code" data-code="bash"><code>bash windows/installer/build-installer.sh            # publish + ISCC
+bash windows/installer/build-installer.sh --skip-publish   # 只改了 .iss 时重编一次</code></pre>
+  <table>
+    <thead><tr><th>取舍</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr><td>self-contained（约 56MB，269 本顶层文件）</td><td>"装到干净机器"这条验收不接受"请先装 .NET 桌面运行时"。判据只能看包内容：<code>{app}</code> 里 <code>coreclr</code>/<code>hostfxr</code>/<code>hostpolicy</code>/<code>System.Private.CoreLib</code>/<code>PresentationFramework</code> 五本同时存在——本机装了 SDK，所以"这台能不能起"永远为真、证明不了任何事</td></tr>
+      <tr><td>per-user、无 UAC（<code>PrivilegesRequired=lowest</code> + <code>%LOCALAPPDATA%\Programs\PushBox</code>）</td><td>这一版要写的 HKCU 与要落的 <code>pushbox.db</code> 本来就在当前用户下。提升成管理员装会把它们落到另一个用户的配置单元里，表现为"通知不弹、托盘点了没反应"，而不是安装报错</td></tr>
+      <tr><td>版本号只从 csproj 的 <code>&lt;Version&gt;</code> 读出来传进脚本</td><td>日志里"启动 {Version}"与安装包显示的版本必须是同一个数，两处各写一份就等着有一天对不上</td></tr>
+      <tr><td>卸载<b>不删</b> <code>%LOCALAPPDATA%\PushBox</code></td><td><code>identity.json</code> 是 DPAPI 绑当前用户的，删掉等于把"重装后认回同一个 Space"堵死；日志与历史库同理</td></tr>
+    </tbody>
+  </table>
+  <p>前提：装 Inno Setup 6（脚本会找 <code>ISCC.exe</code>，可用 <code>ISCC=</code> 覆盖）。没装就只跑到 publish 那一步并说明缺什么——<b>这个脚本不会打"假装成功"的包</b>。</p>
+
+  <h3>数据落在哪</h3>
+  <p>全在 <code>%LOCALAPPDATA%\PushBox\</code>：<code>identity.json</code>（身份与私钥，DPAPI）、<code>pushbox.db</code>（消息/会话/FTS5/游标）、<code>settings.json</code>（四个开关）、<code>logs\</code>（脱敏留痕）。</p>
+
+  <h3>装完先跑两条体检</h3>
+  <pre class="code" data-code="powershell"><code># 十二条真服务端判据（服务端要自己起在 8081，别占用你手上的 8080）
+dotnet run --project windows/PushBox.LiveCheck -- http://127.0.0.1:8081
+
+# 不连服务端的系统集成冒烟：HKCU 两处真写进去了、托盘真出来了、toast 真弹出来了
+dotnet run --project windows/PushBox.Windows -- --notify-smoke notify-smoke.txt</code></pre>
+  <p>LiveCheck 每跑一次会在开发库里留下一个 Space 和两台设备——这跟探针一样的代价，别在生产库上跑。</p>
+
+  <h2 id="port">端口与交接</h2>
+  <ul>
+    <li>服务端默认 <code>8080</code>。联调时代理/脚本一律起在 <code>8081</code>，避免撞上你自己手上那个实例。</li>
+    <li>Caddy 在 compose 里对外是 80/443，<code>/actuator</code> 与指标端口只绑 127.0.0.1。</li>
+    <li>SSRF 闸默认禁抓私网与 <code>100.64.0.0/10</code>。要让服务端去抓内网图片，必须显式把 host 加进 <code>pb.media.allow-hosts</code>（<b>精确 <code>host</code> 或 <code>host:port</code>，不是前缀匹配</b>）。</li>
+  </ul>
+
+  <div class="foot">下一步：<a href="usage.html">使用说明</a> —— 注册、建频道、发第一条消息、通知与保活、换机找回。</div>
+</div>
+</main>
+</div>
+</body>
+</html>

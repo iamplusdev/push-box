@@ -1,0 +1,82 @@
+{
+  "version" : 1,
+  "algorithm" : {
+    "frame_cipher" : "AES-256-GCM(nonce=8B BE(frame_index)+4B zero, AAD=8B BE(frame_index))",
+    "identity_sig" : "Ed25519",
+    "rest_auth" : "Ed25519 over 8-line LF canonical: version/device/METHOD/path/rawQuery/sha256hex(body)/ts/b64(nonce)",
+    "kx" : "X25519",
+    "kdf" : "HKDF-SHA256(salt=nonce, info=pushbox-frame-v1, len=32)"
+  },
+  "inputs" : {
+    "device_enc_priv" : "58a3c1e07f2b9d46a0c8e5f31b7d2094ae6c3f81b5d20c97e4a6b0f3c81d5290",
+    "device_sign_seed" : "11cd4a8e3b0f7c25d9a6e1b48c3f07a25d9e6b1c8f4a20d3b7e5c9f01a6d4b28",
+    "nonce" : "0f1e2d3c4b5a69788796a5b4c3d2e1f00123456789abcdef0123456789abcdef",
+    "response_eph_priv" : "6b1f8e04c7a2d9350e8b6c14fa7d3925c0e41b58d7f3260a9e5c8b14d02a7f63",
+    "rest_nonce" : "c4d5e6f708192a3b4c5d6e7f8091a2b3",
+    "server_eph_priv" : "3a2f5c19d0b84e6a91c7f23d5b0a8e147c6d3f28a1b5e0c94d7f2a6b1e8c35d0"
+  },
+  "outputs" : {
+    "device_sign_pub_b64" : "SOM61XIUl_uXqrqfEo8sAXI2u-b8pq7E-dkefK0B8RY",
+    "session_key_hex" : "0ed70c727660eb8fad5297e8d602bb319fee9d17406cfa17b9e70a03d647846e",
+    "shared_secret_hex" : "8b556c60513ba5e4f74ca03c90ba8c0910cf59e23de887c87636fe7476e65641",
+    "device_enc_pub_b64" : "Da3Vz-52eF86H7drUPT3NGruRa0fPtOs-hubZWRF7Ss",
+    "server_id_pub_b64" : "PM0kHP_Js2GARLl9A22GFFk9iwF8NA8d7odzOFUXZUs",
+    "server_eph_pub_b64" : "KsRNZJ3gsqlLT570vTDkHQ7DTECG_eZAdQEVK5XM4gM",
+    "server_pub_fp" : "e76604b23bcf585d"
+  },
+  "signatures" : {
+    "kx_sig_b64" : "i5gebkqyGAp7GyGBOJbLiJx20DS0k5tRGyO5ZUatjvQR4lLSdQqMCz5cpl4VJnJwHfdSTTgxAuvRKJFXZWJcCQ",
+    "kx_message_hex" : "2ac44d649de0b2a94b4f9ef4bd30e41d0ec34c4086fde6407501152b95cce2030f1e2d3c4b5a69788796a5b4c3d2e1f00123456789abcdef0123456789abcdef",
+    "ws_auth_message" : "pushbox-ws-auth-v1\ndev_7f3a\nDx4tPEtaaXiHlqW0w9Lh8AEjRWeJq83vASNFZ4mrze8\n1765500000000",
+    "ws_auth_sig_b64" : "cbUfC_yubYUzZneOPWXkM4WNCXmxUKkTzfcT5SXchp5SwjbR4SO-ZKPHNqSOYIlodG6pnY_QPVWwdthldWhbAg"
+  },
+  "rest_auth" : {
+    "canonical_version" : "pushbox-rest-auth-v1",
+    "post_channels" : {
+      "body_sha256_hex" : "b6068688f044075608479784fc6bf14ded71957d45f04ab85be7ed0c04675d7e",
+      "method" : "POST",
+      "body" : "{\"name\":\"运维告警\"}",
+      "sig_b64" : "FjKuUeK3Kjnykt2DWrqY9KYdEdCDBPzw4vCxjYS0xQOvVyYHmSMNxZ4kuxvppev-4J3YmOOhUGY51m743MfAAQ",
+      "canonical" : "pushbox-rest-auth-v1\ndev_7f3a\nPOST\n/api/v1/channels\n\nb6068688f044075608479784fc6bf14ded71957d45f04ab85be7ed0c04675d7e\n1765500000001\nxNXm9wgZKjtMXW5_gJGisw",
+      "path" : "/api/v1/channels",
+      "query" : "",
+      "ts" : 1765500000001
+    },
+    "client_nonce_b64" : "xNXm9wgZKjtMXW5_gJGisw",
+    "empty_body_sha256_hex" : "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "device_id" : "dev_7f3a",
+    "get_search" : {
+      "ts" : 1765500000000,
+      "sig_b64" : "pOrZkGGzpNJlsgDigMKlkEKzw1qb0HhjMQIxlFwRi8K0G6-8kSLI4AuLgvXpI0b2pq3fDE42YqtVW0L6oY_XAg",
+      "query" : "q=CPU%20usage&channel_no=83271504&sender_id=&since=0&limit=50",
+      "method" : "get",
+      "body" : "",
+      "path" : "/api/v1/search",
+      "canonical" : "pushbox-rest-auth-v1\ndev_7f3a\nGET\n/api/v1/search\nq=CPU%20usage&channel_no=83271504&sender_id=&since=0&limit=50\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1765500000000\nxNXm9wgZKjtMXW5_gJGisw"
+    }
+  },
+  "sealed_box" : {
+    "frame_index" : 0,
+    "eph_priv" : "6b1f8e04c7a2d9350e8b6c14fa7d3925c0e41b58d7f3260a9e5c8b14d02a7f63",
+    "session_key_hex" : "6b1c6045b14b8698150ab17d8c376497db036dc55c77c8c326ae106971caf71e",
+    "plaintext_json" : "{\"device_id\":\"dev_7f3a\",\"group_id\":\"grp_001\",\"token\":\"pbk_1a2b3c4d5e6f\",\"recovery_code\":\"9f3c77ad1e58b0c2Xk7mQw\",\"server_pub_fp\":\"e76604b23bcf585d\"}",
+    "derive" : "K=HKDF-SHA256(ikm=X25519(device_enc_priv,eph_pub), salt=sha256(eph_pub 原始字节), info=pushbox-frame-v1, len=32); n 恒为 0",
+    "salt_b64" : "3mcv8BxABqIfb8AeZG2fBatMvRoW_3m3eS3eQSt9W-E",
+    "envelope_json" : "{\"v\":1,\"eph_pub\":\"Xlo66mOgo3HfbaaRk-fzjFwV61XSMRQl378Ox_tP5Ww\",\"salt\":\"3mcv8BxABqIfb8AeZG2fBatMvRoW_3m3eS3eQSt9W-E\",\"data\":\"xldgKV12xjPD2-IrkWlJ6YnvWj78CJMgP738IZetbIelgs7-vB88NZPDQx90_7Je9USZvxw_4aMPzQsf51HWua4YhRHsU-zSqLA3O71y0SZ5npndP_bIjySns9wZ1QPUrL_YaEiGyYkhODzvZKj7Z9NcwDl31Kf-XkrfbAgo0ve-ID44ruaW-GF4pVraa3X94N1Ko8MXaxkRlnWo4PUm3rakxfQ\",\"n\":0}",
+    "eph_pub_b64" : "Xlo66mOgo3HfbaaRk-fzjFwV61XSMRQl378Ox_tP5Ww"
+  },
+  "frame" : {
+    "plaintext_json" : "{\"t\":\"message\",\"seq\":1,\"channel_no\":\"83271504\",\"id\":\"01JZKTEST000000000000000\",\"sender_id\":\"grafana\",\"type\":\"markdown\",\"title\":\"[严重] CPU 使用率 > 90%\",\"summary\":\"摘要\",\"content\":\"正文 **粗体**\",\"level\":\"error\",\"url\":\"https://example.com/d/abc\",\"media\":[{\"idx\":0,\"status\":\"ready\",\"key\":\"media/01JZK/0\",\"mime\":\"image/png\",\"size\":1024,\"w\":800,\"h\":600,\"thumb\":\"media/01JZK/0.thumb\"}],\"sender_name\":\"Grafana 告警\",\"created_at\":1765500000000,\"notify\":true,\"truncated\":false}",
+    "frame_index" : 0,
+    "ciphertext_b64" : "8WPXbH3qlAbcIa7YMJDnwmEgs_te4Xudta3idG15_Eerviy2HFWmXP345NuOuSwvJCA7sXp8ssTlNtmVXCMWrhJSXRs_I1sBXYAAFYwjr8ua_rBsE1sRUEuudx7FMVn85kAbSwptBVBUETpFYf9E3EjoVT5s0VOeTPj4bzzltUwd3z5y4zQWWxGqcgd_1GnadoHgdLq66WJg1h28FVncnjC-vpzsrbjkBYWztw1EETmQFUiaTpbWTB33gTSsNCHsC4PhxuH6JPTEb1UKZS63Pe0r_F57FK82UNRv-ck0Vvpo8J9U9uAnn14t6Nu6XN7N3-u5OsWSDU1VYlPdc31Bu7TdXg8WW9TYgAVBFmOtTOnjFcIrPHnuwK7CkB3E1URd0WAj6cY_oEX8oNz6zr6DZYuL4rMnCnX4NQ1KbK0knHs9Z87zs_bpqrnlZgQmKRNiNT1_Yv5xn1kyRtbsSspOZ-7rNSSm3ivoy0gX6fxYo-5Sd0aRS_h62HnyS3P_pXY1A0cKb3w_uZiClDHG87JfskflC76RQ0sPGQ0QNgFElfHA0nvG0ufE2q6g-ds8PQ4n7Rl_KGEZi3Cf0W4xUFvGL76QGomtzuEEzTDRHOKrQ6gDWLUegZq56v6DsDMb0OaDI8Ky4L7kiK9em1WPaIFW9uMFMQ",
+    "envelope_json" : "{\"t\":\"enc\",\"n\":0,\"data\":\"8WPXbH3qlAbcIa7YMJDnwmEgs_te4Xudta3idG15_Eerviy2HFWmXP345NuOuSwvJCA7sXp8ssTlNtmVXCMWrhJSXRs_I1sBXYAAFYwjr8ua_rBsE1sRUEuudx7FMVn85kAbSwptBVBUETpFYf9E3EjoVT5s0VOeTPj4bzzltUwd3z5y4zQWWxGqcgd_1GnadoHgdLq66WJg1h28FVncnjC-vpzsrbjkBYWztw1EETmQFUiaTpbWTB33gTSsNCHsC4PhxuH6JPTEb1UKZS63Pe0r_F57FK82UNRv-ck0Vvpo8J9U9uAnn14t6Nu6XN7N3-u5OsWSDU1VYlPdc31Bu7TdXg8WW9TYgAVBFmOtTOnjFcIrPHnuwK7CkB3E1URd0WAj6cY_oEX8oNz6zr6DZYuL4rMnCnX4NQ1KbK0knHs9Z87zs_bpqrnlZgQmKRNiNT1_Yv5xn1kyRtbsSspOZ-7rNSSm3ivoy0gX6fxYo-5Sd0aRS_h62HnyS3P_pXY1A0cKb3w_uZiClDHG87JfskflC76RQ0sPGQ0QNgFElfHA0nvG0ufE2q6g-ds8PQ4n7Rl_KGEZi3Cf0W4xUFvGL76QGomtzuEEzTDRHOKrQ6gDWLUegZq56v6DsDMb0OaDI8Ky4L7kiK9em1WPaIFW9uMFMQ\"}"
+  },
+  "ratchet" : {
+    "epoch1_key_hex" : "2cc9f1341529f00041d7ccd4287c905554f64c8bc9d4587251ff682dd98382c8",
+    "info" : "pushbox-frame-ratchet-v1"
+  },
+  "summary" : {
+    "markdown_stripped" : "正文 粗体 引用",
+    "title_priority" : "[严重] CPU 使用率 > 90%"
+  }
+}

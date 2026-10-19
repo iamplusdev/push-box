@@ -1,0 +1,67 @@
+# §11.2 容器/生产配置。这一份存在的唯一理由：compose 传进来的 PB_S3_* 变量
+# 在 prod profile 下必须有人消费——application-dev.yml 不会被加载，光靠 relaxed binding
+# 赌 pb.s3.access-key ← PB_S3_ACCESS_KEY 的映射规则（Boot 同时接受"下划线代连字符"与"删连字符"
+# 两种形态，但这是一条实现细节而不是契约）不值得压在生产部署上。
+# 凭据只从环境变量读取，任何情况下都不要把明文写进本文件（本文件会入库）。
+spring:
+  datasource:
+    # 这份文件是 PB_DB_* / PB_S3_* 的唯一消费点：compose 只透传同名环境变量，
+    # 不写 SPRING_DATASOURCE_*，免得两处各声称拥有同一个键、真正生效的是优先级高的那一处。
+    # url 和 s3.endpoint 一样不给内置默认值——两套拓扑的地址只差主机，猜错的那套会连到不该连的库。
+    url: ${PB_DB_URL}
+    username: ${PB_DB_USERNAME:pushbox}
+    # 留空时进程并不会当场拒绝启动：口令这类占位符是惰性替换的，而 Hikari 首用才连库，
+    # 于是症状是 /healthz 报 db=down、每条入站 500，容器却看起来一切正常（healthcheck 只探 TCP）。
+    # 真正把这道关守住的是 compose 里的 ${PB_DB_PASSWORD:?}；绕过 compose 直接跑 jar 的人得自己
+    # 确认 PB_DB_URL / PB_DB_PASSWORD / PB_S3_ENDPOINT / PB_S3_ACCESS_KEY / PB_S3_SECRET_KEY 都在。
+    password: ${PB_DB_PASSWORD}
+
+server:
+  # 端口也要有人消费：compose 的端口映射、healthcheck 与 Caddy 的上游都读 PB_SERVER_PORT，
+  # 而以前只有这三处读它、进程本身只认 base yml 的 7404。改一次 PB_SERVER_PORT 的结果是
+  # "容器起来了但映射指向一个没人监听的端口"——探活失败，Caddy 因为 depends_on: service_healthy
+  # 干脆不起，症状是"部署卡住"，跟端口这个原因看着毫无关系。
+  port: ${PB_SERVER_PORT:7404}
+  # 反代（Caddy）在前：X-Forwarded-* 只认这一跳，别拿客户端自填的头做准入。
+  # 注意 §5.2 的 InternalAccessFilter 故意只看 getRemoteAddr()，不受这里影响。
+  forward-headers-strategy: none
+
+pb:
+  # §5.2 运维端点（/healthz、/actuator/**）准入：默认只放行环回。这里显式列额外网段，
+  # 一个都不给就是"只有本机与容器自身能拉指标"。写错 CIDR 会当场拒绝启动，不会静默放行。
+  # 取值口径见 deploy/docker-compose.yml 里 PB_SECURITY_INTERNAL_CIDRS 那一行的注释。
+  security:
+    internal-cidrs: ${PB_SECURITY_INTERNAL_CIDRS:}
+  storage:
+    # §4.5 拓扑 C：s3（默认）| local。这两行以前没有，所以 README 与 prod.env.example 里的
+    # PB_STORAGE_TYPE=local 是一个死开关——compose 透传了变量，但 prod profile 的 yml 不认它，
+    # 进程照旧按代码默认值走 S3，配了 local 的人只会看到"启动正常、图片全 404"。
+    # 加变量必须同时改本文件，就是这类事故的唯一防线。
+    type: ${PB_STORAGE_TYPE:s3}
+    local-path: ${PB_STORAGE_LOCAL_PATH:/app/data/media}
+  s3:
+    # 这三项留空是有意的：PB_STORAGE_TYPE=local 时它们本来就不该有值，而 S3Config 在 s3 模式下
+    # 会对每一个空值点名拒绝启动（"pb.s3.endpoint 不能为空"），比 compose 的 ${VAR:?} 只晚一个环节，
+    # 却不再把本地存储那条拓扑挡在解析阶段之外。
+    endpoint: ${PB_S3_ENDPOINT:}
+    region: ${PB_S3_REGION:us-east-1}
+    bucket: ${PB_S3_BUCKET:pushbox}
+    access-key: ${PB_S3_ACCESS_KEY:}
+    secret-key: ${PB_S3_SECRET_KEY:}
+    path-style: ${PB_S3_PATH_STYLE:true}
+    # none|sse-c。sse-c 时 PB_S3_MASTER_KEY 必须是 base64 的 32 字节；缺失或长度不对
+    # 会在 MediaObjects 构造期抛异常让进程起不来（绝不静默写明文）。
+    # 主钥一旦用过就不可轮换：换了旧封装钥再也解不开。
+    # 这一行的默认值 none 在 prod 不再是不用管的选项：明文存媒体会让图片/头像在桶里裸奔，
+    # 而 PB_S3_OBJECT_ENCRYPT 带默认值、compose 的 ${VAR:?} 卡不住它，所以由 ProdPlaintextMediaGuard
+    # 在启动时拒绝——要么配 sse-c，要么显式打开迁移期逃生阀 PB_ALLOW_PLAINTEXT_MEDIA=1。
+    object-encrypt: ${PB_S3_OBJECT_ENCRYPT:none}
+    master-key: ${PB_S3_MASTER_KEY:}
+  admin:
+    # Web 管理台登录口令。留空即禁用管理台（登录返回 403 "管理台未启用"）。
+    # 管理台经 Caddy 公网可达，务必用强随机值（如 openssl rand -base64 32），别复用 dev 的弱口令。
+    secret: ${PB_ADMIN_SECRET:}
+    # JWT 的 HS256 签名钥，与上面的登录口令是两回事：共用一个值时改口令等于作废全部已发 token，
+    # 换签名钥又等于改口令，结果是两个都长期不换。留空/短于 32 字节且管理台已启用 ⇒ 拒绝启动。
+    # 生成：openssl rand -base64 32（必须与 PB_ADMIN_SECRET 不同）。
+    jwt-secret: ${PB_ADMIN_JWT_SECRET:}

@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- §7.2 后台常驻：remoteMessaging 是 Android 15+ 对"自建长连接收消息"的正规归类 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <!-- §7.2 D18 保活：开机/升级后重装重新排期 WorkManager 兜底；引导用户把 App 移出电池优化 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- §8.4 D30 App 锁生物识别：指纹/面容解锁，可选、默认关 -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- §7.5 添加设备：扫恢复码二维码，required=false 让无相机设备也能装（仍可手输恢复码） -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- 版本自更新：下载 GitHub Releases 的 APK 后拉起系统安装面板（Android 8+ 需此权限 + 未知来源授权） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <application
+        android:name=".App"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.PushBox">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".push.PushService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
+
+        <!-- §7.2 D18：开机/解锁/升级重装后重新排期 WorkManager 兜底 -->
+        <receiver
+            android:name=".push.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- §7.3 通知"全部已读"快捷操作 -->
+        <receiver
+            android:name=".notify.Notifier$MarkAllReadReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!-- 自更新：把 cacheDir/updates 里的 APK 以 content:// 交给系统安装器（targetSdk 36 禁 file:// URI） -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

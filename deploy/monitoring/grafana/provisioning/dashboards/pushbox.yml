@@ -1,0 +1,12 @@
+# 让 Grafana 自动加载同目录下的 pushbox.json，省掉手动 import。
+apiVersion: 1
+providers:
+  - name: pushbox
+    orgId: 1
+    folder: PushBox
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

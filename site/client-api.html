@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>客户端 API（读取） · PushBox</title>
+<meta name="description" content="PushBox 客户端 API：设备 token + Ed25519 请求签名、密封盒响应加密、端点全表（设备/频道/消息/已读/删除/搜索/媒体字节接口）。">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<div class="scrim"></div>
+<div class="shell">
+
+<nav class="side">
+  <a class="brand" href="index.html">
+    <span class="mark">P</span>
+    <span><b>PushBox</b><span>1.0.0 · 自托管推送</span></span>
+  </a>
+  <h3>文档</h3>
+  <ul>
+    <li><a href="index.html">首页</a></li>
+    <li><a href="overview.html">概览</a></li>
+    <li><a href="install.html">安装与部署</a></li>
+    <li><a href="usage.html">使用说明</a></li>
+    <li><a href="api.html">入站 API（写入）</a></li>
+    <li><a href="client-api.html" aria-current="page">客户端 API（读取）</a></li>
+    <li><a href="protocol.html">长连接与加密</a></li>
+  </ul>
+  <h3>仓库</h3>
+  <ul>
+    <li><a href="https://github.com/iamplusdev/push-box">GitHub</a></li>
+    <li><a href="https://gitee.com/iamplus/push-box">Gitee</a></li>
+    <li><a href="https://gitea.iamplus.cn/iamplus/push-box">Gitea</a></li>
+  </ul>
+  <h3>本页</h3>
+  <div id="toc"></div>
+  <button class="theme-toggle" id="themeBtn" type="button">☾ 深色</button>
+</nav>
+
+<main id="main">
+<div class="wrap">
+
+  <div class="topbar">
+    <button id="navBtn" type="button" aria-label="打开菜单">☰</button>
+    <b>客户端 API（读取）</b>
+  </div>
+
+  <h1>客户端 API：设备读取</h1>
+  <p class="lede">这一套是给<b>自己的设备</b>用的：拉历史、搜全文、建频道、标已读、删除、取图片字节。与<a href="api.html">入站 API</a>是两条完全不同的鉴权路径——<b>第三方永远够不到这里</b>。</p>
+
+  <h2 id="model">两条鉴权路径</h2>
+  <div class="grid c2">
+    <div class="card">
+      <h4 style="margin-top:0">路径 A · 第三方写入</h4>
+      <p style="margin:0;font-size:13.5px"><code>POST /message</code><br>凭据 = 频道号 + 频道密钥，<b>只放 body</b><br>响应是明文 JSON<br>不涉加密材料</p>
+    </div>
+    <div class="card">
+      <h4 style="margin-top:0">路径 B · 设备读写 <span class="tag">本页</span></h4>
+      <p style="margin:0;font-size:13.5px"><code>/api/v1/**</code><br>凭据 = 设备 token + Ed25519 请求签名<br><b>响应体一律过一次性密封盒</b><br>私钥不离开设备，服务端只存公钥</p>
+    </div>
+  </div>
+  <p>路径 B 的加密目标很明确：<b>让服务端之外的人读不到消息正文</b>——即使反代、日志、抓包都拿到 HTTPS 之外的东西也没用。它<b>不是</b>端到端加密：服务端为了能做中文全文检索，库里存的是明文。</p>
+
+  <h2 id="auth">请求鉴权四件套</h2>
+  <table>
+    <thead><tr><th>位置</th><th>内容</th><th>校验</th></tr></thead>
+    <tbody>
+      <tr><td><code>Authorization: Bearer &lt;token&gt;</code></td><td>注册时下发的设备令牌</td><td>令牌须存在、未吊销，且 <code>device_id</code> 与它匹配</td></tr>
+      <tr><td><code>X-PB-Device</code></td><td>设备 ID</td><td>与令牌指向的设备一致，否则 <code>unauthorized</code></td></tr>
+      <tr><td><code>X-PB-Ts</code></td><td>epoch <b>毫秒</b></td><td>与服务端时间差 ≤ <b>300s</b>，超出报 <code>clock_skew</code></td></tr>
+      <tr><td><code>X-PB-Nonce</code></td><td>base64，<b>≥16 字节</b></td><td>进 10 分钟去重缓存；重复报 <code>409 replay</code></td></tr>
+      <tr><td><code>X-PB-Sig</code></td><td>base64 的 Ed25519 签名</td><td>用设备注册时上传的 <code>sign_pubkey</code> 验；失败报 <code>bad_signature</code></td></tr>
+    </tbody>
+  </table>
+  <p>四个头缺任何一个都是同一句话（"缺少签名头"），<b>缺哪个不告诉你</b>。另外每个设备每分钟限 <b>300 次</b>且不叠突发。</p>
+
+  <h2 id="canonical">签的是什么：canonical 字符串</h2>
+  <p>逐字节拼出来的，换行分隔，UTF-8：</p>
+  <pre class="code" data-code="text"><code>pushbox-rest-auth-v1
+{deviceId}
+{METHOD 大写}
+{requestURI}
+{原始 query 串，无 query 时是空行}
+{sha256_hex(body)，无 body 时对空字节串取 sha256}
+{ts}
+{base64(clientNonce)}</code></pre>
+  <p>四条最容易踩的：</p>
+  <ul>
+    <li><b>path 是 <code>getRequestURI()</code></b>，含 servlet context path（默认空，配了 <code>server.servlet.context-path</code> 就要带上）。</li>
+    <li><b>query 是原始串，不是"解析后重新拼"</b>。所以 <code>GET /api/v1/search</code> 的参数顺序<b>固定</b>为 <code>q, channel_no, sender_id, type, since, limit</code>——任何一端换序就整片验签失败。<code>q</code> 含中文/空格时必须先按<b>百分号编码后</b>的形态进 canonical，因为服务端看到的本来就是编码后的串。</li>
+    <li><b>无 body 不等于不签</b>：GET、DELETE、以及三个"点一下就行"的 POST（<code>rotate-secret</code>、<code>reset-channel-no</code>、<code>rotate-recovery-code</code>）都对<b>空字节串</b>的 sha256 取哈希。这一档在 Android 上还有第二个坑，见<a href="#emptybody">实现注意</a>。</li>
+    <li>长整型 <b>1000</b> 与字符串 <b>"1000"</b> 的 sha256 不同：<code>ts</code> 是数字，别用带引号的形态去拼。</li>
+  </ul>
+
+  <h2 id="seal">响应：一次性密封盒</h2>
+  <p>除两个字节接口外，<b>所有 <code>/api/v1</code> 响应体</b>都被包成同一个信封：</p>
+  <pre class="code" data-code="json"><code>{
+  "v": 1,
+  "eph_pub": "base64(32B X25519 临时公钥)",
+  "salt":    "base64(32B = sha256(eph_pub))",
+  "data":    "base64(AES-256-GCM 密文)",
+  "n": 0
+}</code></pre>
+  <p>客户端用自己的 <code>enc</code> 私钥与 <code>eph_pub</code> 做 X25519 → HKDF 派生出 <code>K</code> → 以 <code>n</code> 为 nonce、AAD=<code>n</code> 解开。<b>每次响应现场生成一对临时密钥</b>，所以一次请求一个会话，没有跨请求的帧计数器。</p>
+  <div class="callout warn">
+    <p><b>两个例外：字节接口不是密封盒</b></p>
+    <p><code>GET /api/v1/media/{msgId}/{idx}</code> 与 <code>GET /api/v1/avatars/{token}</code> 返回的是<b>原始字节 + 真实 Content-Type + <code>Cache-Control: no-store</code></b>。图片要直接喂给系统图片解码器，套一层 base64 信封只会白白多一倍流量。它们仍然<b>完整鉴权</b>（Bearer + 四签名头），只是响应不加密——传输保护交给 TLS。</p>
+  </div>
+
+  <h2 id="endpoints">端点全表</h2>
+  <p>下表"鉴权"列：<span class="tag">开放</span> = 只按来源 IP 限流；<span class="tag">设备</span> = 上面那套签名。<b>注意连 <code>register</code>/<code>join</code> 的响应也是密封盒</b>——因为 token 与恢复码等价于账号口令。</p>
+  <h3>设备与空间</h3>
+  <table>
+    <thead><tr><th>方法 · 路径</th><th>鉴权</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag post">POST</span> <code>/api/v1/devices/register</code></td><td>开放</td><td>body：<code>enc_pubkey</code>、<code>sign_pubkey</code>（base64url 无填充的 32 字节原始公钥）、<code>name</code>、<code>platform</code>、<code>group_secret?</code>。回 <code>device_id</code> / <code>group_id</code> / <code>token</code> / <code>recovery_code</code> / <code>server_pub_fp</code></td></tr>
+      <tr><td><span class="tag post">POST</span> <code>/api/v1/devices/join</code></td><td>开放</td><td>换机/加第二台：<code>group_secret</code> 必填，其余同上。同样受<b>每 Space 5 台</b>上限</td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/api/v1/devices</code></td><td>设备</td><td>设备列表，含 <code>last_seen_at</code>、<code>revoked_at</code>、<code>current</code></td></tr>
+      <tr><td><span class="tag del">DELETE</span> <code>/api/v1/devices/{deviceId}</code></td><td>设备</td><td>吊销：token 即刻失效、<b>在线连接当场踢掉</b>，其余端即刻收到 <code>config/device_revoked</code></td></tr>
+      <tr><td><span class="tag post">POST</span> <code>/api/v1/devices/rotate-recovery-code</code></td><td>设备</td><td><b>无请求体</b>。旧码即刻失效，新码只在这一次返回明文</td></tr>
+    </tbody>
+  </table>
+  <h3>频道（App 是唯一控制台，没有 Web 管理台）</h3>
+  <table>
+    <thead><tr><th>方法 · 路径</th><th>鉴权</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag post">POST</span> <code>/api/v1/channels</code></td><td>设备</td><td>body：<code>name?</code>、<code>max_level?</code>、<code>max_images?</code>。<b>响应带 <code>secret</code>，仅此一次</b></td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/api/v1/channels</code></td><td>设备</td><td>频道面（<code>channels[]</code> + 根上的 <code>subscribed_only</code>），<b>永远不含 secret</b>。每一项<b>恒带</b> <code>subscribed</code>（这台设备接没接入这条），一条都没接入时是全 <code>false</code> 而不是缺这个键</td></tr>
+      <tr><td><span class="tag post">POST</span> <code>/api/v1/channels/join</code></td><td>设备</td><td>body：<code>{channel_no, secret}</code> → <b>同一 Space 内</b>接入这条频道。回该频道的治理面 + <code>subscribed_only</code>，<b>不含 secret</b>。错密钥 401；未知号码 / 别组 / 已归档一律 404（不给枚举频道号留缝）；空号码 400。重复接入幂等</td></tr>
+      <tr><td><span class="tag post">POST</span> <code>/api/v1/channels/leave</code></td><td>设备</td><td>body：<code>{channel_no}</code>。取消接入，幂等：没接入过也回 200，<code>removed:false</code></td></tr>
+      <tr><td><span class="tag post">POST</span> <code>/api/v1/channels/subscription-mode</code></td><td>设备</td><td>body：<code>{subscribed_only: 0|1}</code>。切换这台设备的投递过滤器，<b>回服务端实际生效值</b>（客户端以此为准，别用自己刚发出去的那个）。填 2、-1 之类一律 400</td></tr>
+      <tr><td><span class="tag put">PUT</span> <code>/api/v1/channels/{no}</code></td><td>设备</td><td>治理位 patch，11 个字段见下表。<b>未提交的字段保持原值</b></td></tr>
+      <tr><td><span class="tag post">POST</span> <code>/api/v1/channels/{no}/rotate-secret</code></td><td>设备</td><td><b>无请求体</b>。回新 secret；旧 secret 即刻作废</td></tr>
+      <tr><td><span class="tag post">POST</span> <code>/api/v1/channels/{no}/reset-channel-no</code></td><td>设备</td><td><b>无请求体</b>。换发新对外号码，旧号即刻作废，<b>历史随迁、密钥不变</b>；回新号 + <code>old_channel_no</code></td></tr>
+      <tr><td><span class="tag del">DELETE</span> <code>/api/v1/channels/{no}</code></td><td>设备</td><td>归档：停止接收新消息（第三方收 403），历史保留，<b>不可撤销</b></td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/api/v1/channels/{no}/capacity</code></td><td>设备</td><td>该频道消息数、正文字节数、图片数、图片字节数、最早一条时间</td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/api/v1/channels/{no}/senders</code></td><td>设备</td><td>白名单条目（含已停用的）</td></tr>
+      <tr><td><span class="tag post">POST</span> <code>/api/v1/channels/{no}/senders</code></td><td>设备</td><td>body：<code>{sender_id, enabled?}</code>。<b><code>enabled</code> 省略＝加上并能发；显式 <code>false</code> 是停用而不是删除</b></td></tr>
+    </tbody>
+  </table>
+  <p><code>PUT /channels/{no}</code> 可提交：<code>name</code>、<code>max_level</code>、<code>max_images</code>、<code>rate_limit</code>、<code>max_body_bytes</code>、<code>strict_auth</code>、<code>muted</code>、<code>daily_msg_limit</code>、<code>daily_image_limit</code>、<code>daily_bytes_limit</code>、<code>sender_whitelist_mode</code>。数字型治理位<b>填 0 表示沿用服务端默认值</b>，而 <code>muted</code>/<code>strict_auth</code>/<code>sender_whitelist_mode</code> 是 0/1 位，<b>0 就是"关"，不是"没配"</b>。</p>
+  <div class="callout">
+    <p><b>接入是投递过滤器，不是权限边界</b></p>
+    <p>写一条频道凭 <code>channel_no + secret</code>，读一条频道凭设备 token——<code>join</code> 用的是前者，所以它<b>只证明"我有权往这条频道发"</b>，然后服务端把这条频道记进<b>这台设备</b>的订阅集。跨 Space 的频道即使知道密钥也接不进来（404），因为那会把"凭一串数字读到别人历史"变成第二条读路径。</p>
+    <p><code>subscribed_only=0</code>（默认）＝这台设备收本 Space 全部频道；<code>=1</code> 时实时帧、WS 回放、REST 历史与搜索<b>一起</b>只走已接入的频道。因此开了过滤又一条没接入就是收不到任何内容——界面上要把这句话讲出来，别让人对着一个安静的图标找 bug。</p>
+    <p>两条刻意的口径：<b>建频道的那台设备默认接入自己刚建的那条</b>（否则"新建 → 开过滤"会把自己静默掐断）；接入之后连接入<b>前</b>的消息也拉得到（过滤按频道，不按接入时刻）。</p>
+  </div>
+  <h3>消息、已读与删除</h3>
+  <table>
+    <thead><tr><th>方法 · 路径</th><th>参数 / body</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag get">GET</span> <code>/api/v1/messages</code></td><td><code>after_seq</code>=0 · <code>channel_no?</code> · <code>limit</code>=200（夹到 1..500）</td><td>增量补拉；<code>after_seq=0</code> 即全量恢复历史。回 <code>{messages[], tombstones[], latest_seq, has_more}</code></td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/api/v1/messages/{id}</code></td><td>—</td><td>单条全文。<b>帧里 <code>truncated:true</code> 时靠它取回未截断正文</b></td></tr>
+      <tr><td><span class="tag put">PUT</span> <code>/api/v1/state/read</code></td><td><code>[{channel_no, sender_id, last_read_seq}]</code></td><td>批量置已读，逐条向同组其他端广播 <code>read</code> 帧。回 <code>{ok, updated}</code></td></tr>
+      <tr><td><span class="tag del">DELETE</span> <code>/api/v1/messages/{id}</code></td><td>—</td><td>标 tombstone + 图片标待删 + 广播 <code>tombstone{id}</code>。回 <code>{ok, id, deleted_at}</code></td></tr>
+      <tr><td><span class="tag del">DELETE</span> <code>/api/v1/messages</code></td><td><code>channel_no</code> 必填 · <code>sender_id?</code></td><td>带 <code>sender_id</code> 清该会话；省略则清整个频道。回 <code>{ok, channel_no, sender_id, deleted, deleted_at}</code></td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/api/v1/search</code></td><td><code>q</code> 必填 · <code>channel_no?</code> · <code>sender_id?</code> · <code>type?</code> · <code>since?</code> · <code>limit?</code></td><td>服务端全文搜索（中文 ngram）。回 <code>{results[], has_more}</code>，<b>每条只有 snippet 不含全文</b></td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <p><b>清空是"一条 UPDATE + 一条 scope 帧"，不是逐条删除</b></p>
+    <p>一个会话可能上千条：逐条既打爆 SQL 往返，也会让其他端收到上千帧。所以 <code>sender_id</code> 为空的 scope 删除会下发 <code>tombstone{scope:{channel_no, sender_id:null}}</code>，客户端据此清掉该频道下<b>所有</b>会话。</p>
+    <p>幂等：会话本来就空或已清空时回 <code>deleted=0</code>，<b>不报 404</b>——客户端重试不该看到"不存在"。</p>
+  </div>
+  <h3>字节接口（上面那对例外）</h3>
+  <table>
+    <thead><tr><th>方法 · 路径</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag get">GET</span> <code>/api/v1/media/{msgId}/{idx}?size=thumb|full</code></td><td><b>原始图片字节</b>。<code>size</code> 只认这两个值，非法值 400。<b>请求要带签名头</b>（图片不是公开的）</td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/api/v1/avatars/{token}</code></td><td><b>原始头像字节</b>。<code>token</code> = <code>sha256(sender_id)</code> 的小写十六进制（64 位）。用哈希而不是原文，是因为自报的 <code>sender_id</code> 可以含 <code>/</code>、<code>..</code> 或中文</td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/healthz</code></td><td>无鉴权存活探针，不依赖库与桶</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="errors">客户端侧错误码</h2>
+  <table>
+    <thead><tr><th>HTTP</th><th><code>error</code></th><th><code>hint</code></th><th>怎么处理</th></tr></thead>
+    <tbody>
+      <tr><td>401</td><td><code>unauthorized</code></td><td>缺头 / <code>设备无效或已吊销</code> / <code>bad_signature</code> / <code>clock_skew</code> / <code>nonce 长度不足</code> / <code>ts 必须是 epoch 毫秒</code></td><td><b>只有"设备无效或已吊销"该清本地身份</b>，其余（尤其 <code>clock_skew</code>）清了等于自杀，只能校时或修签名</td></tr>
+      <tr><td>409</td><td><code>replay</code></td><td>—</td><td>nonce 撞了，换新 nonce 重签一次即可</td></tr>
+      <tr><td>409</td><td><code>device_limit_reached</code></td><td>—</td><td>Space 已满 5 台，先吊销一台</td></tr>
+      <tr><td>404</td><td><code>not_found</code></td><td><b>是槽位状态机的一部分，不是随便写的调试文本</b>：媒体接口回 <code>pending</code>/<code>ready</code>/<code>failed</code>/<code>deleted</code>/<code>purged</code>；头像接口只回 <code>avatar</code></td><td>按 <code>hint</code> 而不是状态码分支：<code>purged</code> 就别重试，<code>pending</code> 值得稍后再取</td></tr>
+      <tr><td>429</td><td><code>rate_limited</code></td><td>可重试秒数</td><td>每设备 300/min，正常客户端撞不到；撞到了说明有循环</td></tr>
+      <tr><td>400</td><td><code>invalid_param</code></td><td>具体到字段</td><td>唯一会明确告诉你哪里不对的一类</td></tr>
+    </tbody>
+  </table>
+  <p>跨组访问与"记录不存在"回<b>同一句话</b>（媒体接口就是这么做 <code>group_id</code> 校验的）：不给探测别人组的消息 ID / 头像 token 是否存在留缝隙。</p>
+
+  <h2 id="emptybody">实现注意（写新客户端时先看这四条）</h2>
+  <ol>
+    <li><b>空 body 的 POST 不能只换 method。</b>OkHttp 会拒"有 body 却没设 BodyPublisher"，也会拒"POST 复用 GET 请求"。<code>rotate-secret</code>、<code>reset-channel-no</code>、<code>rotate-recovery-code</code> 三处必须显式带空体。<i>（对照：.NET 本来就允许无体 POST，所以 Windows 端没有这个分支。）</i></li>
+    <li><b>canonical 里的 query 必须是原始串。</b>别用"解析成 map 再拼"的结果——服务端拿的是 <code>getQueryString()</code>，顺序与编码都保持客户端发出的形态。</li>
+    <li><b>先验签再落库，失败不留半条。</b>注册响应里 <code>server_pub_fp</code> 是 TOFU 固定用的：首连记下，之后指纹变了就该拒绝而不是"确认一下"。</li>
+    <li><b>已读游标只增不减。</b>服务端对 <code>read_state</code> 是后写覆盖并广播 <code>read</code> 帧，一个迟到的旧帧就能把游标退回去；单调性得由客户端守。</li>
+  </ol>
+
+  <h2 id="vectors">怎么确认自己实现对了</h2>
+  <p>签名与加密这类东西，"看起来实现了"和"逐字节一致"之间隔着一整片联调地狱。三处对齐手段按优先级用：</p>
+  <table>
+    <thead><tr><th>手段</th><th>位置</th><th>覆盖</th></tr></thead>
+    <tbody>
+      <tr><td><b>测试向量</b></td><td><code>testvectors/vectors.json</code></td><td><code>inputs</code> / <code>signatures</code> / <code>rest_auth</code> / <code>sealed_box</code> / <code>frame</code> / <code>ratchet</code> / <code>summary</code>。<b>跨语言唯一真正可靠的对齐手段</b>，固定输入固定期望输出</td></tr>
+      <tr><td><b>协议单测</b></td><td>Windows <code>dotnet test</code> 的 <code>ProtocolVectorsTest</code></td><td>把上面每个 key 断一遍。新客户端可以照抄这个测试当验收</td></tr>
+      <tr><td><b>参考实现</b></td><td><code>core/</code>（Java，三端共用）与 <code>windows/PushBox.Windows/Crypto</code>（C#）</td><td><code>SignatureTargets</code>、<code>FrameChannel</code>、<code>X25519</code>、<code>Ed25519</code>、<code>B64</code>、<code>Summary</code>。Android 通过 <code>:pbcore</code> 直挂 <code>../core/src/main/java</code>，与同源，不存在两份实现漂移</td></tr>
+      <tr><td><b>端到端探针</b></td><td><code>deploy/probe/p0-e2e.mjs</code></td><td>23 条判据跑在真服务端上（注册、签名、密封盒、重放、宽限期真删、逐设备接入过滤…）。新客户端拿它当"服务端到底要什么"的可执行答案</td></tr>
+    </tbody>
+  </table>
+  <p>手工调一条读接口基本不可能——签名要现算、响应要私钥解。<b>要试，就 clone <code>core/</code> 当库用。</b></p>
+
+  <h2 id="sample">典型流程（带字段名，便于对照）</h2>
+  <pre class="code" data-code="text"><code># 1. 首启注册（响应是密封盒，解开后才有这些键）
+POST /api/v1/devices/register
+  {enc_pubkey, sign_pubkey, name, platform}
+  -> {device_id, group_id, token, recovery_code, server_pub_fp}
+
+# 2. 建频道
+POST /api/v1/channels  {name:"服务器告警", max_level:"error"}
+  -> {channel_no, secret, ...}        # secret 只出现这一次
+
+# 3. 第三方写入（换到路径 A，不再需要设备签名）
+POST /message  {channel, secret, content, level:"error", sender_id:"grafana"}
+
+# 4. 增量补拉（after_seq 用自己存的水位）
+GET /api/v1/messages?after_seq=1041&amp;limit=200
+  -> {messages[], tombstones[], latest_seq, has_more}
+
+# 5. 打开会话即置已读
+PUT /api/v1/state/read  [{"channel_no":"12345678","sender_id":"grafana","last_read_seq":1042}]
+
+# 6. 图片与头像（原始字节，仍带签名头）
+GET /api/v1/media/{id}/0?size=thumb
+GET /api/v1/avatars/{sha256_hex(sender_id)}
+
+# 7. 全文搜索（服务端 ngram；参数顺序不能动）
+GET /api/v1/search?q=CPU&amp;channel_no=12345678&amp;since=0&amp;limit=50</code></pre>
+
+  <div class="foot">实时下发不在这页：<a href="protocol.html">长连接与加密</a> —— 握手、帧类型、<code>resume_ok</code> 的语义、截断与密钥轮换。</div>
+</div>
+</main>
+</div>
+</body>
+</html>

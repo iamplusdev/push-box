@@ -1,0 +1,297 @@
+﻿<Window x:Class="PushBox.Windows.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:PushBox.Windows.Controls"
+        xmlns:views="clr-namespace:PushBox.Windows.Views"
+        Title="PushBox" Width="1080" Height="680" MinWidth="440" MinHeight="420"
+        Background="{DynamicResource Bg.Page}"
+        FontFamily="Segoe UI, Microsoft YaHei UI"
+        TextOptions.TextFormattingMode="Display"
+        UseLayoutRounding="True">
+    <!-- §8.1 的窗口结构：微信风格三栏布局 —— 最左侧菜单栏（设置+连接状态）、中间消息列表、右侧对话信息。
+         这里只放控件与模板，所有判定（选中、筛选、分节、单双栏）都在 MainModel 与 code-behind 里。 -->
+    <Window.Resources>
+        <views:TokenBrushConverter x:Key="TokenBrush" />
+        <views:NullOrEmptyToVisibilityConverter x:Key="HasValue" />
+
+        <!-- 会话行的选中态：§9.1 的克制口径只给一条 3px accent 竖条 + 页面底色。
+             WPF 默认那套系统蓝在深色 token 下会把会话名压得看不见，而且它不是我们任何一个 token。 -->
+        <Style x:Key="ConversationRowStyle" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Shell" Background="Transparent">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="3" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Border x:Name="Rail" Background="Transparent" />
+                                <ContentPresenter Grid.Column="1" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Shell" Property="Background" Value="{DynamicResource Bg.Page}" />
+                            </Trigger>
+                            <!-- 后声明的触发器覆盖先声明的，所以选中态压得住 hover -->
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Shell" Property="Background" Value="{DynamicResource Bg.Page}" />
+                                <Setter TargetName="Rail" Property="Background" Value="{DynamicResource Accent}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- §9.2 的会话行：行高 64、头像 44 圆角 6（微信式方圆形，不是正圆）、左右内边距 16、
+             分割线起于文本起点。名称 16 / 摘要 13 / 时间 12，未读是纯数字而不是红点（与 Android 一致）。 -->
+        <DataTemplate x:Key="ConversationRowTemplate">
+            <Grid Margin="16,0">
+                <!-- §8.4 W14 的清空入口与 §7.3 的三项本机设置。它们挂在这一行而不是右上角 ⋮ 上，
+                     是因为两个菜单的作用域不同：⋮ 那三项管的是"当前打开的那条"，
+                     而这里管的是"右键点到的这一行"——没打开的会话也要能改名、置顶、清空。
+                     置顶/免打扰那两行的字由 OnConversationMenuOpening 按这一行的现状态改写（置顶 ↔ 取消置顶）；
+                     确认框与那句人话都在 MainModel，模板只负责把它们摆出来 -->
+                <Grid.ContextMenu>
+                    <ContextMenu Opened="OnConversationMenuOpening">
+                        <MenuItem Tag="pin" Header="置顶" Click="OnTogglePin" />
+                        <MenuItem Tag="mute" Header="免打扰" Click="OnToggleMute" />
+                        <MenuItem Tag="rename" Header="重命名…" Click="OnRenameConversation" />
+                        <MenuItem Tag="avatar" Header="设头像…" Click="OnSetAvatar" />
+                        <Separator />
+                        <MenuItem Tag="clear" Header="清空聊天记录" Click="OnClearConversation" />
+                    </ContextMenu>
+                </Grid.ContextMenu>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="64" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <!-- 头像是个自绘的小控件：本机设过的文件 → 服务端转存的头像 → 首字占位，三种形态按这个顺序落。
+                         绑定只交出字符串，取字节由窗口挂的 AvatarBox.Loader 在后台补上（§4.5） -->
+                    <controls:AvatarBox Grid.Column="0" Width="44" Height="44" Side="44"
+                                        DisplayName="{Binding DisplayName}" Token="{Binding AvatarToken}"
+                                        LocalPath="{Binding AvatarPath}" />
+                    <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal">
+                            <!-- §9.1 的会话行小圆点：只有 warning/error 才有 -->
+                            <Ellipse Width="8" Height="8" Margin="0,0,6,0" VerticalAlignment="Center"
+                                     Fill="{Binding LevelDotKey, Converter={StaticResource TokenBrush}}"
+                                     Visibility="{Binding LevelDotKey, Converter={StaticResource HasValue}}" />
+                            <TextBlock Text="{Binding DisplayName}" Style="{DynamicResource Text.H3}"
+                                       Foreground="{DynamicResource Fg.Primary}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding FlagsText}" Style="{DynamicResource Text.Label}" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Fg.Secondary}" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding Summary}" Style="{DynamicResource Text.Small}" Margin="0,2,0,0"
+                                   MaxHeight="36" TextTrimming="CharacterEllipsis"
+                                   Foreground="{DynamicResource Fg.Secondary}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                Margin="10,0,0,0">
+                        <TextBlock Text="{Binding ClockText}" Style="{DynamicResource Text.Label}" HorizontalAlignment="Right"
+                                   Foreground="{DynamicResource Fg.Secondary}" />
+                        <TextBlock Text="{Binding UnreadText}" Style="{DynamicResource Text.Small}" HorizontalAlignment="Right"
+                                   Margin="0,2,0,0"
+                                   Foreground="{DynamicResource Badge.Unread}" />
+                    </StackPanel>
+                </Grid>
+                <!-- 分割线起于文本 x：外层已吃掉 16 的页边距，所以这里缩进 44 + 10 -->
+                <Border Grid.Row="1" Height="1" Margin="54,0,0,0" Background="{DynamicResource Divider}" />
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <DockPanel>
+        <!-- §8.4 W14 的回滚提示：删除没成要说一句人话（§9.3 的行内口径，不弹 Toast），点它消失。
+             它挂在顶栏下面而不是右栏里，是因为清空失败时右栏已经退回"没选中"、窄窗口那一栏的宽度还是 0——
+             放进去等于没放。Height=Auto：这句话长度不固定（服务端给的理由跟着错误码变），写死 24 会把它截掉。 -->
+        <Border DockPanel.Dock="Top" x:Name="NoticeBar" Padding="16,6" Visibility="Collapsed"
+                Background="{DynamicResource Bg.Elevated}" Cursor="Hand"
+                BorderBrush="{DynamicResource Divider}" BorderThickness="0,0,0,1"
+                MouseLeftButtonUp="OnNoticeDismissed">
+            <TextBlock x:Name="NoticeText" Style="{DynamicResource Text.Small}" TextWrapping="Wrap"
+                       VerticalAlignment="Center" Foreground="{DynamicResource Level.Error}" />
+        </Border>
+
+        <Grid x:Name="Body">
+            <Grid.ColumnDefinitions>
+                <!-- 最左侧菜单栏：60px 宽（图标按钮 + 连接状态） -->
+                <ColumnDefinition Width="60" />
+                <!-- 中间消息列表栏：260px 宽 -->
+                <ColumnDefinition Width="260" />
+                <!-- 右侧对话区：占据剩余空间 -->
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 最左侧：菜单栏（设置按钮 + 连接状态） -->
+            <Border Grid.Column="0" Background="{DynamicResource Bg.Elevated}"
+                    BorderBrush="{DynamicResource Divider}" BorderThickness="0,0,1,0">
+                <DockPanel>
+                    <!-- 底部：设置按钮 -->
+                    <Border DockPanel.Dock="Bottom" Height="48" Padding="0,8"
+                            BorderBrush="{DynamicResource Divider}" BorderThickness="0,1,0,0">
+                        <Button x:Name="SettingsButton" Content="⚙" FontSize="18"
+                                Background="Transparent" BorderThickness="0"
+                                Foreground="{DynamicResource Fg.Secondary}"
+                                ToolTip="设置" Click="OnOpenSettings" />
+                    </Border>
+                    <!-- 顶部：连接状态指示 -->
+                    <StackPanel DockPanel.Dock="Top" VerticalAlignment="Top"
+                                HorizontalAlignment="Center" Margin="0,16,0,0">
+                        <!-- 没有 SyncEngine 时不显示状态点（测试用例的 idle 态） -->
+                        <Ellipse x:Name="StatusDot" Width="10" Height="10"
+                                 Fill="{DynamicResource State.Offline}"
+                                 ToolTip="离线" Visibility="Collapsed" />
+                        <TextBlock x:Name="StatusText" Style="{DynamicResource Text.Label}"
+                                   Margin="0,4,0,0" TextAlignment="Center"
+                                   Foreground="{DynamicResource Fg.Secondary}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- 中间：会话列表 -->
+            <Border Grid.Column="1" Background="{DynamicResource Bg.Page}"
+                    BorderBrush="{DynamicResource Divider}" BorderThickness="0,0,1,0">
+                <Grid>
+                    <ListBox x:Name="ConversationList" BorderThickness="0"
+                             Background="Transparent" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ItemTemplate="{StaticResource ConversationRowTemplate}"
+                             ItemContainerStyle="{StaticResource ConversationRowStyle}"
+                             HorizontalContentAlignment="Stretch" />
+                    <!-- 空状态整块是一个 Grid：TextBlock 的内容只收 Inline，直接把 StackPanel 塞进去会在
+                         运行时抛 XamlParseException，而它在编译期一点都不报错 -->
+                    <Grid x:Name="ConversationEmpty" Visibility="Collapsed" Margin="24,48,24,0" VerticalAlignment="Top">
+                        <StackPanel HorizontalAlignment="Center">
+                            <Path Data="M50,20 C50,10 40,0 30,0 L10,0 C5,0 0,5 0,10 L0,30 C0,35 5,40 10,40 L25,40 L35,50 L35,40 L30,40 C25,40 20,35 20,30 L20,10 C20,5 25,0 30,0 Z M50,20" 
+                                  Fill="{DynamicResource Fg.Secondary}" 
+                                  Opacity="0.2"
+                                  Width="64" Height="64" 
+                                  Stretch="Uniform"
+                                  Margin="0,0,0,16"/>
+                            <TextBlock Text="还没有频道" Style="{DynamicResource Text.H3}" 
+                                       HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource Fg.Primary}"
+                                       Margin="0,0,0,8"/>
+                            <TextBlock Text="在手机上创建频道，或用 curl 发送第一条消息" Style="{DynamicResource Text.Small}"
+                                       HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource Fg.Secondary}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,0,0,16"/>
+                            <Button Content="打开设置创建频道" Click="OnOpenSettingsFromEmpty"
+                                    Background="Transparent" BorderBrush="{DynamicResource Accent}"
+                                    Foreground="{DynamicResource Accent}"/>
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <!-- 右侧：对话区 -->
+            <Grid Grid.Column="2" x:Name="ConversationPane">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="48" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Margin="16,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="BackButton" Grid.Column="0" Content="←" Width="28" Height="28"
+                            Padding="0" Visibility="Collapsed" Background="Transparent"
+                            BorderThickness="0" FontSize="16"
+                            Foreground="{DynamicResource Fg.Primary}" />
+                    <TextBlock x:Name="ConversationTitle" Grid.Column="1" Margin="10,0,0,0"
+                               Style="{DynamicResource Text.H3}" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Fg.Primary}" />
+                    <!-- D17：筛选不常驻 Tab，收进右上角 ⋮ -->
+                    <Menu Grid.Column="2" x:Name="FilterMenu" Background="Transparent"
+                          VerticalAlignment="Center">
+                        <MenuItem Header="⋮" FontSize="16" Padding="6,0">
+                            <MenuItem Header="全部" Click="OnFilterAll" />
+                            <MenuItem Header="未读" Click="OnFilterUnread" />
+                            <MenuItem Header="已读" Click="OnFilterRead" />
+                        </MenuItem>
+                    </Menu>
+                </Grid>
+
+                <!-- §9.3 筛选态提示条：24dp、点它回"全部"。默认收起——没打开会话时它没有话可说 -->
+                <Border Grid.Row="1" x:Name="FilterBar" Height="24" Padding="12,0" Visibility="Collapsed"
+                        Background="{DynamicResource Bg.Elevated}" Cursor="Hand"
+                        MouseLeftButtonUp="OnFilterBarClicked">
+                    <TextBlock x:Name="FilterBarText" Style="{DynamicResource Text.Small}" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Fg.Secondary}" />
+                </Border>
+
+                <ScrollViewer Grid.Row="2" x:Name="TimelineScroll" VerticalScrollBarVisibility="Auto"
+                              Padding="12">
+                    <Grid>
+                        <ItemsControl x:Name="Timeline" MaxWidth="900" HorizontalAlignment="Left">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Vertical" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="FrameworkElement">
+                                    <Setter Property="Margin" Value="0,0,0,8" />
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
+                        </ItemsControl>
+                        <TextBlock x:Name="EmptyText" Style="{DynamicResource Text.Small}" VerticalAlignment="Top"
+                                   Margin="0,48,0,0" HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource Fg.Secondary}" />
+                    </Grid>
+                </ScrollViewer>
+
+                <!-- §9.3 空会话/未选中：插画 + 文案 -->
+                <Border Grid.Row="2" x:Name="NoConversationBar" Background="{DynamicResource Bg.Page}">
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <!-- 简单的对话气泡插画（使用 Path 绘制） -->
+                        <Path Data="M50,20 C50,10 40,0 30,0 L10,0 C5,0 0,5 0,10 L0,30 C0,35 5,40 10,40 L25,40 L35,50 L35,40 L30,40 C25,40 20,35 20,30 L20,10 C20,5 25,0 30,0 Z M50,20" 
+                              Fill="{DynamicResource Fg.Secondary}" 
+                              Opacity="0.2"
+                              Width="80" Height="80" 
+                              Stretch="Uniform"
+                              Margin="0,0,0,16"/>
+                        
+                        <TextBlock Text="从左侧选一条会话线" Style="{DynamicResource Text.H3}" 
+                                   HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource Fg.Primary}"
+                                   Margin="0,0,0,8"/>
+                        
+                        <TextBlock Text="选择一个会话开始聊天" Style="{DynamicResource Text.Small}"
+                                   HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource Fg.Secondary}"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- §9.3 的"1 条新消息"胶囊：只有用户正往上翻历史（没贴在底部）时才出现，点它回到底部。
+                     贴在底部时新消息直接跟滚，不需要这一格。 -->
+                <Border Grid.Row="2" x:Name="NewBelow" Visibility="Collapsed" Cursor="Hand"
+                        HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,16"
+                        Padding="12,4" CornerRadius="12" Background="{DynamicResource Bg.Elevated}"
+                        BorderBrush="{DynamicResource Divider}" BorderThickness="1"
+                        MouseLeftButtonUp="OnNewBelowClicked">
+                    <TextBlock x:Name="NewBelowText" Style="{DynamicResource Text.Small}"
+                               Foreground="{DynamicResource Accent}" />
+                </Border>
+            </Grid>
+        </Grid>
+    </DockPanel>
+</Window>

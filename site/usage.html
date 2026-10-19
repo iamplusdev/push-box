@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>使用说明 · PushBox</title>
+<meta name="description" content="PushBox 使用说明：注册与恢复码、建频道拿凭据、用频道号+密钥加入频道、发第一条消息、会话与通知、多端已读同步、图片链路、安卓后台常驻、PC 托盘。">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<div class="scrim"></div>
+<div class="shell">
+
+<nav class="side">
+  <a class="brand" href="index.html">
+    <span class="mark">P</span>
+    <span><b>PushBox</b><span>1.0.0 · 自托管推送</span></span>
+  </a>
+  <h3>文档</h3>
+  <ul>
+    <li><a href="index.html">首页</a></li>
+    <li><a href="overview.html">概览</a></li>
+    <li><a href="install.html">安装与部署</a></li>
+    <li><a href="usage.html" aria-current="page">使用说明</a></li>
+    <li><a href="api.html">入站 API（写入）</a></li>
+    <li><a href="client-api.html">客户端 API（读取）</a></li>
+    <li><a href="protocol.html">长连接与加密</a></li>
+  </ul>
+  <h3>仓库</h3>
+  <ul>
+    <li><a href="https://github.com/iamplusdev/push-box">GitHub</a></li>
+    <li><a href="https://gitee.com/iamplus/push-box">Gitee</a></li>
+    <li><a href="https://gitea.iamplus.cn/iamplus/push-box">Gitea</a></li>
+  </ul>
+  <h3>本页</h3>
+  <div id="toc"></div>
+  <button class="theme-toggle" id="themeBtn" type="button">☾ 深色</button>
+</nav>
+
+<main id="main">
+<div class="wrap">
+
+  <div class="topbar">
+    <button id="navBtn" type="button" aria-label="打开菜单">☰</button>
+    <b>使用说明</b>
+  </div>
+
+  <h1>使用说明</h1>
+  <p class="lede">PushBox 不是聊天软件，它是一条<b>单向的通知通道</b>：你在 Grafana、脚本、CI 里 <code>POST /message</code>，消息就出现在手机与 PC 上。所以"用一遍"只有四步：连上服务端 → 建频道 → 往频道号发一条 → 在会话线里看它。</p>
+
+  <h2 id="flow">整体形状</h2>
+  <div class="pipe">
+    <div class="step d"><b>① 设备注册</b><span>App 首次启动填服务器地址，本机生成两对密钥，服务端只存公钥，回一份<b>恢复码</b></span></div>
+    <div class="step a"><b>② 建频道</b><span>频道号（对外投递地址）+ 密钥（只显示一次）</span></div>
+    <div class="step b"><b>③ 第三方 POST</b><span>唯一一个写入口，凭据全在请求体里</span></div>
+    <div class="step c"><b>④ 长连接下发</b><span>加密帧到每一台设备，出通知、进会话线</span></div>
+  </div>
+  <div class="callout">
+    <p><b>一句话理解"频道"</b></p>
+    <p>频道 = 一个投递入口 + 一套治理位（提醒强度上限、速率、图片数、白名单…）。它<b>不是</b>收件人，也不属于某个人；同一 Space 下的所有设备都会收到同一个频道的消息——除非某台设备开了<a href="#join">「只接收已接入的频道」</a>。会话线则是"频道 × 发送者"的交集——同一个告警频道里，Grafana 和 Jenkins 会是两条独立的会话。</p>
+  </div>
+
+  <h2 id="first">① 第一次打开（Android）</h2>
+  <p>首启页标题是<b>「连接你的 PushBox」</b>，只有三个输入：</p>
+  <table>
+    <thead><tr><th>字段</th><th>填什么</th><th>注意</th></tr></thead>
+    <tbody>
+      <tr><td>服务器地址</td><td><code>https://push.example.com</code>（或联调时的 <code>http://10.0.2.2:8080</code>）</td><td>只填 scheme+host[:port]，不要带路径。下方「最近使用」会记住打过的地址</td></tr>
+      <tr><td>设备名称</td><td>这台手机叫什么</td><td>会出现在其他端的「设备与同步」列表里</td></tr>
+      <tr><td>恢复码（可选）</td><td>已有空间时填它</td><td>留空就是<b>创建我的空间</b>；填了就是<b>我有恢复码</b>加入</td></tr>
+    </tbody>
+  </table>
+  <p>两对密钥（X25519 用于加密、Ed25519 用于签名）在<b>本机生成，私钥永不离开这台设备</b>；服务端只拿到公钥，注册响应里的 token 等价于账号口令，所以它连响应体一起过密封盒加密。</p>
+  <div class="callout danger">
+    <p><b>恢复码那一页不能跳过</b></p>
+    <p>它是找回全部历史与设备的<b>唯一凭据</b>，服务端只存它的哈希——<b>丢了没有任何找回途径</b>，也没有"忘记密码"。抄下来（或让另一台设备扫屏上的二维码）再点「我已抄好」。泄露它等于任何人可读你的消息。</p>
+  </div>
+  <p>注册成功后紧接着是<b>「让消息随时到达」</b>引导页（见<a href="#keepalive">后台常驻</a>）——在国产 ROM 上，这一步比任何功能都更决定"能不能收到"。</p>
+
+  <h2 id="channel">② 建频道，拿到接入凭据</h2>
+  <p>「我的」→<b>「接入」</b>→<b>「新建频道」</b>→ 填频道名称（留空则用设备名）→ 创建。紧接着出现<b>「接入信息（密钥只显示这一次）」</b>卡，三项都能一键复制：</p>
+  <ul>
+    <li><b>频道号</b>：8 位数字，第三方投递时填进 <code>channel</code> 字段。</li>
+    <li><b>频道密钥</b>：填进 <code>secret</code>。<b>只在创建与重置这两次响应里出现</b>，列表接口永远不返回它。</li>
+    <li><b>接入命令</b>：一整行可直接粘进第三方软件的 <code>curl</code>。</li>
+  </ul>
+  <p>PC 端的「频道」页是同一套东西（新建频道、复制密钥、复制整行 curl、治理设置、容量报表、白名单），不需要"先在手机上建好再同步"。</p>
+
+  <h3>频道上能做的四类操作</h3>
+  <table>
+    <thead><tr><th>操作</th><th>后果</th><th>可撤销?</th></tr></thead>
+    <tbody>
+      <tr><td><b>重置密钥</b></td><td>旧密钥即刻作废，第三方必须换新的（用旧的会收到 401）；频道号、历史都不动</td><td>否</td></tr>
+      <tr><td><b>换发新频道号</b></td><td>旧号作废（往旧号投会 401/404），<b>历史随迁、密钥不变</b>；本机该频道下的会话设置会丢失并重新拉历史</td><td>否</td></tr>
+      <tr><td><b>频道静默</b></td><td>消息<b>照收、照入库、照下发</b>，只是帧里的 notify 关掉——历史不会因为静默而消失，那是"屏蔽"不是"静音"</td><td>是</td></tr>
+      <tr><td><b>归档</b></td><td>停止接收新消息（第三方投递收到 403），历史消息保留</td><td><b>否</b></td></tr>
+      <tr><td><b>清空</b></td><td>删除该频道下全部历史消息与图片，<b>各端同步移除</b>；频道本身与接入地址保留</td><td><b>否</b></td></tr>
+    </tbody>
+  </table>
+  <p>「治理设置」里可以改：提醒强度上限、单次最多图片数、每分钟条数上限、单条正文最大字节、每日条数/图片/字节上限、强制校验 sender、只允许白名单发送者。<b>填 0 表示沿用服务端默认值</b>；未提交的项不会被静默清空。</p>
+
+  <h3 id="join">加入别人建的频道（同 Space 内）</h3>
+  <p>同一 Space 里，一台设备建的频道<b>默认每台设备都收得到</b>。想只看其中几条，就打开<b>「只接收已接入的频道」</b>（Android 在「我的 → 接入」页，PC 在设置 → 频道，<b>默认关</b>）。这开关是<b>逐设备</b>的：手机上开不影响 PC，PC 上开也不影响手机；打开它<b>不会</b>顺手把已有频道批量退订。</p>
+  <p>开了之后，没接入的频道<b>照投、照入库</b>，只是不再下发到这台设备，会话列表里也就不会出现它。要收就在同一页填<b>「加入频道」</b>那两格，只填两项：</p>
+  <ul>
+    <li><b>频道号</b>：8 位数字。只能接<b>本 Space 内可见</b>的频道——<b>跨 Space 一律 404</b>，密钥对上也一样。</li>
+    <li><b>频道密钥</b>：32 位，创建/重置时给出的那份。填错回 401，且<b>不计入</b>频道的失败次数（它是确认号码写对了，不是读侧的暴破面）。</li>
+  </ul>
+  <p>频道详情里的<b>「接入」/「取消接入」</b>按钮作用在同一件事上——PC 上取消接入不需要再输密钥，号码已经在你选中的那一行了。退出接入随时可点、可重复点（没接入过也回成功，只是 <code>removed=false</code>）；加入同样幂等。列表里每一条都带<b>已接入 / 未接入</b>标记，开关的当前值<b>以服务端回显为准</b>，不看本地缓存。</p>
+  <div class="callout">
+    <p><b>接入是投递过滤器，不是权限边界</b></p>
+    <p>密钥证明的是"你拿得到这个频道的凭据"，不是"你是这个 Space 的成员"——能接入的前提本来就是你已经在这个 Space 里。所以它只能<b>减少</b>这台设备收到的内容，不可能让它看到别人的 Space。</p>
+    <p>过滤对<b>实时帧、断线补发、REST 历史、搜索</b>四处同时生效；一旦接入某个频道，它<b>接入之前的历史也一并放开</b>（过滤按频道，不按接入时间）。所以开着过滤又一条都没接入＝这台设备<b>收不到任何消息</b>，两端都会在这一状态把话直说。</p>
+    <p>自己建的频道在创建那一刻<b>自动接入</b>，所以不会出现"开了过滤结果把自己新加的频道静音了"这种静默失效。</p>
+  </div>
+
+  <h2 id="send">③ 往频道发第一条消息</h2>
+  <p>把接入信息里那行 curl 跑一次就行（完整字段表见<a href="api.html">入站 API</a>）：</p>
+  <pre class="code" data-code="bash"><code>cat &gt; payload.json &lt;&lt;'JSON'
+{
+  "channel": "12345678",
+  "secret": "&lt;频道密钥&gt;",
+  "type": "markdown",
+  "level": "error",
+  "sender_id": "grafana",
+  "sender_name": "Grafana 告警",
+  "title": "node-3 CPU 持续 &gt; 90%",
+  "content": "### 触发规则\n`HighCpu` 5 分钟平均值 **93.2%**\n- 面板：https://grafana/d/ab12\n- 处理：先看 `top`，再决定是否重启采集器"
+}
+JSON
+
+curl -sS https://push.example.com/message \
+  -H 'Content-Type: application/json' \
+  --data-binary @payload.json</code></pre>
+  <p>返回的是<b>受理回执</b>，不是"客户端已收到"：</p>
+  <pre class="code" data-code="json"><code>{"ok":true,"id":"01J8ZK3Q7M2XW4V9HTNBSFY6PA","seq":1042,
+ "summary":"node-3 CPU 持续 &gt; 90%｜### 触发规则 `HighCpu` 5 分钟平均值 …",
+ "media_status":"none","media_count":0,"level":"error"}</code></pre>
+  <ul>
+    <li><code>summary</code> 由<b>服务端</b>生成（标题 + 正文截断），客户端通知栏直接用，不用再算一遍。</li>
+    <li><code>level</code> 回显的是<b>频道 <code>max_level</code> 向下截断后的实际生效值</b>——你传 error、频道上限是 warning，这里就回 warning。</li>
+    <li>带 <code>images[]</code> 时 <code>media_status</code> 是 <code>pending</code>，抓取是异步的，200 绝不等抓图（第三方超时普遍 5–10s）。</li>
+    <li><code>seq</code> 是全 Space 单调递增的水位号，客户端靠它做补拉与已读游标。</li>
+  </ul>
+  <p>手机锁屏上大概一秒内就该出现通知（同机/同局域网 MySQL 实测端到端 49ms）。如果没出现，先回来看<a href="#keepalive">后台常驻</a>，再怀疑链路。</p>
+
+  <h2 id="inbox">④ 看消息：会话列表与对话页</h2>
+  <div class="mocks">
+    <div class="phone" aria-hidden="true">
+      <div class="bar"><span>消息</span><span>已连接</span></div>
+      <div class="chat-row">
+        <span class="av" style="background:#07c160">G</span>
+        <div class="tx"><b>Grafana 告警</b><span>node-3 CPU 持续 &gt; 90%</span></div>
+        <div class="meta"><div>12:08</div><span class="dot">3</span></div>
+      </div>
+      <div class="chat-row">
+        <span class="av" style="background:#1d6fd2">C</span>
+        <div class="tx"><b>CI</b><span>build #218 通过（4m12s）</span></div>
+        <div class="meta"><div>11:52</div></div>
+      </div>
+      <div class="chat-row">
+        <span class="av" style="background:#8a8a8a">备份</span>
+        <div class="tx"><b>NAS 备份</b><span>今天 03:00 完成，共 41.2 GB</span></div>
+        <div class="meta"><div>昨天</div><div>静音</div></div>
+      </div>
+    </div>
+    <div class="timeline">
+      <p class="when">对话页（微信风）：日期分隔 + 气泡 + 左侧强度色条</p>
+      <div class="row"><div class="bubble err"><i class="lv"></i>
+        <div class="t">node-3 CPU 持续 &gt; 90%</div>
+        <div class="d">Grafana 告警 · 12:08</div>
+        <div>触发规则 <code>HighCpu</code>，5 分钟平均值 <b>93.2%</b>。</div>
+        <div class="strip">
+          <i style="background:#3a3a3a">图 1</i><i style="background:#4a4a4a">图 2</i>
+          <i style="background:#3a3a3a">图 3</i><i style="background:var(--error)">已失效</i>
+        </div>
+      </div></div>
+      <div class="row" style="justify-content:flex-end"><div class="bubble">
+        <div class="d">12:09 · 展开全文 · 打开链接</div>
+      </div></div>
+      <p class="when" style="margin-top:12px">图片是 <b>2×2 九宫格</b>排在气泡下方，<b>不横向一行滑</b>——一行横滑在手机上是单手够不到的区域，而通知里的图本来就只想让你"扫一眼有几张、哪张挂了"。</p>
+    </div>
+  </div>
+
+  <h3>会话线上的操作（长按）</h3>
+  <ul>
+    <li><b>置顶 / 取消置顶</b>：只影响本机排序。</li>
+    <li><b>免打扰 / 取消免打扰</b>：消息照常进来，<b>角标也不计它</b>——静音的会话不该在图标上催你。</li>
+    <li><b>重命名</b>：只改本机显示名，服务端不知道。</li>
+    <li><b>设头像</b>：从相册选一张，只存本机。</li>
+    <li><b>锁屏隐藏内容</b>：锁屏上只显示"收到 1 条新消息"。</li>
+    <li><b>清空聊天记录</b>：本机即刻清空，同时通知服务端落 tombstone 同步到其他端；<b>这一条是不可撤销的跨端操作</b>。</li>
+  </ul>
+  <h3>对话页里的操作</h3>
+  <ul>
+    <li><b>筛选</b>：全部 / 未读 / 已读，再点一下提示条回到全部。</li>
+    <li><b>在会话中搜索</b>：与筛选<b>正交</b>（可以同时"只看未读"再搜），命中显示"命中 N 条"，<b>点一条结果会滚到并高亮那条消息</b>。</li>
+    <li><b>长按消息</b>：复制文本 / 保存图片 / 查看原始 JSON / 删除。删除会广播 tombstone，其他端同一秒消失。</li>
+    <li><b>展开全文</b>：长正文在帧里被截断时（<code>truncated</code>），点它按 id 从服务端取未截断的全文。</li>
+    <li>正文支持一个<b>克制</b>的 Markdown 子集：标题、粗体/斜体、行内代码、代码块、有序/无序列表、引用、链接、表格。不支持图片语法与嵌套列表——渲染器要能被单测断言，越简单越可靠。</li>
+  </ul>
+
+  <h2 id="notify">通知与打扰</h2>
+  <p>打扰程度由三处共同决定，越靠后越优先：</p>
+  <table>
+    <thead><tr><th>开关</th><th>在哪</th><th>语义</th></tr></thead>
+    <tbody>
+      <tr><td><code>level</code> + 频道 <code>max_level</code></td><td>服务端</td><td>info / warning / error，服务端向下截断后写进帧，客户端按它映射通知渠道强度</td></tr>
+      <tr><td>新消息通知</td><td>设置 → 通知</td><td>关掉后<b>消息仍会接收</b>，只是不再弹通知</td></tr>
+      <tr><td>静默时段</td><td>设置 → 通知</td><td>时段内非紧急消息只进通知栏，不响铃、不横幅；<b>error 级别仍可打扰</b></td></tr>
+      <tr><td>会话免打扰</td><td>长按会话</td><td>只影响这一条会话线，且不计入角标</td></tr>
+      <tr><td>频道静默</td><td>频道治理</td><td>整个频道不再弹通知，历史照常</td></tr>
+    </tbody>
+  </table>
+  <p>通知里会带发送者头像（服务端转存的那份）；大图文通知在图片就绪后补上。锁屏隐藏内容的那条会话，锁屏只显示"PushBox · 收到 1 条新消息"。</p>
+
+  <h2 id="fanout">一个频道，两台设备同时收到</h2>
+  <p>能，前提是这两台是<b>同一个 Space 里的两台设备</b>。第三方的那一发 <code>POST /api/v1/message</code> 只让消息<b>落库一次</b>（一个全局 <code>seq</code>），随后服务端<b>遍历这个 Space 里每一条在线连接，各自用它自己的会话密钥封一份发出去</b>——Android 与 PC 拿到的是同一句明文、两条互不相干的信封，几乎同一秒出现在两台机器上。服务端日志里那句 <code>消息已下发 … 在线下发=2</code>，数的就是这里发出去的连接数；它是"两端到底通不通"最省事的自查处。</p>
+  <ul>
+    <li><b>身份不能拷</b>。会话表按设备身份唯一，<b>同一个 <code>device_id</code> 的新连接会直接顶掉旧的那条</b>。把一端的身份文件复制到另一台机器，得到的不是"两台设备"而是"两台抢一条连接"——症状是<b>只有一端收得到、且随启动顺序漂移，全程不报错</b>。加第二台的正当路径是首启时把恢复码交出去——Android 是那个可选的<b>「恢复码（可选）」</b>输入框，PC 是<b>「我有恢复码，加入已有空间」</b>那一屏——让它注册成<b>另一个</b> <code>device_id</code>。</li>
+    <li><b>唯一会让两端不一致的功能是「只接收已接入的频道」</b>：它是<b>逐设备</b>的过滤器（<a href="#join">见上面</a>），<b>默认关</b>，所以开箱即用就是两端全收；某一端打开它又没接入这条频道，就只有那一台静默，另一端照常。</li>
+    <li><b>"同时"只对当时在线的连接成立</b>。另一端离线期间的消息不会丢，它在重连时按自己的游标补拉回来；Android 的省电/轮询模式下不等长连接，最快 15 分钟一轮。</li>
+    <li><b>通知各弹各的，红点是共享的</b>。<code>level</code> 与频道静默共同决定的 <code>notify</code> 位<b>是频道级、在受理时就定下</b>，所以两端一起响或一起不响；而"会话免打扰"是<b>本机</b>判断，只让那一台不弹，消息照常入库、红点照常。任何一端读过之后 <code>read</code> 帧会广播给同组其他端，红点约 30–50ms 内一起灭。</li>
+  </ul>
+
+  <h2 id="read">多端同步：已读、删除、断线</h2>
+  <ul>
+    <li><b>已读是游标，不是布尔</b>。打开会话即 <code>PUT /api/v1/state/read</code> 把该会话的 <code>last_read_seq</code> 推上去，服务端再向同组其他端广播 <code>read</code> 帧——所以手机读完，PC 的红点约 30–50ms 内消。</li>
+    <li><b>游标只增不减</b>：服务端对已读是"后写覆盖"，客户端必须自己守住单调，否则一个迟到的旧帧会把已读退回去。</li>
+    <li><b>删除是 tombstone</b>：单条按 id，整会话/整频道按 scope。清空走"一条 UPDATE 标完 + 一条 scope 帧"，逐条删除是错的（可能上千条，既打爆 SQL 往返也让其他端收到上千帧）。</li>
+    <li><b>断线重连</b>：连接带上 <code>since_seq</code>，服务端循环补发到追平后回<b>一个 <code>resume_ok</code></b>；落后超过 2000 条则回 <code>resume_gap</code>，让客户端改走 REST 全量补拉。补发的帧 <code>notify=false</code>，不会重复弹通知。</li>
+    <li><b>离线那台什么时候补齐</b>：PC 只有"重连 + 上面那条补拉循环"这一条路，<b>没有轮询兜底</b>——它断网期间靠指数退避（1s→60s）反复重试，链路一活就把缺的补齐。Android 的<b>省电/轮询模式</b>才是另一套：那时不挂长连接，由 WorkManager 每 15 分钟发一轮 REST（<code>SyncWorker</code>），换来的是实时性，界面上有一条"消息可能延迟"的提示条。</li>
+  </ul>
+
+  <h2 id="media">图片会发生什么</h2>
+  <p><code>images[]</code> 传的是<b>外链</b>，图片本体由服务端抓回来存进对象存储；桶是私有的，客户端只从 <code>GET /api/v1/media/{id}/{idx}</code> 取字节。链路是：入站先落 <code>pending</code> 槽位 → 抓取线程下载（SSRF 闸默认禁私网）→ 生成 ≤512px 缩略图 → PutObject → 回写 → <b>合并窗口（默认 3s）</b>到齐后发一条图文齐全的消息帧。</p>
+  <table>
+    <thead><tr><th>格子状态</th><th>你在客户端看到</th></tr></thead>
+    <tbody>
+      <tr><td><code>pending</code></td><td>占位灰块，就绪后由 <code>media_ready</code> 帧原地补图，不重复通知</td></tr>
+      <tr><td><code>ready</code></td><td>正常显示；列表用 <code>size=thumb</code>，点开用 <code>full</code>；<b>没有缩略图时服务端直接降级发原图</b>，客户端不用写"404 再请求一次 full"的分支</td></tr>
+      <tr><td><code>failed</code> / <code>queue_full</code></td><td>红字「已失效」格——重试次数（默认 3）用完就停在这里，不再打扰</td></tr>
+      <tr><td><code>deleted</code> / <code>purged</code></td><td>消息被删后槽位转 <code>deleted</code>；过了宽限期（默认 168h）真删对象、转 <code>purged</code>，此时"再重试也不会有图"</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn">
+    <p><b>图片是"尽力而为"的附件，不是承诺</b></p>
+    <p>消息正文的可用性永远优先于图片：抓图失败不会让消息消失，坏头像也不会拒绝整条投递（<code>content</code> 才是必填）。要"图必须到位"，那需要的是对象存储级的可靠性设计，不在这条通道的范围内。</p>
+  </div>
+
+  <h2 id="keepalive">让消息随时到达（Android）</h2>
+  <p>这一节是 Android 端<b>最容易"看起来坏了"</b>的地方：Android 的后台限制不是 bug，是设计。PushBox 靠前台服务 <code>remoteMessaging</code> 维持长连接，但 ROM 会积极冻结后台——<b>保活靠系统白名单，不是我们自己硬拉服务</b>。</p>
+  <p>设置 →「后台常驻」四项：</p>
+  <table>
+    <thead><tr><th>项</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>忽略电池优化</td><td>加入白名单后待机才不会冻结通道；状态显示「已允许后台运行 / 仍可能被系统休眠冻结」</td></tr>
+      <tr><td>通知渠道设置</td><td>去系统设置确认各会话渠道的提醒强度（系统层面关掉，App 里怎么配都没用）</td></tr>
+      <tr><td>自启动与后台锁定</td><td>国产 ROM 需在应用信息里允许自启动；在最近任务里下拉/长按 PushBox 卡片点锁形图标，避免一键清理误杀</td></tr>
+      <tr><td>极致省电轮询模式</td><td>关闭常驻长连接，改为约每 15 分钟批量补拉。<b>更省电，但消息延迟到达</b>；开启后顶部会有横幅提示</td></tr>
+    </tbody>
+  </table>
+  <p>省电模式本身也会被察觉：系统处于省电模式时顶部出现「后台通道可能被冻结，通知可能延迟」的横幅——与其让用户以为是推送丢了，不如说明当前处于什么状态。</p>
+
+  <h2 id="pc">PC 端（Windows）</h2>
+  <p>首启窗口与手机同构：服务器地址 + 设备名称，「创建新的个人空间」或「我有恢复码，加入已有空间」。<b>PC 上没有恢复码</b>——恢复码只在手机上「我的 → 设置 → 设备与同步」里显示和出码，所以要先在手机上打开二维码让 PC 扫，或抄文本。</p>
+  <p>主界面是两栏（默认 1080×680，可以拖到很窄）：左栏会话列表 + 顶部搜索（<code>Ctrl+F</code>），右栏对话区。顶栏左侧是连接状态，右侧是「设置」。</p>
+  <ul>
+    <li><b>关闭窗口 = 最小化到托盘</b>（可在设置里改），托盘菜单与设置页是同一份开关，改哪边都一样。</li>
+    <li><b>开机自启默认关</b>——自启是"装完就多了一个后台进程"，该由用户明确点一下。</li>
+    <li><b>静默时段与"新消息通知"</b>在设置 → 通知；时段内只有 <code>error</code> 还会出声。</li>
+    <li><b>频道管理</b>与手机功能对齐：新建频道、接入/退出频道、复制密钥/频道号/整行 curl、提醒强度上限、治理设置、容量报表、发送者白名单、重置密钥、换发新频道号、轮换恢复码（只发起，显示仍以手机为准）、设备列表与吊销。</li>
+    <li>已读、删除、清空的操作语义与手机完全一致——两端走的是同一套 REST 与同一套帧。</li>
+  </ul>
+
+  <h2 id="devices">换机、加设备、吊销</h2>
+  <ul>
+    <li><b>一个 Space 最多 5 台设备</b>。满了注册会直接 409 <code>device_limit_reached</code>，得先吊销一台。</li>
+    <li><b>换机 / 加第二台</b>：新设备首启填恢复码（或扫码）。加入之后这台设备<b>不会</b>再显示恢复码——它只有"已经登录的那台"能重新导出。</li>
+    <li><b>吊销</b>：该设备 token 即刻失效、在线连接被当场踢掉，其余端即刻刷新设备列表。</li>
+    <li><b>轮换恢复码</b>：旧码即刻失效，已登录的设备不受影响；<b>新码只显示这一次</b>。</li>
+    <li>Android 的「更换服务器」会<b>清空本机身份、会话与消息</b>并用新地址重新注册——它是"换一台服务端"，不是"改个域名"。</li>
+  </ul>
+
+  <h2 id="limits">用之前要知道的边界</h2>
+  <div class="grid c2">
+    <div class="card"><h4 style="margin-top:0">它不是聊天软件</h4><p style="margin:0;font-size:13.5px">客户端<b>没有发送口</b>。第三方只能 <code>POST /message</code>，你不可能从手机回一条消息。想做双向，得自己再加一个写入服务端。</p></div>
+    <div class="card"><h4 style="margin-top:0">服务端明文存库</h4><p style="margin:0;font-size:13.5px">加密只做"服务端 → 客户端"这一跳，为的是能全文搜索。能读到数据库的人=能读到全部消息。所以库不要放公网、账号权限按最小给。</p></div>
+    <div class="card"><h4 style="margin-top:0">消息永久保留</h4><p style="margin:0;font-size:13.5px">没有自动过期。跑几年得自己清（或用频道「清空」）。日计数器有回收，消息没有。</p></div>
+    <div class="card"><h4 style="margin-top:0">没有 Web 管理台</h4><p style="margin:0;font-size:13.5px">App 是唯一控制台。要改频道治理、看容量、吊销设备，都得在手机或 PC 上做。</p></div>
+  </div>
+
+  <div class="foot">接口细节：<a href="api.html">入站 API（写入）</a> · <a href="client-api.html">客户端 API（读取）</a> · <a href="protocol.html">长连接与加密</a></div>
+</div>
+</main>
+</div>
+</body>
+</html>

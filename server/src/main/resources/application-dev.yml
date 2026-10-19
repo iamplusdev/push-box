@@ -1,0 +1,60 @@
+# §11.1 当前联调配置（D23）：MySQL 在本机 127.0.0.1，RustFS 仍在远端那台存储机（地址写在 deploy/env/local.env，不进本文件），服务端本机直跑、不进容器。
+# 凭据只从环境变量读取，任何情况下都不要把明文写进本文件（本文件会入库）。
+spring:
+  datasource:
+    # 同机库是验收①"1s 内出通知"的判分前提：远端库（同网段另一台机上的 3306）实测单条 SQL 就要 362ms，
+    # 入站受理的串行往返必然吃掉整个 1s 预算，那属于链路拓扑而非软件缺陷（见 §11.1.1）。
+    # 要切回远端只改这一行 URL，同时把下面被删掉的 connection-test-query 加回来。
+    url: jdbc:mysql://127.0.0.1:3306/pushbox?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=utf8
+    username: pushbox
+    # 没有默认值是有意的：忘了 source deploy/env/local.env 就该启动失败，而不是拿一个空口令去连库、
+    # 把配置问题伪装成 "Access denied"。这条现在由 DevCredentialsGuard 真的执行（在 DataSource 建起来之前停住，
+    # 点名缺哪几个键）——IDEA 自动生成的运行配置不带 env，就是靠这条撞出来的。
+    password: ${PB_DB_PASSWORD}
+    hikari:
+      # 本机链路没有"空闲 26–33s 被中继设备 RST"的问题，所以不配探测语句：
+      # 配了会给每条业务语句白加一个来回，正是要避免的那类"用配置掩盖拓扑问题"。
+      keepalive-time: 20000
+      max-lifetime: 900000
+
+pb:
+  s3:
+    # 存储机地址同样只从环境读：本文件会入库，写死任何真实地址等于把拓扑公开。
+    # 值在 deploy/env/local.env 里（PB_S3_ENDPOINT=...），缺它由 DevCredentialsGuard 当场点名。
+    endpoint: ${PB_S3_ENDPOINT}
+    region: us-east-1
+    bucket: pushbox
+    access-key: ${PB_S3_ACCESS_KEY}
+    secret-key: ${PB_S3_SECRET_KEY}
+    path-style: true
+    delete-grace: 168h
+    # 宽限期巡检节奏（§4.5 media sweep）：tombstone 只把对象标成待删，过 delete-grace 才真删。
+    # 要现场看真删：--pb.s3.delete-grace=2s --pb.s3.purge-interval=5s（探针 ⑯ 就是这么跑的）
+    purge-initial-delay: 60s
+    purge-interval: 1h
+    # §4.5 桶内形态。开 sse-c 前先做两件事：
+    #   1) 给 PB_S3_MASTER_KEY 配一个稳定的 base64 32 字节（openssl rand -base64 32），
+    #      这个值一旦用了就不能换——换了旧对象再也解不开；
+    #   2) 主钥缺失或长度不对时服务端直接拒绝启动（MediaObjects 构造期校验），不会静默写明文。
+    # 切换只影响新写入的对象：历史对象按各自 media_objects/senders 的 enc_mode 读，仍是明文。
+    object-encrypt: none
+    master-key: ${PB_S3_MASTER_KEY:}
+  media:
+    enabled: true
+    max-images: 4
+    max-image-bytes: 10485760
+    max-total-bytes: 33554432
+    timeout: 10s
+    max-redirects: 2
+    allow-private: false
+    allow-hosts: []
+    concurrency: 4
+    retry-max: 3
+    thumb-long-edge: 512
+  admin:
+    # Web 管理台登录密钥：dev 兜底用一个写在仓库里的弱口令，只为本地能登进去。
+    # 别把 dev profile 挂到任何能连外的机器上；生产走 PB_ADMIN_SECRET，compose 与入口脚本都要求强随机。
+    secret: ${PB_ADMIN_SECRET:dev-admin-123456}
+    # JWT 签名钥：与上面的登录口令分开配，才能在联调里也照样各自轮换。
+    # 这个值只属于 dev（本文件会入库），生产走 PB_ADMIN_JWT_SECRET，绝不能复用这一行。
+    jwt-secret: dev-admin-jwt-signing-key-not-for-production-0123456789

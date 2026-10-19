@@ -1,0 +1,150 @@
+# WSL Docker 测试环境配置 - 完整独立部署（拓扑 B）
+# 包含 MySQL + RustFS + PushBox Server + Caddy
+
+name: pushbox-test
+
+services:
+  pushbox-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: pushbox/server:1.1.0
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      PB_DB_URL: ${PB_DB_URL:?PB_DB_URL 未设置}
+      PB_DB_USERNAME: ${PB_DB_USERNAME:-pushbox}
+      PB_DB_PASSWORD: ${PB_DB_PASSWORD:?PB_DB_PASSWORD 未设置}
+      PB_S3_ENDPOINT: ${PB_S3_ENDPOINT:?PB_S3_ENDPOINT 未设置}
+      PB_S3_REGION: ${PB_S3_REGION:-us-east-1}
+      PB_S3_BUCKET: ${PB_S3_BUCKET:-pushbox}
+      PB_S3_ACCESS_KEY: ${PB_S3_ACCESS_KEY:?PB_S3_ACCESS_KEY 未设置}
+      PB_S3_SECRET_KEY: ${PB_S3_SECRET_KEY:?PB_S3_SECRET_KEY 未设置}
+      PB_S3_PATH_STYLE: ${PB_S3_PATH_STYLE:-true}
+      # 与主文件同步：prod profile 只认这两个键名，缺映射时 PB_STORAGE_TYPE=local 是个死开关。
+      PB_STORAGE_TYPE: ${PB_STORAGE_TYPE:-s3}
+      PB_STORAGE_LOCAL_PATH: ${PB_STORAGE_LOCAL_PATH:-/app/data/media}
+      PB_S3_OBJECT_ENCRYPT: ${PB_S3_OBJECT_ENCRYPT:-none}
+      PB_S3_MASTER_KEY: ${PB_S3_MASTER_KEY:-}
+      PB_ALLOW_PLAINTEXT_MEDIA: ${PB_ALLOW_PLAINTEXT_MEDIA:-}
+      PB_ADMIN_SECRET: ${PB_ADMIN_SECRET:?PB_ADMIN_SECRET 未设置}
+      PB_ADMIN_JWT_SECRET: ${PB_ADMIN_JWT_SECRET:?PB_ADMIN_JWT_SECRET 未设置}
+      # 默认留空（只放行环回），跟主文件一个口径。测试机要宿主/模拟器直连 /healthz 与 /actuator，
+      # 靠 wsl-test.env 里那行显式的 172.16.0.0/12,127.0.0.0/8 放行；写进 compose 默认值的话，
+      # 谁照着这份文件抄一个生产栈就顺手把整段私有网段放进去了。
+      PB_SECURITY_INTERNAL_CIDRS: ${PB_SECURITY_INTERNAL_CIDRS:-}
+      PB_LOG_DIR: /app/logs
+      # 与主文件同步：端口映射、healthcheck、Caddy 上游三处都读 PB_SERVER_PORT，进程也得读，
+      # 否则改端口只会得到"容器起了但没人监听那个口"。
+      PB_SERVER_PORT: ${PB_SERVER_PORT:-7404}
+    volumes:
+      - server_logs:/app/logs
+      - ./data/media:/app/data/media
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${PB_SERVER_PORT:-7404}"]
+      interval: 10s
+      timeout: 3s
+      start_period: 40s
+      retries: 6
+    restart: unless-stopped
+    ports:
+      - "${PB_SERVER_PORT:-7404}:${PB_SERVER_PORT:-7404}"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
+    networks:
+      - pushbox-net
+
+  caddy:
+    image: caddy:2
+    environment:
+      PB_CADDY_HOST: ${PB_CADDY_HOST:-localhost}
+      PB_SERVER_PORT: ${PB_SERVER_PORT:-7404}
+    ports:
+      - "${PB_HTTP_PORT:-80}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      pushbox-server:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pushbox-net
+
+  # MySQL 数据库
+  mysql:
+    image: mysql:8.4
+    command: --ngram_token_size=2
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD 未设置}
+      MYSQL_DATABASE: pushbox
+      MYSQL_USER: pushbox
+      MYSQL_PASSWORD: ${PB_DB_PASSWORD:?PB_DB_PASSWORD 未设置}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "pushbox", "-p${PB_DB_PASSWORD}"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - pushbox-net
+
+  # RustFS 对象存储
+  # 镜像监听 9000（S3 API）/ 9001（Console），所以 wsl-test.env 里 PB_S3_ENDPOINT=http://rustfs:9000。
+  # 这里曾经写成 7101（那是远端存储机上那台实例的端口，不是镜像默认值）：因为 /healthz 的 storage
+  # 只判"配置非空"，错端口一路显示 up，直到第一条带图的消息才暴露。
+  # 桶不会自动创建，首次部署补一次（镜像里没有 mc，从宿主或另起一个 minio/mc 容器执行）：
+  #   mc alias set pb http://<宿主映射的 rustfs 端口> $PB_S3_ACCESS_KEY $PB_S3_SECRET_KEY && mc mb pb/pushbox
+  rustfs:
+    image: rustfs/rustfs:latest
+    environment:
+      RUSTFS_ACCESS_KEY: ${PB_S3_ACCESS_KEY:?PB_S3_ACCESS_KEY 未设置}
+      RUSTFS_SECRET_KEY: ${PB_S3_SECRET_KEY:?PB_S3_SECRET_KEY 未设置}
+    volumes:
+      - rustfs_data:/data
+    restart: unless-stopped
+    networks:
+      - pushbox-net
+
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./data/prometheus:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+    networks:
+      - pushbox-net
+
+  grafana:
+    profiles: ["monitoring"]
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD 未设置}
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./data/grafana:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+    networks:
+      - pushbox-net
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
+  server_logs: {}
+  mysql_data: {}
+  rustfs_data: {}
+
+networks:
+  pushbox-net:
+    driver: bridge

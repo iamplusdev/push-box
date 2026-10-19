@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>概览 · PushBox 文档</title>
+<meta name="description" content="PushBox 文档概览：链路怎么串起来、信任边界在哪、功能清单、验证到什么程度与常见问题。">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<div class="scrim"></div>
+<div class="shell">
+
+<nav class="side">
+  <a class="brand" href="index.html">
+    <span class="mark">P</span>
+    <span><b>PushBox</b><span>1.0.0 · 自托管推送</span></span>
+  </a>
+  <h3>文档</h3>
+  <ul>
+    <li><a href="index.html">首页</a></li>
+    <li><a href="overview.html" aria-current="page">概览</a></li>
+    <li><a href="install.html">安装与部署</a></li>
+    <li><a href="usage.html">使用说明</a></li>
+    <li><a href="api.html">入站 API（写入）</a></li>
+    <li><a href="client-api.html">客户端 API（读取）</a></li>
+    <li><a href="protocol.html">长连接与加密</a></li>
+  </ul>
+  <h3>仓库</h3>
+  <ul>
+    <li><a href="https://github.com/iamplusdev/push-box">GitHub</a></li>
+    <li><a href="https://gitee.com/iamplus/push-box">Gitee</a></li>
+    <li><a href="https://gitea.iamplus.cn/iamplus/push-box">Gitea</a></li>
+  </ul>
+  <h3>本页</h3>
+  <div id="toc"></div>
+  <button class="theme-toggle" id="themeBtn" type="button">☾ 深色</button>
+</nav>
+
+<main id="main">
+<div class="wrap">
+
+  <div class="topbar">
+    <button id="navBtn" type="button" aria-label="打开菜单">☰</button>
+    <b>概览</b>
+  </div>
+
+  <h1>把告警、CI、脚本的消息，推送到<b>你自己的</b>设备上</h1>
+  <p class="lede">一条 <code>POST /message</code> 投进服务端，PushBox 负责存下来、抓图转存、加密下发——你的 Android 手机与 Windows PC 几乎同时收到通知。不接厂商推送、不经第三方转发，消息与图片全在你自己的机器上。</p>
+
+  <div class="keys">
+    <div><b>49 ms</b><span>受理 → 通知到账（同机 MySQL 实测，验收线 1s）</span></div>
+    <div><b>3 端</b><span>Java 服务端 · Android Compose · Windows WPF</span></div>
+    <div><b>0</b><span>需要额外账号的服务依赖（只有 MySQL 8 与一个 S3 兼容桶）</span></div>
+  </div>
+
+  <h2 id="how">它是怎么串起来的</h2>
+  <div class="pipe">
+    <div class="step d"><b>你的程序</b><span>Grafana、CI、cron、内网服务，只需一个频道号 + 密钥</span></div>
+    <div class="step a"><b>受理</b><span>校验凭据、幂等、分配 <code>seq</code>、生成摘要，立即 200 回执</span></div>
+    <div class="step b"><b>抓图转存</b><span>外链图片并发抓取 → 缩略图 → 存进对象存储（不等它，超预算先出正文）</span></div>
+    <div class="step a"><b>加密下发</b><span>每台设备自己的会话钥加密同一帧，多端同时到达</span></div>
+    <div class="step c"><b>客户端</b><span>入库、出通知、点进会话把已读报回去，别的端红点随之消失</span></div>
+  </div>
+
+  <h2 id="look">看起来是什么样</h2>
+  <div class="mocks">
+    <div class="phone">
+      <div class="bar"><span>消息</span><span>🔍 ＋</span></div>
+      <div class="chat-row">
+        <span class="av" style="background:#b06900">G</span>
+        <span class="tx"><b>Grafana 告警</b><span>[严重] CPU 使用率超过 90%</span></span>
+        <span class="meta">09:41<br><i class="dot">3</i></span>
+      </div>
+      <div class="chat-row">
+        <span class="av" style="background:#07c160">C</span>
+        <span class="tx"><b>CI 流水线</b><span>order-svc 发布成功，耗时 42s</span></span>
+        <span class="meta">昨天</span>
+      </div>
+      <div class="chat-row">
+        <span class="av" style="background:#8a8a8a">备</span>
+        <span class="tx"><b>备份任务</b><span>[图片] db 体积 2.1GB</span></span>
+        <span class="meta">周一</span>
+      </div>
+    </div>
+
+    <div class="timeline">
+      <div class="when">09:41</div>
+      <div class="row"><div class="bubble err"><span class="lv"></span><div class="t">[严重] CPU 使用率超过 90%</div><div>主机 prod-03 · 近 5 分钟均值 92.4%</div><div class="d">Grafana 告警</div>
+        <div class="strip">
+          <i style="background:linear-gradient(135deg,#4a6b52,#2f4a38)">监控图</i>
+          <i style="background:#8a8a8a">已失效</i>
+          <i style="background:linear-gradient(135deg,#3d5a80,#2b405c)">拓扑</i>
+          <i style="background:linear-gradient(135deg,#6b5a4a,#4a3d33)">日志</i>
+        </div>
+      </div></div>
+      <p style="font-size:12.5px;color:var(--fg-2);margin:14px 0 0">
+        单向接收：气泡统一左对齐，不做"发送方/接收方"双色。<code>level</code> 只用气泡左侧 3px 色条与会话行小圆点表达；
+        四张图排 2×2（不是横排长条），<b>每一格的状态独立</b>——抓取失败的格子可以单独重试，其余照常渲染。
+      </p>
+    </div>
+  </div>
+
+  <h2 id="trust">信任边界：为什么服务端是明文</h2>
+  <div class="card">
+    <ul>
+      <li><b>服务端 → 客户端这一跳是加密的。</b>每台设备一对 X25519 + Ed25519，WS 帧走 HKDF 派生的 AES-256-GCM 通道，REST 响应走一次性 sealed-box。链路中间人拿不到正文。</li>
+      <li><b>服务端库里是明文，这是刻意的。</b>只有这样 MySQL 全文索引才能命中正文、服务端才能生成摘要、才能替你把外链图片抓下来转存。</li>
+      <li><b>端到端加密已被否决</b>：它的代价正是上面这三件核心功能。</li>
+      <li><b>频道密钥只能写不能读。</b>拿到 <code>secret</code> 的人能替你往这个频道推，但读不到任何历史；读历史需要设备密钥或恢复码。</li>
+      <li>生产环境请上 HTTPS（<code>deploy/Caddyfile</code> 给了自签与 Let's Encrypt 两条路）。TLS 补的是"服务端本身可信"这一环，与帧加密互不替代。</li>
+    </ul>
+  </div>
+
+  <h2 id="features">功能</h2>
+  <div class="grid c3">
+    <div class="card"><b>图文同帧</b><p style="font-size:13px;color:var(--fg-2)">外链图片服务端抓取、生成缩略图、转存对象存储，并在合并窗口（默认 3s）内把图文并进同一条消息帧下发。</p></div>
+    <div class="card"><b>多端同时收到 + 已读同步</b><p style="font-size:13px;color:var(--fg-2)">一个 Space 里几条频道、几台设备，同一条消息给<b>每条在线连接各封一份信封</b>（各自的会话钥与帧序号），手机与 PC 几乎同一秒到账。手机点进会话，PC 的红点在几十毫秒内消失；反向亦然。游标只增不减，服务端 last-write-wins 不会把它点亮回去。</p></div>
+    <div class="card"><b>全文搜索</b><p style="font-size:13px;color:var(--fg-2)">MySQL ngram 全文 + 客户端本地索引两段合并，输入即查、回车补齐全部历史，命中可定位到那一条消息。</p></div>
+    <div class="card"><b>频道治理</b><p style="font-size:13px;color:var(--fg-2)">按频道限级别、限图片数、限正文长度、限频率与每日配额、白名单发送者、严格签名鉴权、归档与清空。<b>每台设备还能只挑自己要收的频道</b>：凭频道号 + 密钥接入，再打开「只接收已接入的频道」（默认关，逐设备生效）。</p></div>
+    <div class="card"><b>断线不丢</b><p style="font-size:13px;color:var(--fg-2)">重连带 <code>since_seq</code>，服务端按批循环补拉到取空才回 <code>resume_ok</code>；落后过多转 REST 回放。<b>离线那台不靠轮询兜底</b>：PC 只有退避重连（1s→60s）这一条路，Android 的 WorkManager 15 分钟一轮只在省电/轮询模式下生效。</p></div>
+    <div class="card"><b>换机找回</b><p style="font-size:13px;color:var(--fg-2)">一个恢复码 = 加入同一个 Space 并回放全部历史（1 万条实测 &lt;30s）。恢复码可随时轮换，旧码立即失效。</p></div>
+  </div>
+
+  <h2 id="quickstart">三分钟跑起来</h2>
+  <pre class="code" data-code="bash"><code>cp deploy/env/prod.env.example deploy/env/local.env     # 填 PB_DB_PASSWORD / PB_S3_*
+JAVA_HOME=/path/to/jdk-21 mvn -B -DskipTests package    # 产出 server/target/pushbox-server-1.0.0.jar
+bash deploy/run-dev.sh                                  # 默认 8080，脚本自己 source local.env
+node deploy/probe/p0-e2e.mjs                            # 端到端验收：23/23</code></pre>
+  <p>然后发第一条消息（入站接口是 <code>POST {base}/message</code>，<b>不在</b> <code>/api/v1</code> 下，凭据在 body 里）：</p>
+  <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:8080/message \
+  -H 'Content-Type: application/json' \
+  --data-binary @payload.json</code></pre>
+  <p>字段全表、响应形状、错误码与一个可改参数实时生成 curl 的工具，都在 <a href="api.html">入站 API</a>。三端各自的安装步骤见 <a href="install.html">安装与部署</a>。</p>
+
+  <h2 id="quality">它被验证到什么程度</h2>
+  <table>
+    <thead><tr><th>跑法</th><th>判什么</th><th>当前</th></tr></thead>
+    <tbody>
+      <tr><td><code>mvn -B -pl core,server test</code></td><td>加密库 + 服务端逻辑（含碰库碰桶用例）</td><td>197 / 197</td></tr>
+      <tr><td><code>node deploy/probe/p0-e2e.mjs</code></td><td>逐字节复刻握手、签名、帧加密、补拉与<b>频道接入过滤</b>的端到端验收</td><td>23 / 23</td></tr>
+      <tr><td><code>dotnet test windows/PushBox.sln</code></td><td>C# 与 Java 的协议向量对齐 + PC 端每一层逻辑</td><td>553 / 553</td></tr>
+      <tr><td><code>dotnet run --project windows/PushBox.LiveCheck</code></td><td>真 WebSocket + 真服务端上的十二条判据</td><td>12 / 12</td></tr>
+      <tr><td>Android 模拟器走查</td><td>通知、角标、头像、图片九宫格、断网重连补齐</td><td>逐条已验</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn"><b>还没测的</b><p>小米 / 华为 / OPPO / vivo 的保活与被杀率矩阵只能真机逐品牌跑，模拟器代替不了；深色与字体放大 200% 的系统走查也还没做。</p></div>
+
+  <h2 id="faq">常见问题</h2>
+  <h3>能不能用它当个人微信 / 聊天工具？</h3>
+  <p>不能。它是<b>单向接收</b>的：只有第三方 <code>POST /message</code> 写入，客户端没有发送框。会话按"频道 + 发送者"分组，只是为了把不同来源的告警摊开。</p>
+  <h3>同一个频道，手机和电脑能同时收到同一条推送吗？</h3>
+  <p>能，只要它们是<b>同一个 Space 里的两台设备</b>。消息只<b>落库一次</b>（一个全局 <code>seq</code>），服务端随后给这个 Space 里<b>每一条在线连接各封一份信封</b>——各自的会话钥、各自的帧序号，所以两端拿到的是同一条明文、两条互不相干的密文，几乎同一秒到账。两个坑：身份文件<b>不能拷</b>（会话表按 <code>device_id</code> 唯一，同一个 <code>device_id</code> 的新连接会顶掉旧的，症状是"只有一端收得到"且全程不报错）；两端<b>唯一会长期不一致</b>的地方是某一端开了「只接收已接入的频道」。细节见 <a href="usage.html#fanout">使用说明 → 一个频道，两台设备同时收到</a>。</p>
+  <h3>同一个 Space 里别人建的频道，能让这台设备只看其中几条吗？</h3>
+  <p>能。每台设备有一张自己的<b>接收集</b>：在频道页用<b>频道号 + 密钥</b>「加入频道」，再打开<b>「只接收已接入的频道」</b>（默认关，也就是全收）。开了之后没接入的频道照投、照入库，只是不再下发到这台设备——<b>实时帧、断线补发、历史与搜索四处一起过滤</b>。它是投递过滤器不是权限边界：跨 Space 的频道号即使密钥正确也一律 404。细节在 <a href="usage.html#join">使用说明</a> 与 <a href="client-api.html">客户端 API</a>。</p>
+  <h3>服务端挂了会丢消息吗？</h3>
+  <p>投递侧会——第三方那次 <code>POST</code> 拿不到 200 就是没受理（重试请用同一个 <code>msg_key</code>，服务端按它幂等）。已经受理过的消息永久保留在库里，设备重连后按游标补齐。</p>
+  <h3>为什么我的中文消息正文被截断了？</h3>
+  <p>单帧超过 <code>pb.ws.frame-max-bytes</code>（默认 32KB）时服务端会二分定位安全长度削正文并置 <code>truncated:true</code>，客户端随即用 <code>GET /api/v1/messages/{id}</code> 回捞全文。按"超出多少字节就删多少个字符"的老写法，纯中文会一次删掉三倍需求量。</p>
+  <h3>能在公网上裸跑 HTTP 吗？</h3>
+  <p>不建议。帧加密保证了链路上读不到正文，但入站凭据 <code>secret</code> 是在 body 里明文送的，且浏览器/系统对 HTTP 的降级与中间设备行为不可控。请上 HTTPS，或把入站口只开在内网。</p>
+
+  <div class="foot">
+    本页内容全部取自仓库内的 <code>README.md</code>、<code>server/README.md</code>、<code>android/README.md</code>、<code>windows/README.md</code> 与 <code>docs/PushBox-软件设计方案.md</code>；协议与字段以代码为准。
+  </div>
+</div>
+</main>
+</div>
+</body>
+</html>

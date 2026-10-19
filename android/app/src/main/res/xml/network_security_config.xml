@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  §11.1：P0 联调时服务端是局域网/Tailscale 上的明文 http+ws，Android 9+ 默认禁止。
+  生产按 §11.2 换成自签 CA + 强制 TLS，这份文件届时整份替换。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

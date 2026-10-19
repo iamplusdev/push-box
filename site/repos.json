@@ -1,0 +1,24 @@
+{
+  "updated": "2026-10-16",
+  "repositories": [
+    {
+      "name": "GitHub",
+      "url": "https://github.com/iamplusdev/push-box",
+      "label": "主仓库",
+      "desc": "源码、Issue、Release 与安装包下载都在这里。",
+      "primary": true
+    },
+    {
+      "name": "Gitee",
+      "url": "https://gitee.com/iamplus/push-box",
+      "label": "国内镜像",
+      "desc": "内容与 GitHub 同步，国内拉取更快。"
+    },
+    {
+      "name": "Gitea",
+      "url": "https://gitea.iamplus.cn/iamplus/push-box",
+      "label": "自建",
+      "desc": "自己的 Gitea 实例，日常开发与 CI 在这里跑。"
+    }
+  ]
+}
