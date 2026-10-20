@@ -86,6 +86,10 @@ jobs:
 
       # 桶不会自动出现：仓库里没有建桶的地方（deploy/compose 都没有），历史联调用的那只桶是当年手工建的。
       # 不建桶的话第一条带图消息才会报错，而 CI 里没有那条消息 —— 所以在这里显式建，把运维缺口也钉住。
+      # 客户端用 runner 自带的 AWS CLI（Ubuntu 24.04 镜像 Readme 实测预装 2.37.13），不再拉 mc 镜像：
+      # minio/mc 已经从 Docker Hub 下架（hub.docker.com/v2/repositories/minio/mc 实测 404），
+      # 2026-10-20 main 首跑就是死在这一步的镜像 pull 上（exit 125 "repository does not exist"）。
+      # 换成 aws 之前先在本地对真 RustFS 容器验过：create-bucket 退 0、重复创建幂等、head-bucket 能确认桶在。
       - name: 等 RustFS 就绪并建桶
         run: |
           set -euo pipefail
@@ -94,12 +98,13 @@ jobs:
             if [ "$i" = 40 ]; then echo "::error::RustFS 端口 9000 40 次没通"; exit 1; fi
             sleep 3
           done
-          docker run --rm --network host --entrypoint sh minio/mc:latest -c '
-            set -eu
-            mc alias set pb http://127.0.0.1:9000 ci-s3-access-key ci-s3-secret-key-0123456789 >/dev/null
-            mc mb --ignore-existing pb/pushbox
-            mc ls pb
-          '
+          command -v aws >/dev/null || { echo "::error::runner 镜像里没有 aws CLI，这条建桶路径需要换一个 S3 客户端"; exit 1; }
+          # us-east-1 只是 SigV4 签名的必填项，RustFS 不看它；EC2 元数据探测在 runner 上只会白等。
+          export AWS_ACCESS_KEY_ID="$PB_S3_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$PB_S3_SECRET_KEY" \
+            AWS_DEFAULT_REGION=us-east-1 AWS_EC2_METADATA_DISABLED=true
+          aws --endpoint-url http://127.0.0.1:9000 s3api create-bucket --bucket pushbox
+          aws --endpoint-url http://127.0.0.1:9000 s3api head-bucket --bucket pushbox
+          echo "✅ 桶 pushbox 已就绪"
 
       - name: mvn -B -pl server -am test
         run: mvn -B -pl server -am test
@@ -183,8 +188,20 @@ jobs:
         with:
           distribution: temurin
           java-version: "25"
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # 不再用 android-actions/setup-android@v3：它要装已经下架的 legacy `tools` 包，2026-10-20 main 首跑
+      # 就是它把这个 job 跑红的（sdkmanager 退出 1，"Failed to find package 'tools'"）。
+      # runner 镜像本身就把本项目要的东西装好了（Ubuntu 24.04 镜像 Readme 实测：platforms 含 android-36、
+      # build-tools 含 36.0.0/36.1.0、platform-tools 37.0.1，且 ANDROID_HOME/ANDROID_SDK_ROOT 已导出）；
+      # 真缺组件时 AGP 会自己走 sdkmanager 补。这里只做一次入镜检查，为的是下次红能一眼看出缺哪一项。
+      - name: 核对 runner 预装的 Android SDK
+        run: |
+          set -euo pipefail
+          [ -n "${ANDROID_HOME:-}" ] || { echo "::error::runner 没导出 ANDROID_HOME，本步依赖的预装 SDK 前提变了"; exit 1; }
+          CS=$(grep -m1 -oE 'compileSdk[[:space:]]*=[[:space:]]*[0-9]+' android/app/build.gradle.kts | grep -oE '[0-9]+' || true)
+          [ -n "$CS" ] || { echo "::error::没能从 android/app/build.gradle.kts 读出 compileSdk"; exit 1; }
+          [ -d "$ANDROID_HOME/platforms/android-$CS" ] || { echo "::error::缺 platforms/android-$CS（compileSdk=$CS）"; exit 1; }
+          [ -n "$(ls -A "$ANDROID_HOME/build-tools" 2>/dev/null)" ] || { echo "::error::缺 build-tools"; exit 1; }
+          echo "✅ compileSdk=$CS 在位；build-tools：$(ls "$ANDROID_HOME/build-tools" | tr '\n' ' ')"
       - name: Make gradlew executable
         run: chmod +x android/gradlew
       - name: ./gradlew :app:assembleDebug

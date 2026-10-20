@@ -119,7 +119,21 @@ mc mb --ignore-existing "pb/${PB_S3_BUCKET:-pushbox}"
 mc ls pb            # 能看到桶才算这一步过了
 ```
 
-判据别看 `/healthz`，看这条 `mc ls`；CI 的服务端 job（`.github/workflows/ci.yml`）里同一动作是自动做的。
+**手上没有 `mc` 就别去现找**：2026-10-20 实测 `minio/mc` 与 `minio/minio` 在 Docker Hub 都已取不到
+（`hub.docker.com/v2/repositories/minio/mc` → 404），`dl.min.io/client/mc/release/linux-amd64/mc` → **410 Gone**。
+CI 以前就是拉 `minio/mc` 建桶的，现在改用 AWS CLI v2（Linux 安装包 `https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip`，实测 200）。等价命令：
+
+```bash
+export AWS_ACCESS_KEY_ID="$PB_S3_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$PB_S3_SECRET_KEY" \
+       AWS_DEFAULT_REGION=us-east-1
+# region 只是 SigV4 的签名字段，RustFS 不看它；裸 IP 的 endpoint 会自动走 path-style。
+aws --endpoint-url "$PB_S3_ENDPOINT" s3api create-bucket --bucket "${PB_S3_BUCKET:-pushbox}"
+aws --endpoint-url "$PB_S3_ENDPOINT" s3api head-bucket --bucket "${PB_S3_BUCKET:-pushbox}"   # 退 0 才算过
+```
+
+这两条 2026-10-20 在本地对真 `rustfs/rustfs:latest` 容器实测过：`create-bucket` 退 0、重复执行不报错、`head-bucket` 确认桶在。
+
+判据是上面这条 `mc ls` / `head-bucket` 的退出码，别看 `/healthz`；CI 的服务端 job（`.github/workflows/ci.yml`）里同一动作是自动做的。
 
 ---
 

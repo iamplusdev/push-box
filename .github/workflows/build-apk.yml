@@ -38,8 +38,18 @@ jobs:
           distribution: temurin
           java-version: "25"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # 同 ci.yml 的 android job：不用 android-actions/setup-android@v3（它要装已下架的 legacy `tools` 包，
+      # 2026-10-20 那次红就是它造成的），改用 runner 预装 SDK + 一次入镜检查。
+      # apksigner 来自 $ANDROID_HOME/build-tools/<最新版>，下一步把它挂进 PATH，所以这里必须确认 build-tools 非空。
+      - name: 核对 runner 预装的 Android SDK
+        run: |
+          set -euo pipefail
+          [ -n "${ANDROID_HOME:-}" ] || { echo "::error::runner 没导出 ANDROID_HOME，本步依赖的预装 SDK 前提变了"; exit 1; }
+          CS=$(grep -m1 -oE 'compileSdk[[:space:]]*=[[:space:]]*[0-9]+' android/app/build.gradle.kts | grep -oE '[0-9]+' || true)
+          [ -n "$CS" ] || { echo "::error::没能从 android/app/build.gradle.kts 读出 compileSdk"; exit 1; }
+          [ -d "$ANDROID_HOME/platforms/android-$CS" ] || { echo "::error::缺 platforms/android-$CS（compileSdk=$CS）"; exit 1; }
+          [ -n "$(ls -A "$ANDROID_HOME/build-tools" 2>/dev/null)" ] || { echo "::error::缺 build-tools（apksigner 无处可取）"; exit 1; }
+          echo "✅ compileSdk=$CS 在位；build-tools：$(ls "$ANDROID_HOME/build-tools" | tr '\n' ' ')"
 
       # 统一版本号注入（从 git tag 或 run number 提取）
       - name: Set version from git tag
