@@ -160,7 +160,7 @@
 
 **版本号只有一个来源，就是仓库里已提交的那份**（`pom.xml`；`scripts/set-version.sh` 会把同一个 X.Y.Z 一次写全三端构建配置、两份 compose 与官网页面）。workflow 不再在构建现场改写它；取而代之的是构建前的一道闸门：**在 `v*` 事件上**，tag 说的版本、pom 写的版本、compose 钉的标签三者必须相等，否则在 buildx 与 login 之前就红（分支事件只要求 pom 读得出 X.Y.Z，那个值拿去当镜像标签）。发布顺序因此是**先 `bash scripts/set-version.sh X.Y.Z` 并提交，再在那个提交上打 `vX.Y.Z`**——反过来的话 tag 触发的那次构建会被闸门拦下，报错信息里直接写了该跑哪条命令补。这条判据本机验过：`tag v1.1.0` + pom 1.1.0 通过；`tag v9.9.9` + pom 1.1.0 退 1；pom 写成 `1.1.0-SNAPSHOT` 也退 1（取值把 `<version>` 尖括号一起锚定，否则 `-SNAPSHOT` 会被读成 `1.1.0`，闸门就成了假绿）。
 
-版本标签只在 `v*` 事件上打，push main 只出 `main` 与 `sha-*`，这是**故意的**：如果每次合并都覆盖一次 `1.1.0`，钉着它的人今天拉到的和上周就不是同一个镜像，"回滚到 1.1.0"这件事随之消失。
+版本标签只在 `v*` 事件上打，push main 只出 `main` 与 `sha-*`，这是**故意的**：如果每次合并都覆盖一次 `1.1.0`，钉着它的人今天拉到的和上周就不是同一个镜像，"回滚到 1.1.0"这件事随之消失。**这一口径 2026-10-20 由维护者拍板，不是遗漏**——备选过的"main 也推 `X.Y.Z`"与"main 推 `1.1.0-main.<run号>` 预发布标签"都已否；要跑当天 main 的镜像就认 `sha-<7位>` 那个标签。
 
 镜像本身也带版本：metadata 步骤用 `labels:` 把闸门从 pom 现读的值盖到 `org.opencontainers.image.version` 上，发布后不用靠标签名猜自己跑的是哪一版。这一步不是锦上添花——2026-10-20 在 WSL 实测本机 `docker compose build` 出来的那份镜像，`docker image inspect pushbox/server:1.1.0 --format '{{json .Config.Labels}}'` 读到的是**基底继承来的** `{"org.opencontainers.image.title":"ubuntu","org.opencontainers.image.version":"26.04",...}`，也就是说谁照这行查版本，查出的是 Ubuntu 的版本号。CI 那份由闸门把值盖成 `1.1.0`；**本机现场编出来的仍然会是 `26.04`**（labels 由 workflow 注入，`deploy/Dockerfile` 里没有版本 `ARG`），别把这条判据拿去核本地构建。
 ```bash
