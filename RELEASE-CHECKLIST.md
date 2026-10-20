@@ -127,7 +127,7 @@
 ## Windows 发布
 
 ### 安装包验证
-- [ ] `setup.exe` 能通过 Windows SmartScreen（需代码签名证书；未签名时 CI 只告警不失败，发布说明里要写清）。2026-10-20 现状：`CODESIGN_CERT_BASE64` / `CODESIGN_PASSWORD` **两个都没配**（GitHub Secrets 里只有 4 个 `ANDROID_*` + 2 个 `DOCKERHUB_*`），所以 v1.1.0 的 MSI **必然未签名**——那就必须把"会弹 SmartScreen、点『更多信息→仍要运行』"写进官网安装页与 Release 说明；本轮两处都还没写，这条的实质是文档欠的那一句，不是证书本身
+- [ ] `setup.exe` 能通过 Windows SmartScreen（需代码签名证书；未签名时 CI 只告警不失败，发布说明里要写清）。2026-10-20 现状：`CODESIGN_CERT_BASE64` / `CODESIGN_PASSWORD` **两个都没配**（GitHub Secrets 里只有 4 个 `ANDROID_*` + 2 个 `DOCKERHUB_*`），所以 v1.1.0 的 MSI **必然未签名**——那就必须把"会弹 SmartScreen、点『更多信息→仍要运行』"写进官网安装页与 Release 说明。**这一句两处都补上了**：官网在 `site/install.html`「安装包」小节加了 `callout warn`，Release 说明在 `build-apk.yml` 与 `build-msi.yml` 的发布步骤里按 `${{ secrets.CODESIGN_CERT_BASE64 }}` 是否为空**条件写入**（配了证书这一段自动消失；两个 workflow 都带上这句，是因为它们在同一 tag 上抢着 `gh release create`，谁先 create 谁定正文，只写一处就会随机丢）。**这两处 CI 改动只在本地验过**：`bash -n` 过，再把 YAML 里那段 run 抽出来用一个假 `gh` 跑过两种状态，确认未签名时正文多出那一段、签了名时一字不差地回到原样——没打过 `v*` 标签，所以 runner 上没跑过。**这条仍然不能勾**：勾它要的是证书本身，不是文案
 - [ ] 卸载只清"指向本程序目录"的注册表键与开机自启项；**用户数据（`%LOCALAPPDATA%\PushBox\`）默认保留**，重装即恢复——这是设计口径，不是漏清
 - [ ] 单实例机制正常（第二次启动提示已运行）
 - [x] 版本号三处同源。**判据里不写具体数字**——写死就会腐烂，这一条之前挂着的是 `1.0.0`，而 `scripts/set-version.sh` 根本不碰它。现在的口径：`windows/PushBox.Windows/PushBox.Windows.csproj` 的 `<Version>` 是**唯一来源**，`windows/installer/PushBox.iss` 用 `#ifndef MyAppVersion` 兜底、真值由 `build-installer.sh` 读 csproj 后 `/DMyAppVersion` 传入，`AppVersion={#MyAppVersion}` 再进注册表；`scripts/release-verify.sh` 已经是"去 csproj 现读一个值再比"，不是比字符串常量

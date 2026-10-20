@@ -197,6 +197,8 @@ bash windows/installer/build-installer.sh --skip-publish   # 只改了 .iss 时�
   </table>
   <p>前提：装 Inno Setup 6（脚本会找 <code>ISCC.exe</code>，可用 <code>ISCC=</code> 覆盖）。没装就只跑到 publish 那一步并说明缺什么——<b>这个脚本不会打"假装成功"的包</b>。</p>
 
+  <div class="callout warn"><b>首启会弹 SmartScreen，先跟对方说一声</b><p>GitHub Secrets 里 <code>CODESIGN_CERT_BASE64</code> 与 <code>CODESIGN_PASSWORD</code> <b>两个都没配</b>，所以 CI 出的 <code>PushBox-Setup-*-win-x64.exe</code> 是<b>未签名</b>的：对方第一次双击时 Windows 会先挡一道「Windows 保护了你的电脑」，要点<b>更多信息 → 仍要运行</b>才装得上。这一句必须写进发给对方的说明里，否则他们会以为包坏了。<b>本机 <code>build-installer.sh</code> 编出来的同样未签名</b>，这不是 CI 专属差异。配了证书即消除，步骤与选型见 <code>docs/CODESIGN-GUIDE.md</code>。</p></div>
+
   <h3>数据落在哪</h3>
   <p>全在 <code>%LOCALAPPDATA%\PushBox\</code>：<code>identity.json</code>（身份与私钥，DPAPI）、<code>pushbox.db</code>（消息/会话/FTS5/游标）、<code>settings.json</code>（四个开关）、<code>logs\</code>（脱敏留痕）。</p>
 
