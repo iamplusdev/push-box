@@ -78,6 +78,28 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
+      # 2026-10-20 那次红：runner 上报 UnknownPluginException（KSP marker 六个仓库都"没找到"），
+      # 而同一个 commit 在本机冷 GRADLE_USER_HOME 下配置阶段能正常解析，本机 curl 与境外网络对
+      # 同一个 URL 都是 200。Gradle 的这段报错分不开"仓库真没有"和"runner 到仓库不通"，
+      # 所以在构建前用 runner 自己的网络把 marker 在每个仓库上的状态码打一遍。只打印，不判失败。
+      - name: 探测插件仓库对 KSP marker 的响应
+        run: |
+          set -uo pipefail
+          V=$(grep -m1 -oE '^ksp = "[^"]*"' android/gradle/libs.versions.toml | sed -E 's/.*"([^"]*)".*/\1/')
+          [ -n "$V" ] || { echo "读不到 ksp 版本，跳过探测"; exit 0; }
+          P="com/google/devtools/ksp/com.google.devtools.ksp.gradle.plugin/$V/com.google.devtools.ksp.gradle.plugin-$V.pom"
+          echo "KSP marker：$V"
+          for base in https://maven.aliyun.com/repository/google \
+                      https://maven.aliyun.com/repository/public \
+                      https://maven.aliyun.com/repository/gradle-plugin \
+                      https://dl.google.com/dl/android/maven2 \
+                      https://repo.maven.apache.org/maven2 \
+                      https://plugins.gradle.org/m2 ; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 20 "$base/$P")
+            [ "$code" = 000 ] && code="连接失败"
+            echo "  $code  $base"
+          done
+
       # release APK 由 build.gradle.kts 的 env 驱动 signingConfig 直接签名产出（不再走 debug 兜底）。
       - name: Build release APK
         working-directory: android
