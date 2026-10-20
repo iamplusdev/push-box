@@ -301,10 +301,12 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 | 工作流 | 触发 | 产出 |
 |--------|------|------|
-| `docker-publish.yml` | push main / `v*` 标签（按 server/core/web-admin/Dockerfile 变更过滤） | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`，打 `latest`/`sha-*`/semver 标签 |
-| `build-apk.yml` | push main / `v*` 标签（按 android/core 变更过滤） | 只出 `assembleRelease`（R8 + 签名），用 `apksigner verify` 把关后上传 `pushbox-release-*.apk`；标签时发 Release。没配 keystore 时构建直接失败，不再退化成"发一只 debug 包" |
-| `build-msi.yml` | push main / `v*` 标签（按 windows 变更过滤） | `windows-latest` 上 `dotnet publish self-contained win-x64` + Inno Setup 出 `setup.exe`，上传 artifact；标签时发 Release |
-| `update-dockerhub-description.yml` | README.md 变更 | 把 `README.md` 同步为 Docker Hub 仓库说明 |
+| `docker-publish.yml` | push main / `v*` 标签 | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`，打 `latest`/`sha-*`/semver 标签 |
+| `build-apk.yml` | push main / `v*` 标签 | 只出 `assembleRelease`（R8 + 签名），用 `apksigner verify` 把关后上传 `pushbox-release-*.apk`；标签时发 Release。没配 keystore 时构建直接失败，不再退化成"发一只 debug 包" |
+| `build-msi.yml` | push main / `v*` 标签 | `windows-latest` 上 `dotnet publish self-contained win-x64` + Inno Setup 出 `setup.exe`，上传 artifact；标签时发 Release |
+| `update-dockerhub-description.yml` | push main 且改动含 `README.md`（这是五个工作流里**唯一**带 `paths:` 过滤的） | 把 `README.md` 同步为 Docker Hub 仓库说明 |
+
+前四个工作流没有 `paths:` 过滤：只要落到 `main` 或 `v*` 标签，哪怕只改一个像素也会整套跑一遍。**推其它分支名（例如发布前的 `publish` 分支）不触发任何工作流**，这也是"代码先上远端、CI 暂时不动"能成立的原因。
 
 **要在仓库 Settings → Secrets and variables → Actions 配的密钥：**
 

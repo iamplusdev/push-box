@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-16",
+  "updated": "2026-10-20",
   "repositories": [
     {
       "name": "GitHub",
@@ -12,13 +12,13 @@
       "name": "Gitee",
       "url": "https://gitee.com/iamplus/push-box",
       "label": "国内镜像",
-      "desc": "内容与 GitHub 同步，国内拉取更快。"
+      "desc": "国内拉取更快。目前按版本手动同步，不是自动镜像，可能落后主仓库。"
     },
     {
       "name": "Gitea",
       "url": "https://gitea.iamplus.cn/iamplus/push-box",
-      "label": "自建",
-      "desc": "自己的 Gitea 实例，日常开发与 CI 在这里跑。"
+      "label": "自建备份",
+      "desc": "自己的 Gitea 实例，需要登录才能访问。CI 只在 GitHub 上跑。"
     }
   ]
 }
