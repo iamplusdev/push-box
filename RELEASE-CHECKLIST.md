@@ -18,8 +18,8 @@
 - [x] `bash scripts/release-verify.sh` 零 FAIL
 - [x] CHANGELOG.md 已更新并标注发布日期
 - [x] 版本号一致（Android `versionName` / Windows `<Version>` 与 `MyAppVersion` / Docker 镜像 tag / 四个 pom / `web-admin/package.json`，一次由 `scripts/set-version.sh` 写全），且 `versionCode` = `major*10000 + minor*100 + patch` 且**严格大于上一版**（写小了装不上：`INSTALL_FAILED_VERSION_DOWNGRADED`）
-- [ ] CI 门禁已经真的跑过一遍（工作流被 git 跟踪、目标分支是 `main`、四个 job 全绿）——"文件在本机存在"不等于门禁在运行，这一条以前就是这样空了一整版
-- [ ] 发布分支就是要打的那份代码：`git status` 干净、`git log` 顶端与 tag 意图一致
+- [ ] CI 门禁已经真的跑过一遍（工作流被 git 跟踪、目标分支是 `main`、四个 job 全绿）——"文件在本机存在"不等于门禁在运行，这一条以前就是这样空了一整版。2026-10-20 现状：代码已推到 GitHub/Gitee/Gitea，但推的是 `publish` 分支（为避免 `docker-publish.yml` 的 `push: true` 真往 Docker Hub 推镜像），所以 `main` 还不存在、门禁一次都没跑过；GitHub 公开 API `GET /repos/iamplusdev/push-box/actions/runs` 的 `total_count` 实测为 0，可以用它复核
+- [x] 发布分支就是要打的那份代码：`git status` 干净，`publish` 顶端 `bc57218` 已推到三个远端且三端 `ls-remote` 的 `refs/heads/publish` 完全一致（无 tag）；四个 CI job 的本地等价命令已于 2026-10-20 全绿，见上一条与下方三端复跑
 
 ---
 
