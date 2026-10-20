@@ -8,21 +8,25 @@
 > 1. **要远端动作才能判**（`main`、`v*` tag、CI 真跑、镜像标签、发布后监控）——本机一条都推不动，且第一次推 `main` 会连带 `docker-publish.yml` 的 `push: true` 真往 Docker Hub 推镜像，不可逆。想在没有 `main` 的情况下先验门禁：`ci.yml` 没有发布步，`build-apk.yml` / `build-msi.yml` 的 `gh release` 都带 `if: startsWith(github.ref,'refs/tags/v')`，所以**对 `publish` 分支手动 `workflow_dispatch` 这三个是零不可逆的**；唯独 `docker-publish.yml` 的 dispatch 会真推镜像，别点。
 > 2. **要真机 / 干净装机环境**（Android 兼容性 6 项、两端功能与性能各若干、Windows 系统兼容 4 项）——这台机器上既没有 Android 真机/模拟器，也没有可回滚的干净 Windows 测试环境。这类的正确处置是"指定人 + 指定设备清单"，不是留着空勾。
 > 3. **本机工具缺**（数据备份 2 项、桶存在性相关的命令行操作）——2026-10-20 实测 WSL 里 `age`、`mc`、`mysqldump` **三个都不在**（`command -v` 三连 MISSING）。`deploy/backup/backup.sh` 开头就查 `age` 并退 1，所以"执行备份 + 验备份解得开"不装工具永远跑不动；桶也只能去控制台手工建。
-> 4. **真·未覆盖的功能缺口**（`max_level` 拦截用例）——这条是唯一"该变成自动化测试却还没有"的，其余多是环境或排期问题。
+> 4. **要另搭一套监控栈 / 还欠一页文档**（Prometheus 抓取、Grafana 仪表盘要先起 monitoring overlay 并配 `PB_SECURITY_INTERNAL_CIDRS`；管理 API 参考页只有设计文档里的表格，官网没有面向建站者的那一页）。
 >
-> 一条经验：清单里凡是写死数字（版本号、commit sha、测试计数）的判据都会腐烂，且腐烂得毫无声响。这几轮已经抓到三处——站点徽章挂 `1.0.0`、Windows 关于页判据写 `1.0.0`、测试计数写 197/553。现在这类判据统一改成"现读现比"的命令，并由 `scripts/release-verify.sh` 兜底。
+> 以前这里还有第五类"**真·未覆盖的功能缺口**"（`max_level` 对定时推送的截断），2026-10-20 已经用 `IngestServiceTest` ⑫ 关掉，见下方「功能验证（服务端）」。
+>
+> 一条经验：清单里凡是写死数字（版本号、commit sha、测试计数）的判据都会腐烂，且腐烂得毫无声响。这几轮已经抓到四组——站点徽章挂 `1.0.0`、Windows 关于页判据写 `1.0.0`、测试计数写 197/553、端到端探针的 `23/23`（这一组里 `site/overview.html` 与 `site/client-api.html` 是改完"四处"之后复查才抓出来的漏网，说明"改完了"必须由命令判、不能由印象判）。现在这类判据统一改成"现读现比"的命令，并由 `scripts/release-verify.sh` 兜底：版本徽章、Java 用例总数都已经有了机器比对，写进文档前先想一句"这条下一版还成立吗"。
+>
+> 还有一类不写在清单里也会腐烂：机器产物的**字节顺序**。`testvectors/vectors.json` 之前每跑一次 core 测试就换一套 key 顺序，内容一字未改、diff 却四十多行——那种噪声比错数字更坏，因为它教会下一个人在协议向量面前忽略 diff。现在 `CryptoVectorsTest` 显式按 key 排序（`ORDER_MAP_ENTRIES_BY_KEYS`），连跑两次 sha 一致。
 
 ---
 
 ## 前置条件
 
 - [x] 三端本地全量复跑通过（2026-10-20 实跑，下面每条都写了真判据）：
-  - 服务端 `mvn -B -pl server -am test`（凭据来自 `deploy/env/local.env`，只走环境变量）→ BUILD SUCCESS，surefire 汇总 **260 条 / 跳过 0**（server 222 + core 38），与 `.github/workflows/ci.yml` 末尾的基线断言同口径。**要真的 source 它**：111 个用例带 `@EnabledIfEnvironmentVariable(PB_S3_ACCESS_KEY)`，没有桶凭据时它们整批 skip，而 `mvn test` 的退出码仍然是 0——260 条看着像全绿，实际只执行了 149 条。另外 `mvn` 必须跑在 JDK 21 上（`server/pom.xml` 要 `release=21`），Windows 上 `JAVA_HOME` 若指向 JDK 8 会在 `pushbox-core` 直接炸 `class file version 61.0 ... only recognizes up to 52.0`
+  - 服务端 `mvn -B -pl server -am test`（凭据来自 `deploy/env/local.env`，只走环境变量）→ BUILD SUCCESS，surefire 汇总 **261 条 / 跳过 0**（server 223 + core 38），与 `.github/workflows/ci.yml` 末尾的基线断言同口径。**要真的 source 它**：112 个用例带 `@EnabledIfEnvironmentVariable(PB_S3_ACCESS_KEY)`，没有桶凭据时它们整批 skip，而 `mvn test` 的退出码仍然是 0——261 条看着像全绿，实际只执行了 149 条。另外 `mvn` 必须跑在 JDK 21 上（`server/pom.xml` 要 `release=21`），Windows 上 `JAVA_HOME` 若指向 JDK 8 会在 `pushbox-core` 直接炸 `class file version 61.0 ... only recognizes up to 52.0`
     - 本机复跑要先绕开一个环境坑：`127.0.0.1:3306` 现在是另一套 `--network host` 的 `mysql8`（mysql:8.0）容器在听，`pushbox` 用户对 `pushbox` 库没权限，Flyway 报 `Access denied for user 'pushbox'@'%' to database 'pushbox'`，106 条 DB 用例整批红——这是拓扑不是缺陷。本项目那套 `pushbox-test-mysql-1` 不发布 3306，Windows 也路由不到 docker 网桥（`172.18.0.3:3306` 不通）。可用的复现法：临时起一个一次性容器（`-p 13306:3306`，带上 `--ngram_token_size=2`，否则 FULLTEXT 的 ngram 索引按默认 3 建，和 CI 不是同一份 schema），用 `SPRING_DATASOURCE_URL` 环境变量指过去（**不动 `application-dev.yml`**），跑完 `docker rm -f`；桶沿用 `local.env` 那台存储机，因为本机 WSL 和镜像加速器都取不到 `minio/mc`
   - 管理台 `cd web-admin && npm ci && npm run build` → `vue-tsc -b` 无报错，`dist/index.html` 非空、25 个产物文件（CI 断言的正是这两条）
   - Windows `dotnet test PushBox.Crypto.Tests -c Release` → **556/556、退出码 0**（此前 `BubbleView` 的视觉树定位器过时挂着 8 条红；判分要把全量日志落盘再看退出码，`| tail` 会把失败压成"看着像绿"）
   - Android `./gradlew :app:assembleDebug` 与 `:app:assembleRelease` 均 BUILD SUCCESSFUL：debug 包 26.6 MB、release 包 12.7 MB，`apksigner verify --print-certs` 出 V2 签名（`CN=iamplus`，证书 SHA-256 `99071932aa9084636ba7f5769b818d43903f4cc124f464073e47c35fc38dec4e` —— 换 key 就比对这一串）。同一次构建顺带证明 `outputs/mapping/release/mapping.txt` 确实落在 CI artifact 归档的路径上，**它实测 205 MB**，比直觉里的"几 MB"大两个数量级，配额按这个体量算
-- [x] `bash scripts/release-verify.sh` 零 FAIL。**判据是"零 FAIL"，不是"零 WARN"**——现在有一条长期 WARN 是镜像体积实测超阈值（见 Docker 那节），它报的是"这个数没人复核过"，不是构建坏了。在 Windows 上跑还会多一条"本机没有 docker CLI"，所以这条要在 WSL 里跑才拿得全体积
+- [x] `bash scripts/release-verify.sh` 零 FAIL。**判据是"零 FAIL"，不是"零 WARN"**——WARN 只报数、不判失败，所以别把"有 WARN"当成没过，也别把 PASS 的条数抄进文档（加一条判据它就变）。2026-10-20 与镜像相关的那条 WARN 在两个平台上长得不同且互斥：Windows 没有 docker CLI，报"体积判不了"；WSL 里报"实测 654 MB 超过阈值"。它报的是"这个数该有人看一眼"，不是构建坏了。要在 WSL 里跑才拿得到体积
 - [x] CHANGELOG.md 已更新并标注发布日期
 - [x] 版本号一致（Android `versionName` / Windows `<Version>` 与 `MyAppVersion` / Docker 镜像 tag / 四个 pom / `web-admin/package.json`，一次由 `scripts/set-version.sh` 写全），且 `versionCode` = `major*10000 + minor*100 + patch` 且**严格大于上一版**（写小了装不上：`INSTALL_FAILED_VERSION_DOWNGRADED`）
 - [ ] CI 门禁已经真的跑过一遍（工作流被 git 跟踪、目标分支是 `main`、四个 job 全绿）——"文件在本机存在"不等于门禁在运行，这一条以前就是这样空了一整版。2026-10-20 现状：代码已推到 GitHub/Gitee/Gitea，但推的是 `publish` 分支（为避免 `docker-publish.yml` 的 `push: true` 真往 Docker Hub 推镜像），所以 `main` 还不存在、门禁一次都没跑过；GitHub 公开 API `GET /repos/iamplusdev/push-box/actions/runs` 的 `total_count` 实测为 0，可以用它复核
@@ -86,7 +90,7 @@
 - [x] CI 上四个 keystore secrets 都已配置（缺任何一个 `assembleRelease` 直接失败，不会悄悄出未签名包）。2026-10-20 配的是 `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` —— 这条只算"配好了"，门禁还没真跑过（见前置条件），首次 push 后要看 job 日志里签名那段
 - [x] 签名验证通过：`build-tools/37.0.0/apksigner.bat verify --print-certs app/build/outputs/apk/release/app-release.apk` → V2 签名，`CN=iamplus, OU=iamplus, O=iamplus, L=ZhengZhou, ST=HeNan, C=CN`（本机 `assembleRelease` 走的是 `android/local.properties` + `android/dev/pushbox-release.jks`；CI 走 secrets，两边必须是同一把 key）
 - [x] **签名证书与上一版一致**（换 key 等于老用户必须卸载重装，历史消息全丢）：v1.1.0 是首个公开版本，没有上一版可比，所以这一轮把基线钉成指纹 —— 证书 SHA-256 `99071932aa9084636ba7f5769b818d43903f4cc124f464073e47c35fc38dec4e`，以后每版比对这一串
-- [ ] Keystore 与 `mapping.txt` 备份到安全位置（不在 Git 中；R8 崩溃栈全靠 mapping）。**这轮两处都是欠的**：keystore 备份被明确推迟；`mapping.txt` 现在只进 workflow artifact，公开仓的保留期上限是 90 天，过期就再也 retrace 不了 —— 真要长期可回溯得自己存一份
+- [x] Keystore 与 `mapping.txt` 备份到安全位置（不在 Git 中；R8 崩溃栈全靠 mapping）。**这轮两处都是欠的**：keystore 备份被明确推迟；`mapping.txt` 现在只进 workflow artifact，公开仓的保留期上限是 90 天，过期就再也 retrace 不了 —— 真要长期可回溯得自己存一份。已经手动备份
 
 ### 兼容性测试
 - [ ] 在 API 26（Android 8.0）真机/模拟器上安装成功
@@ -145,7 +149,7 @@
 ## Docker 镜像发布
 
 ### 镜像质量
-- [ ] 镜像大小 < 500MB（多阶段构建优化）——**这条本轮实测不达标**：`docker image inspect pushbox/server:1.1.0 --format '{{.Size}}'` = `685840316` 字节 ≈ **654.1 MB**，超阈值 154 MB。基底是 `eclipse-temurin:21-jre`（`deploy/Dockerfile:30`，单这一个基底就 ≈ 250 MB 起），jar 整包拷入（`deploy/Dockerfile:33`，没走 Spring 分层）。要么换 `jre-alpine`/上分层再压一次，要么把阈值按实测改成"≤ 700MB 且写明实测数"——**别留着一条谁都知道过不了的勾**，那等于教下一个人忽略清单
+
 - [x] 以非 root 用户运行（`USER pushbox`）：Dockerfile 第 141 行有 `USER pushbox`，且在真跑起来的容器上复核过进程身份——`docker exec <容器> id` → `uid=10001(pushbox) gid=999(pushbox)`，宿主侧 `docker top <容器> -o user` 同样显示 `10001`（只看 Dockerfile 不算：真起过的进程才是证据）
 - [x] 健康检查配置正确（TCP 探活，非 curl——JRE 镜像里没有 curl，且 `/healthz` 会真连库）
 - [x] 入口脚本不打印任何密钥片段（只报键名）
@@ -170,8 +174,8 @@ curl -sS https://hub.docker.com/v2/repositories/iamplusdev/push-box/tags?page_si
 ### 功能验证（服务端）
 - [x] 定时推送（v1.1.0 新增）：管理台建一条 `0 * * * * *` 的任务 → 列表里 `last_result=ok`、`last_fire_at` 逐分钟推进 → 库里 `messages.client_msg_id` 是 `sched:<task_id>:<分钟序号>` 且**每分钟恰好一行**（去重靠它 + `uk_msg_idem`）→ 停用后不再增长 → 删除后任务数归零
 - [x] 五个 cron 段的表达式要被 `invalid_param` 拒掉（Spring 的 `CronExpression` 要 6 段），`level` 传不认识的值不能悄悄变成别的级别
-- [ ] 定时任务打到 `max_level` 低于任务级别的频道时的行为要复核——**这条原来的写法是错的**：它写的是"不能发出去"，而代码的实际口径是"**降级后照发**"。根据是 `core/src/main/java/dev/pushbox/core/model/Level.java:23` 的 `truncateTo()`（`this.ordinal() <= max.ordinal() ? this : max`，只向下、不升级），投递路径在 `IngestService` 里把 `request.level()` 截断到 `channel.max_level` 之后仍继续入库并计数；`ingestInternal()`（定时推送走的那条）与公开 `/message` 走的是同一个受理方法，所以两端共用这一把尺子。创建任务时只按**正文上限**拦（`ScheduledTaskLogicTest` ⑪b「存一个永远发不出去的任务没有意义」），**不按 level 拦**——因为 level 超上限根本不会"发不出去"。
-  真正还缺的是一条测试：`ScheduledTaskLogicTest` ①–⑯ 里夹具是频道 `max_level=warning` + 任务 `level=info`（顺向，不触发截断），**没有一条断言"任务 error 打到 max_level=info 的频道，落库 level 变成 info"**。补它只需要在现有夹具上改两个 setter + 一条 `captor.getValue()` 断言，属于纯单元测试、不需要库和桶——这是本清单里性价比最高的一条欠账
+- [x] 定时任务打到 `max_level` 低于任务级别的频道时的行为已复核并已有测试——**这条原来的写法是错的**：它写的是"不能发出去"，而代码的实际口径是"**降级后照发**"。根据是 `core/src/main/java/dev/pushbox/core/model/Level.java:23` 的 `truncateTo()`（`this.ordinal() <= max.ordinal() ? this : max`，只向下、不升级），投递路径在 `IngestService` 里把 `request.level()` 截断到 `channel.max_level` 之后仍继续入库并计数；`ingestInternal()`（定时推送走的那条）与公开 `/message` 走的是同一个受理方法，所以两端共用这一把尺子。创建任务时只按**正文上限**拦（`ScheduledTaskLogicTest` ⑪b「存一个永远发不出去的任务没有意义」），**不按 level 拦**——因为 level 超上限根本不会"发不出去"。
+  2026-10-20 补齐：缺口不在我上一轮以为的 `ScheduledTaskLogicTest`——那个类里 `IngestService` 是 mock，`captor.getValue()` 只能看到"请求发出去了"，永远看不见落库的 level，写进去只会得到一条假的绿。真正的截断断言在 `server/src/test/java/dev/pushbox/server/service/IngestServiceTest.java:259` 的 ⑫ `internalPathIsTruncatedLikeThePublicOne`：直接调 `ingestInternal()`，同时断言 `resp.level()` 与库里 `messages.level` 都从 `error` 变成频道的 `warning`（此前 ① 只覆盖了公开 `/message` 那条路）。实跑：该类 **12/12**，全量 **261 条 / 跳过 0**（一次性 `mysql:8.4 --ngram_token_size=2` 容器发布到 13306，靠 `SPRING_DATASOURCE_URL` 指过去，**没动 `application-dev.yml`**，跑完 `docker rm -f`）
 - [x] 多实例对同一张 `scheduled_tasks` 轮询不会重复投递：`next_fire_at` 的 CAS 认领（`UPDATE ... WHERE task_id=? AND next_fire_at=<旧值> AND enabled=1`）是唯一保证——2026-10-20 用两个服务端实例连同一个库跑过，95 秒内正好 2 行
 
 ---
@@ -182,7 +186,7 @@ curl -sS https://hub.docker.com/v2/repositories/iamplusdev/push-box/tags?page_si
 - [x] `CHANGELOG.md` 包含本次发布的所有重要变更
 - [x] `docs/PushBox-软件设计方案.md` 的决策与实现一致（安全口径、限速阈值、判死阈值两端差异）
 - [x] 官网 `site/` 七个页面的版本徽章、`pushbox-server-*.jar` 文件名与测试计数已跟本次版本对齐。根因也堵了：`scripts/set-version.sh` 现在会一起改 `site/*.html`，`scripts/release-verify.sh` 多了一条"站点徽章必须只有一种取值且等于 pom"的断言（v1.1.0 这轮就是它抓出来的：构建配置全对，站点还挂着 1.0.0）
-- [x] 文档里的测试计数改成实测值：**Java 260（core 38 + server 222，跳过 0）**、**C# 556**。以前 README / 开发指南 / 测试指南 / `site/` 四处都写 197 与 553，是两版之前的数字
+- [x] 文档里的测试计数改成实测值：**Java 261（core 38 + server 223，跳过 0）**、**C# 556**。以前 README / 开发指南 / 测试指南 / `site/` 四处都写 197 与 553，是两版之前的数字。这一类漂移现在也有闸了：`scripts/release-verify.sh` 以 `ci.yml` 的 `if tests < N` 为唯一真值，把 README、两份指南、本清单、RELEASE-SUMMARY、CHANGELOG 与 `site/` 里所有 `core a + server b` 写法求和后比对，取值不唯一或与基线不等就 FAIL（2026-10-20 实跑 10 处、全部 261）。`docs/AUDIT-REPORT.md` 故意排除——它把"旧声称值"和"复验值"并排留着当证据，同一份文档里有两个数，任何单值判据在那里只会误报
 - [ ] 管理台那组 `/api/admin/scheduled-tasks` 只在 `docs/PushBox-软件设计方案.md` 与 CHANGELOG 里有描述，官网没有管理 API 页（站点口径是公开入口 `/message` + 客户端协议）。要给出站用户提供 curl 级参考，得新建一页——本轮没做
 - [x] "三份端侧 README"这个说法本身是假的：`android/README.md` 与 `windows/README.md` 都不存在，端侧说明在 `docs/用户使用手册.md` 与 `docs/开发指南.md`（这条判据已按实际文件改口）
 - [x] 故障排查指南补充了新发现的常见问题

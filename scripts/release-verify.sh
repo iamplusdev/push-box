@@ -86,9 +86,31 @@ else
     fail "官网徽章里的版本是 $(echo "$BADGE_VERSIONS" | tr '\n' ' ')，与 pom 的 $MAVEN_VERSION 不一致（跑 bash scripts/set-version.sh）"
 fi
 
-# 镜像体积只在真构建过之后才知道，而清单里那条 "< 500MB" 已经连着几版没人复核过
-# （v1.1.0 实测 654 MB）。所以这里只报实测数、不判失败：阈值本身是该不该改的决定，
-# 但"报了数"和"没人报"差别很大——后者会让下一个发版的人继续勾一条他以为过了的勾。
+# 测试计数是第九个自称拥有单一真相的地方，而且和版本号一样是人手抄的：README、开发指南、
+# 测试指南、RELEASE-CHECKLIST/SUMMARY、CHANGELOG 与 site/ 都写着 "core 38 + server 223"。
+# v1.1.0 这轮抓到过四处同时挂着两版之前的 197/553，靠人肉对齐一定会漏，所以现读现比：
+# 以 ci.yml 里的基线为唯一真值，把上面这些文件里出现的 (core + server) 求和后比对。
+# docs/AUDIT-REPORT.md 不在扫描范围内——它有意把"旧声称值"和"复验值"并排留着当证据，
+# 一份文档里同时存在两个数，任何单值判据都会在那里误报。
+CI_BASELINE=$(grep -oE 'if tests < [0-9]+' "$ROOT_DIR/.github/workflows/ci.yml" | grep -oE '[0-9]+' | tail -1)
+TEST_COUNT_PATTERN='(core [0-9]+ \+ server [0-9]+|server [0-9]+ \+ core [0-9]+)'
+DOC_PATHS=(README.md docs/开发指南.md docs/测试指南.md RELEASE-CHECKLIST.md RELEASE-SUMMARY.md CHANGELOG.md site)
+COUNT_HITS=$(git -C "$ROOT_DIR" grep -hhoE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | wc -l)
+DOC_TOTALS=$(git -C "$ROOT_DIR" grep -hhoE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | awk '{print $2 + $5}' | sort -un | tr '\n' ' ')
+DOC_TOTALS=${DOC_TOTALS% }
+if [ -z "$CI_BASELINE" ]; then
+    fail "没从 .github/workflows/ci.yml 读到用例基线（这条判据跟着 ci.yml 的「if tests < N」走，改了那边要改这里）"
+elif [ "$COUNT_HITS" -lt 10 ]; then
+    fail "只认出 $COUNT_HITS 处「core N + server N」写法的测试计数（预期至少 10 处）：写法变了，这条判据得跟着改，别删"
+elif [ "$DOC_TOTALS" = "$CI_BASELINE" ]; then
+    pass "文档里的 Java 用例总数与 ci.yml 基线一致：$DOC_TOTALS（$COUNT_HITS 处）"
+else
+    fail "文档里的 Java 用例总数是 $DOC_TOTALS，ci.yml 基线是 $CI_BASELINE；不一致的行：$(git -C "$ROOT_DIR" grep -hoE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | sort -u | tr '\n' ' ')"
+fi
+
+# 镜像体积只在真构建过之后才知道（v1.1.0 实测 654 MB）。清单里不再单独列这一条，
+# 阈值由本脚本自己定义，所以这里只报实测数、不判失败：
+# "报了数"和"没人报"差别很大——后者会让下一个发版的人继续勾一条他以为过了的勾。
 IMAGE_REF=$(grep -m1 -E 'image: docker\.io/' "$ROOT_DIR/deploy/docker-compose.yml" | awk '{print $2}')
 # 本机日常构建落的是 pushbox/server:<版本> 这个名字（compose 的 image: 只在拉 CI 产物时才用得上），
 # 所以两个名字都要试，否则脚本在开发机上永远报"判不了"，等于没加这条。
@@ -104,9 +126,9 @@ else
     IMAGE_BYTES=$(docker image inspect "$LOCAL_REF" --format '{{.Size}}')
     IMAGE_MB=$((IMAGE_BYTES / 1048576))
     if [ "$IMAGE_MB" -le 500 ]; then
-        pass "镜像体积 ${IMAGE_MB} MB（$LOCAL_REF，≤ 500 MB）"
+        pass "镜像体积 ${IMAGE_MB} MB（$LOCAL_REF，阈值 500 MB 定义在本脚本里）"
     else
-        warn "镜像体积 ${IMAGE_MB} MB（$LOCAL_REF），超过清单里写的 500 MB 阈值——要么换基底/上 Spring 分层，要么把 RELEASE-CHECKLIST 那条阈值改成实测口径，别留着过不了的勾"
+        warn "镜像体积 ${IMAGE_MB} MB（$LOCAL_REF），超过本脚本的 500 MB 阈值——要么换基底/上 Spring 分层把体积压下来，要么接受现状并在部署文档里写清镜像体量"
     fi
 fi
 

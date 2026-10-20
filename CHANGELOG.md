@@ -44,13 +44,15 @@
 
 ### CI 门禁
 
-- `.github/` 解除 gitignore，新增 `ci.yml`（PR 与 `main` push 触发）：`server` job 起 `mysql:8.4 --ngram_token_size=2` 与 RustFS 服务容器，用 `minio/mc` 预建 `pushbox` 桶，跑真实 `mvn -B -pl server -am test` 后按 surefire XML 汇总设闸（`skipped != 0` 或 `tests < 260` 直接判失败；260 = 2026-10-20 实测 server 222 + core 38）——此前"DB 闸门用例按约定跳过"意味着本地一句 `mvn test` 就能把大半测试静默跳掉还报绿。另含 `web-admin` 构建、Windows 加密库 `dotnet test`、Android `assembleDebug` 三个 job。**流水线本身尚未真跑过**（需要 push 到远端后才能验证）
-- `scripts/release-verify.sh` 新增"部署变量必须有人消费"检查块：逐个断言 compose 透传的 `PB_*` 在 `application-prod.yml` 有对应占位符、监控变量不在主文件、工作流入库且 `ci.yml` 不参与版本号注入。当前 39 PASS / 0 FAIL / 1 WARN
+- `.github/` 解除 gitignore，新增 `ci.yml`（PR 与 `main` push 触发）：`server` job 起 `mysql:8.4 --ngram_token_size=2` 与 RustFS 服务容器，用 `minio/mc` 预建 `pushbox` 桶，跑真实 `mvn -B -pl server -am test` 后按 surefire XML 汇总设闸（`skipped != 0` 或 `tests < 261` 直接判失败；261 = 2026-10-20 实测 server 223 + core 38）——此前"DB 闸门用例按约定跳过"意味着本地一句 `mvn test` 就能把大半测试静默跳掉还报绿。另含 `web-admin` 构建、Windows 加密库 `dotnet test`、Android `assembleDebug` 三个 job。**流水线本身尚未真跑过**（需要 push 到远端后才能验证）
+- `scripts/release-verify.sh` 新增"部署变量必须有人消费"检查块：逐个断言 compose 透传的 `PB_*` 在 `application-prod.yml` 有对应占位符、监控变量不在主文件、工作流入库且 `ci.yml` 不参与版本号注入。**判据是零 FAIL**，WARN 只负责报数不判失败（具体条数会随本机环境变，不写进日志）
 
 ### 测试与验证
 - 新增 `ScheduledTaskLogicTest` 18 个单测（cron 解析与下次时间计算、CAS 抢占失败不投递、msg_key 分钟桶、内部入口不带密钥、频道上限与字节判定、`level` 归一化），纯 Mockito 不碰容器
-- 全量 `mvn -B -pl server -am test` 收集 260 条用例（server 222 + core 38），0 失败；本机没有桶凭据，server 里 111 条 DB 闸门用例按约定跳过（等于实际执行 149 条），`web-admin` 的 `vue-tsc` 类型检查与 `vite build` 通过
+- 全量 `mvn -B -pl server -am test` 收集 261 条用例（server 223 + core 38），**source 了 `deploy/env/local.env` 那次是 0 失败 0 跳过**；不带桶凭据时同一份代码只执行 149 条、跳过 112 条（这批用例带 `@EnabledIfEnvironmentVariable(PB_S3_ACCESS_KEY)`），而 `mvn test` 的退出码仍然是 0——这正是 `ci.yml` 要按 surefire XML 断言 `skipped == 0` 的原因。`web-admin` 的 `vue-tsc` 类型检查与 `vite build` 通过
+- **补上内部摄入路径的 `max_level` 截断用例**：`IngestServiceTest` ⑫ `internalPathIsTruncatedLikeThePublicOne` 直接调 `ingestInternal()`（定时推送走的那条），断言 `error` 打进 `max_level=warning` 的频道时，响应与库里 `messages.level` 都是 `warning`。此前只有公开 `/message` 路径（该类的 ①）覆盖过截断，内部路径一条都没有；把断言写在 `ScheduledTaskLogicTest` 里是不行的——那个类的 `IngestService` 是 mock，`captor` 只能看到请求发出去了，看不见落库值
 - 真实 WSL 栈端到端验收：`pushbox/server` 镜像经 Caddy 反代建任务 → sweep 触发 → `messages` 落 `sched:<id>:<分钟>`、`sender_id=scheduled`、中文正文 UTF-8 完好 → 列表回 `last_result=ok` → 停用 → 删除；Flyway 迁移到 V8，管理台 SPA 产物（含定时推送懒加载 chunk）确认烘进了 jar
+- **`testvectors/vectors.json` 从此按 key 排序输出**（`CryptoVectorsTest` 显式开 Jackson 的 `ORDER_MAP_ENTRIES_BY_KEYS`）。此前每跑一次 core 测试，文件都会换一套 key 顺序：内容逐字节相同，git 却报 40+ 行 diff，评审里再没人能判断"协议向量被改过"这件事是真的还是顺序噪声。改完实测两次连跑 sha 一致，Windows 侧 `dotnet test` 仍 **556/556**（C# 只按 key 取值，与顺序无关）
 
 ---
 

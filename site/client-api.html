@@ -204,7 +204,7 @@
       <tr><td><b>测试向量</b></td><td><code>testvectors/vectors.json</code></td><td><code>inputs</code> / <code>signatures</code> / <code>rest_auth</code> / <code>sealed_box</code> / <code>frame</code> / <code>ratchet</code> / <code>summary</code>。<b>跨语言唯一真正可靠的对齐手段</b>，固定输入固定期望输出</td></tr>
       <tr><td><b>协议单测</b></td><td>Windows <code>dotnet test</code> 的 <code>ProtocolVectorsTest</code></td><td>把上面每个 key 断一遍。新客户端可以照抄这个测试当验收</td></tr>
       <tr><td><b>参考实现</b></td><td><code>core/</code>（Java，三端共用）与 <code>windows/PushBox.Windows/Crypto</code>（C#）</td><td><code>SignatureTargets</code>、<code>FrameChannel</code>、<code>X25519</code>、<code>Ed25519</code>、<code>B64</code>、<code>Summary</code>。Android 通过 <code>:pbcore</code> 直挂 <code>../core/src/main/java</code>，与同源，不存在两份实现漂移</td></tr>
-      <tr><td><b>端到端探针</b></td><td><code>deploy/probe/p0-e2e.mjs</code></td><td>23 条判据跑在真服务端上（注册、签名、密封盒、重放、宽限期真删、逐设备接入过滤…）。新客户端拿它当"服务端到底要什么"的可执行答案</td></tr>
+      <tr><td><b>端到端探针</b></td><td><code>deploy/probe/p0-e2e.mjs</code></td><td>一整组判据跑在真服务端上（注册、签名、密封盒、重放、宽限期真删、逐设备接入过滤…）；条数以脚本末行的 <code>N/N</code> 为准，别把数字抄进文档。新客户端拿它当"服务端到底要什么"的可执行答案</td></tr>
     </tbody>
   </table>
   <p>手工调一条读接口基本不可能——签名要现算、响应要私钥解。<b>要试，就 clone <code>core/</code> 当库用。</b></p>

@@ -264,7 +264,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 | 跑法 | 判什么 |
 |------|--------|
-| `JAVA_HOME=… mvn -B -pl core,server test` | 服务端与加密库（**260/260**，core 38 + server 222）。要先 `source deploy/env/local.env`：111 条挂 `PB_S3_*` 门控，缺凭据时整批静默 skip，而 `mvn test` 的退出码仍然是 0 |
+| `JAVA_HOME=… mvn -B -pl core,server test` | 服务端与加密库（**261/261**，core 38 + server 223）。要先 `source deploy/env/local.env`：112 条挂 `PB_S3_*` 门控，缺凭据时整批静默 skip，而 `mvn test` 的退出码仍然是 0 |
 | `node deploy/probe/p0-e2e.mjs` | 端到端协议（**0 失败**；条数以脚本末行的 `N/N` 为准） |
 | `cd android && ./gradlew :app:assembleDebug` | Android 编译通过 |
 | `cd web-admin && npm ci && npm run build` | 管理台 `vue-tsc` 类型检查与 `dist/` 产物 |
@@ -320,7 +320,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 两处 CI 专属适配（都不改本地开发用的文件）：`gradle-wrapper.properties` 已经写死官方 `services.gradle.org` 发行包，CI 上不再需要临时改写；APK 质量闸就是"能编出来并签上名"。服务端测试**已经进 CI 了**——`ci.yml` 用 service container 起真 MySQL 8.4（带 `--ngram_token_size=2`）与真 RustFS，本地不需要 `deploy/env/local.env` 也能得到同一份判据；早先"因为依赖外部存储所以不放 CI"的说法已经作废。
 
-> 门禁的真实运行要等代码推到远端。2026-10-20 先把四个 job 的本地等价命令各跑了一遍并全绿：服务端 260 条（跳过 0）、管理台 `npm ci && npm run build`、Windows 556/556、Android `assembleDebug` + `assembleRelease`。
+> 门禁的真实运行要等代码推到远端。2026-10-20 先把四个 job 的本地等价命令各跑了一遍并全绿：服务端 261 条（跳过 0）、管理台 `npm ci && npm run build`、Windows 556/556、Android `assembleDebug` + `assembleRelease`。
 
 ---
 

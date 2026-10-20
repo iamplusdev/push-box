@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.mybatisflex.core.row.Db;
+import com.mybatisflex.core.row.Row;
 import dev.pushbox.core.api.IngestRequest;
 import dev.pushbox.core.api.IngestResponse;
 import dev.pushbox.server.repo.PbStore;
@@ -251,6 +252,20 @@ class IngestServiceTest {
     assertThat(Db.selectOneBySql(
         "SELECT display_name FROM senders WHERE channel_no = ? AND sender_id = 'unknown'", CHANNEL)
         .getString("display_name")).hasSize(64);
+  }
+
+  @Test
+  @DisplayName("⑫ 内部入口（定时推送走的那条）同样按频道 max_level 截断——它跳过的只是 HMAC，不是上限")
+  void internalPathIsTruncatedLikeThePublicOne() {
+    Row channel = store.findChannel(CHANNEL);
+    IngestRequest body = request(CHANNEL, SECRET, null, "定时任务想以 error 穿透免打扰", "error", null);
+
+    IngestResponse resp = ingest.ingestInternal(channel, body);
+
+    assertThat(resp.ok()).isTrue();
+    assertThat(resp.level()).isEqualTo("warning");
+    assertThat(Db.selectOneBySql("SELECT level FROM messages WHERE msg_id = ?", resp.id())
+        .getString("level")).isEqualTo("warning");
   }
 
   private static IngestRequest request(String channel, String secret, String type, String content,
