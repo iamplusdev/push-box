@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WPF 默认就是 System DPI Aware（单块屏上高缩放本来不糊），这份清单补的是它缺的那一半：
+  跨不同缩放比的显示器（或运行中改缩放）时，系统不再拿位图把窗口整层拉虚，而是发
+  WM_DPICHANGED 让 WPF 自己按新 DPI 重排。PerMonitorV2 后面跟 PerMonitor 是给 1703 以前
+  的回落；asInvoker 必须留着——那是原 apphost 内嵌清单里唯一的一项，逐用户安装靠它。
+  注意：这份清单会整份替换掉 apphost 自带的那一份，不是叠加。
+-->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>

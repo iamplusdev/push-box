@@ -9,6 +9,9 @@
     <!-- 标题栏、任务栏、托盘（TrayIcon 走 ExtractAssociatedIcon）与卸载面板共用这一个 exe 内嵌图标；
          它不是 Content，编译器直接封进 PE，publish 时不用额外带上。 -->
     <ApplicationIcon>PushBox.ico</ApplicationIcon>
+    <!-- 高 DPI：WPF 默认只有 System aware，跨不同缩放的显示器会被位图拉虚。
+         app.manifest 里声明 PerMonitorV2 让 WPF 自己接 WM_DPICHANGED 重排，同时保留原来的 asInvoker。 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- W15：日志的"启动 {Version}"与安装包的显示版本共用这一个号；改了它记得改 installer/PushBox.iss 里的默认值 -->
     <Version>1.1.0</Version>
   </PropertyGroup>
