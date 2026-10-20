@@ -301,7 +301,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 | 工作流 | 触发 | 产出 |
 |--------|------|------|
-| `docker-publish.yml` | push main / `v*` 标签 | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`，打 `latest`/`sha-*`/semver 标签 |
+| `docker-publish.yml` | push main / `v*` 标签 / 手动 | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`：标签上打 `1.1.0`/`1.1`/`latest`，main 上只打 `main`/`sha-*`（版本标签必须不可变）。构建前先跑版本闸门——tag、`pom.xml`、compose 三者版本号不一致就直接红，不会推出去一个自称某版、里面跑着另一版的镜像。手动触发默认是 **dry-run**（只构建不推），用它可以在不碰 Hub 的前提下验 `DOCKERHUB_*` 这对 secrets |
 | `build-apk.yml` | push main / `v*` 标签 | 只出 `assembleRelease`（R8 + 签名），用 `apksigner verify` 把关后上传 `pushbox-release-*.apk`；标签时发 Release。没配 keystore 时构建直接失败，不再退化成"发一只 debug 包" |
 | `build-msi.yml` | push main / `v*` 标签 | `windows-latest` 上 `dotnet publish self-contained win-x64` + Inno Setup 出 `setup.exe`，上传 artifact；标签时发 Release |
 | `update-dockerhub-description.yml` | push main 且改动含 `README.md`（这是五个工作流里**唯一**带 `paths:` 过滤的） | 把 `README.md` 同步为 Docker Hub 仓库说明 |

@@ -5,7 +5,7 @@
 > 下面的勾选状态是 **v1.1.0 这一轮**（截至 2026-10-20）的实况：勾上的每一项都对应一条真跑过的命令，没勾的就是还没做或做不了。发下一版时先把复选框清干净。
 >
 > **未勾项分四类，阻塞原因不同，别混在一起当成"待办"**（数字是 `grep -c '^- \[ \]'` 现数出来的，会随版本变）：
-> 1. **要远端动作才能判**（`main`、`v*` tag、CI 真跑、镜像标签、发布后监控）——本机一条都推不动，且第一次推 `main` 会连带 `docker-publish.yml` 的 `push: true` 真往 Docker Hub 推镜像，不可逆。想在没有 `main` 的情况下先验门禁：`ci.yml` 没有发布步，`build-apk.yml` / `build-msi.yml` 的 `gh release` 都带 `if: startsWith(github.ref,'refs/tags/v')`，所以**对 `publish` 分支手动 `workflow_dispatch` 这三个是零不可逆的**；唯独 `docker-publish.yml` 的 dispatch 会真推镜像，别点。
+> 1. **要远端动作才能判**（`main`、`v*` tag、CI 真跑、镜像标签、发布后监控）——本机一条都推不动，且第一次推 `main` 会连带 `docker-publish.yml` 真往 Docker Hub 推镜像，不可逆。想在没有 `main` 的情况下先验门禁：`ci.yml` 没有发布步，`build-apk.yml` / `build-msi.yml` 的 `gh release` 都带 `if: startsWith(github.ref,'refs/tags/v')`，所以**对 `publish` 分支手动 `workflow_dispatch` 这三个是零不可逆的**；`docker-publish.yml` 的 dispatch 现在**默认是 dry-run**（`dry_run` 输入框默认勾上 → 只构建并 load 进 runner，不推 Hub），点它可以在真发布前验出 `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` 能不能登录、metadata 算出的标签清单长什么样；把勾去掉才会真推。
 > 2. **要真机 / 干净装机环境**（Android 兼容性 6 项、两端功能与性能各若干、Windows 系统兼容 4 项）——这台机器上既没有 Android 真机/模拟器，也没有可回滚的干净 Windows 测试环境。这类的正确处置是"指定人 + 指定设备清单"，不是留着空勾。
 > 3. **本机工具缺**（数据备份 2 项、桶存在性相关的命令行操作）——2026-10-20 实测 WSL 里 `age`、`mc`、`mysqldump` **三个都不在**（`command -v` 三连 MISSING）。`deploy/backup/backup.sh` 开头就查 `age` 并退 1，所以"执行备份 + 验备份解得开"不装工具永远跑不动；桶也只能去控制台手工建。
 > 4. **要另搭一套监控栈 / 还欠一页文档**（Prometheus 抓取、Grafana 仪表盘要先起 monitoring overlay 并配 `PB_SECURITY_INTERNAL_CIDRS`；管理 API 参考页只有设计文档里的表格，官网没有面向建站者的那一页）。
@@ -156,14 +156,25 @@
 
 ### 标签管理
 
-这四条原本都是"凭印象打勾"的形状，现在写成一条命令就能自证。前三条的根据是 2026-10-20 读过 `.github/workflows/docker-publish.yml` 的 `docker/metadata-action` 配置：`type=ref,event=branch` + `type=sha,prefix=sha-,format=short` + `type=semver,pattern={{version}}` + `type=semver,pattern={{major}}.{{minor}}` + `latest` 只在**正式（不含 `-`）标签**时生效。也就是打 `v1.1.0` 应得到 `1.1.0`、`1.1`、`latest`，push main 应得到 `main`、`sha-<7位>`。**发布后核对（本机直连不了 Hub，在 WSL 里 `curl` 可以）：**
+这四条原本都是"凭印象打勾"的形状，现在写成一条命令就能自证。前三条的根据是 2026-10-20 读过 `.github/workflows/docker-publish.yml` 的 `docker/metadata-action` 配置：`type=ref,event=branch` + `type=sha,prefix=sha-,format=short` + `type=semver,pattern={{version}}` + `type=semver,pattern={{major}}.{{minor}}` + `latest` 只在**正式（不含 `-`）标签**时生效。也就是打 `v1.1.0` 应得到 `1.1.0`、`1.1`、`latest`，push main 应得到 `main`、`sha-<7位>`。**这三条要等 `v1.1.0` 真的存在才勾得上**：tag 还没打，打 tag 与推 tag 都算不可逆的远端动作、要单独确认，Hub 上那个仓库目前仍是 404（见第四条），所以现在只能是空的。
+
+**版本号只有一个来源，就是仓库里已提交的那份**（`pom.xml`；`scripts/set-version.sh` 会把同一个 X.Y.Z 一次写全三端构建配置、两份 compose 与官网页面）。workflow 不再在构建现场改写它；取而代之的是构建前的一道闸门：**在 `v*` 事件上**，tag 说的版本、pom 写的版本、compose 钉的标签三者必须相等，否则在 buildx 与 login 之前就红（分支事件只要求 pom 读得出 X.Y.Z，那个值拿去当镜像标签）。发布顺序因此是**先 `bash scripts/set-version.sh X.Y.Z` 并提交，再在那个提交上打 `vX.Y.Z`**——反过来的话 tag 触发的那次构建会被闸门拦下，报错信息里直接写了该跑哪条命令补。这条判据本机验过：`tag v1.1.0` + pom 1.1.0 通过；`tag v9.9.9` + pom 1.1.0 退 1；pom 写成 `1.1.0-SNAPSHOT` 也退 1（取值把 `<version>` 尖括号一起锚定，否则 `-SNAPSHOT` 会被读成 `1.1.0`，闸门就成了假绿）。
+
+版本标签只在 `v*` 事件上打，push main 只出 `main` 与 `sha-*`，这是**故意的**：如果每次合并都覆盖一次 `1.1.0`，钉着它的人今天拉到的和上周就不是同一个镜像，"回滚到 1.1.0"这件事随之消失。
+
+镜像本身也带版本：metadata 步骤用 `labels:` 把闸门从 pom 现读的值盖到 `org.opencontainers.image.version` 上，发布后不用靠标签名猜自己跑的是哪一版。这一步不是锦上添花——2026-10-20 在 WSL 实测本机 `docker compose build` 出来的那份镜像，`docker image inspect pushbox/server:1.1.0 --format '{{json .Config.Labels}}'` 读到的是**基底继承来的** `{"org.opencontainers.image.title":"ubuntu","org.opencontainers.image.version":"26.04",...}`，也就是说谁照这行查版本，查出的是 Ubuntu 的版本号。CI 那份由闸门把值盖成 `1.1.0`；**本机现场编出来的仍然会是 `26.04`**（labels 由 workflow 注入，`deploy/Dockerfile` 里没有版本 `ARG`），别把这条判据拿去核本地构建。
+```bash
+docker image inspect docker.io/iamplusdev/push-box:<tag> --format '{{index .Config.Labels "org.opencontainers.image.version"}}'   # 期望 = pom 里那个 X.Y.Z
+```
+
+**发布后核对（本机直连不了 Hub，在 WSL 里 `curl` 可以）：**
 ```bash
 curl -sS https://hub.docker.com/v2/repositories/iamplusdev/push-box/tags?page_size=50 | grep -oE '"name":"[^"]+'
 ```
 - [ ] `latest` 标签指向最新稳定版（上一条命令里 `latest` 应等于本次 semver 那份 manifest）
 - [ ] 语义化版本标签正确（如 `1.1.0`、`1.1` 两个都要在）
 - [ ] SHA 短哈希标签生成（如 `sha-a1b2c3d`）
-- [x] `deploy/docker-compose.yml` 的 `image:` 与本次 tag 一致：现查 `grep -n 'image: docker.io' deploy/docker-compose.yml` → `iamplusdev/push-box:1.1.0`，等于 `pom.xml` 的 `<version>1.1.0</version>`。**但注意这条勾只证"写对了"，不证"拉得到"**：2026-10-20 实测该 Hub 仓库 `.../v2/repositories/iamplusdev/push-box/tags` 返回 **404（对照 `library/mysql` 返 200，所以不是网络假象）= 从未创建**。回落已经实测过：`docker compose -f deploy/docker-compose.yml --dry-run up -d` 的计划是 `Pulling → manifest unknown → Building → naming to docker.io/iamplusdev/push-box:1.1.0`，compose 会自动改成本地构建，新用户不加 `--build` 也起得来（代价是首次要现场编、且用不上 CI 的 `latest/sha-*` 标签）
+- [x] `deploy/docker-compose.yml` 的 `image:` 与本次 tag 一致：**这条 2026-10-20 起有机器兜底了**——上面那道闸门在 tag 事件上现读 pom 与 compose 比对，不一致直接红，不再靠人记得去 `grep`。本机核对仍是 `grep -n 'image: docker.io' deploy/docker-compose.yml` → `iamplusdev/push-box:1.1.0`，等于 `pom.xml` 的 `<version>1.1.0</version>`。**但注意这条勾只证"写对了"，不证"拉得到"**：2026-10-20 实测该 Hub 仓库 `.../v2/repositories/iamplusdev/push-box/tags` 返回 **404（对照 `library/mysql` 返 200，所以不是网络假象）= 从未创建**。回落已经实测过：`docker compose -f deploy/docker-compose.yml --dry-run up -d` 的计划是 `Pulling → manifest unknown → Building → naming to docker.io/iamplusdev/push-box:1.1.0`，compose 会自动改成本地构建，新用户不加 `--build` 也起得来（代价是首次要现场编、且用不上 CI 的 `latest/sha-*` 标签）
 
 ### 部署验证
 - [x] `docker compose up -d` 能成功启动所有服务。**主文件里不该再有任何"只有监控才需要"的必填项**：compose 的 `${VAR:?}` 插值作用于整本文件、与 profile 是否激活无关，所以 `GRAFANA_ADMIN_PASSWORD` 一旦留在主文件，"只起服务端"的部署会在解析阶段就报 required variable missing（prometheus/grafana 现在在 `docker-compose.monitoring.yml`）
@@ -227,5 +238,5 @@ age -d -i ~/.age/keys.txt backup/<时间戳>/pushbox-<时间戳>.sql.gz.age | gu
 
 ---
 
-**最后更新**：2026-10-20（v1.1.0；本轮把 54 项未勾缩到 47 项——关掉的是真跑过命令的，改写法的是原判据本身错的或会腐烂的，剩下 47 项按顶部四类分组各有一个明确的阻塞原因）  
+**最后更新**：2026-10-20（v1.1.0；本轮关掉的都是真跑过命令的，改写法的原本判据本身是错的或会腐烂的。剩下没勾的按顶部四类分组各有一个明确阻塞原因——**条数不在这里写死**，要几个数就现数：`grep -c '^- \[ \]' RELEASE-CHECKLIST.md`）  
 **负责人**：开发团队轮值
