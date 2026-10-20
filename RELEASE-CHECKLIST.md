@@ -33,10 +33,11 @@
   ```bash
   for f in ci.yml docker-publish.yml build-apk.yml build-msi.yml; do
     printf "%-22s " "$f"
-    curl -sS "https://api.github.com/repos/iamplusdev/push-box/actions/workflows/$f/runs?per_page=1" | grep -oE '"total_count": *[0-9]+'
+    code=$(curl -sS -o /tmp/wf.json -w "%{http_code}" "https://api.github.com/repos/iamplusdev/push-box/actions/workflows/$f/runs?per_page=1")
+    if [ "$code" = 200 ]; then grep -oE '"total_count": *[0-9]+' /tmp/wf.json; else echo "HTTP $code = 这个 workflow 从没被 GitHub 登记过，更没跑过"; fi
   done
   ```
-  勾这一条的判据是前四行**全都不为 0 且最新一次 conclusion=success**（2026-10-20 实测 `ci.yml` 与两个 build 都还是 0，只有 `docker-publish.yml` 因为那次 dry-run 是 1）。
+  **两种"没跑过"长得不一样**：200 + `total_count: 0` 是"登记了但一次没跑"（2026-10-20 实测 `ci.yml` 就是这个形状），404 是"文件在仓库里、GitHub 连 workflow 资源都没建"（`build-apk.yml`/`build-msi.yml` 实测都是 404）。勾这一条的判据是**四行都出现 `total_count` ≥ 1 且最新一次 `conclusion=success`**——那次 dry-run 只让 `docker-publish.yml` 满足，别拿它顶另外三条的账。
 - [x] 发布分支就是要打的那份代码：`git status` 干净，且本地 tip 与三端一致——判据用这条命令，别把 commit sha 抄进文档（抄了下一提交就腐烂）：`for r in github gitee gitea; do git ls-remote $r refs/heads/publish; done` 三行输出必须相同且等于 `git rev-parse publish`；2026-10-20 实测三端一致且无 tag。四个 CI job 的本地等价命令同日全绿，见上一条与下方三端复跑
 
 ---
