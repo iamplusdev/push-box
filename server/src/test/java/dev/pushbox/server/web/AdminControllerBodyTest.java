@@ -25,9 +25,10 @@ import org.springframework.mock.web.MockHttpServletRequest;
  * <p>这几个端点不直接绑请求记录类，而是先拿到原始字节再做两道检查（8KB / 64KB 的上限按字节判，
  * 绑成记录类就没机会读长度了）。代价是解析失败从 Spring 的
  * {@code HttpMessageNotReadableException}（有 handler，返 400 信封）变成了
- * {@link Json#readBytes} 抛的 {@code IllegalArgumentException}（没有 handler，
+ * {@code Json.readBytes} 抛的 {@code IllegalArgumentException}（没有 handler，
  * 于是 500 + Spring 默认错误体，与全站 {@code {ok,error,hint}} 纪律两套形状）。
- * 2026-10-20 在活服务端上逐个打坏请求体实测到的就是后者，这里把它钉成断言。
+ * 2026-10-20 在活服务端上逐个打坏请求体实测到的就是后者，收口因此落在 {@link RequestBodyJson}，
+ * 设备侧那八个端点共用同一处。
  */
 class AdminControllerBodyTest {
 

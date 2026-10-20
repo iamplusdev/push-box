@@ -3,7 +3,6 @@ package dev.pushbox.server.web;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.mybatisflex.core.row.Row;
 import dev.pushbox.core.protocol.Frames;
-import dev.pushbox.core.protocol.Json;
 import dev.pushbox.server.repo.PbStore;
 import dev.pushbox.server.service.ChannelService;
 import dev.pushbox.server.service.ConfigNotifier;
@@ -58,7 +57,7 @@ public class ChannelController {
   @PostMapping
   public Map<String, Object> create(HttpServletRequest http, @RequestBody byte[] body) {
     DeviceGuard.Authenticated auth = guard.require(http, body);
-    CreateRequest request = Json.readBytes(body, CreateRequest.class);
+    CreateRequest request = RequestBodyJson.read(body, CreateRequest.class);
     ChannelService.Created created = channels.create(auth.groupId(), request.name(),
         request.maxLevel(), request.maxImages());
     // 建频道的那台设备默认接入它：不接的话，一开「只接收已接入频道」就会把自己刚建的频道静默掐断，
@@ -87,7 +86,7 @@ public class ChannelController {
   @PostMapping("/join")
   public Map<String, Object> join(HttpServletRequest http, @RequestBody byte[] body) {
     DeviceGuard.Authenticated auth = guard.require(http, body);
-    JoinRequest request = Json.readBytes(body, JoinRequest.class);
+    JoinRequest request = RequestBodyJson.read(body, JoinRequest.class);
     Map<String, Object> result = channels.join(auth.device(), request.channelNo(), request.secret());
     // 接入只改本机订阅集，不广播 config 帧（其他设备不需要知道）
     return guard.seal(auth.device(), result);
@@ -97,7 +96,7 @@ public class ChannelController {
   @PostMapping("/leave")
   public Map<String, Object> leave(HttpServletRequest http, @RequestBody byte[] body) {
     DeviceGuard.Authenticated auth = guard.require(http, body);
-    JoinRequest request = Json.readBytes(body, JoinRequest.class);
+    JoinRequest request = RequestBodyJson.read(body, JoinRequest.class);
     int removed = channels.leave(auth.device(), request.channelNo());
     return guard.seal(auth.device(),
         Map.of("ok", true, "channel_no", request.channelNo(), "removed", removed > 0));
@@ -107,7 +106,7 @@ public class ChannelController {
   @PostMapping("/subscription-mode")
   public Map<String, Object> setFilterMode(HttpServletRequest http, @RequestBody byte[] body) {
     DeviceGuard.Authenticated auth = guard.require(http, body);
-    FilterModeRequest request = Json.readBytes(body, FilterModeRequest.class);
+    FilterModeRequest request = RequestBodyJson.read(body, FilterModeRequest.class);
     int mode = channels.setFilterMode(auth.device(), request.subscribedOnly());
     return guard.seal(auth.device(), Map.of("ok", true, "subscribed_only", mode));
   }
@@ -139,7 +138,7 @@ public class ChannelController {
   public Map<String, Object> update(@PathVariable String channelNo, HttpServletRequest http,
       @RequestBody byte[] body) {
     DeviceGuard.Authenticated auth = guard.require(http, body);
-    JsonNode node = Json.readNode(body);
+    JsonNode node = RequestBodyJson.readTree(body);
     ChannelService.Patch patch = new ChannelService.Patch(
         text(node, "name"), text(node, "max_level"), integer(node, "max_images"),
         integer(node, "rate_limit"), integer(node, "max_body_bytes"), integer(node, "strict_auth"),
@@ -196,7 +195,7 @@ public class ChannelController {
   public Map<String, Object> putSender(@PathVariable String channelNo, HttpServletRequest http,
       @RequestBody byte[] body) {
     DeviceGuard.Authenticated auth = guard.require(http, body);
-    SenderRequest request = Json.readBytes(body, SenderRequest.class);
+    SenderRequest request = RequestBodyJson.read(body, SenderRequest.class);
     Map<String, Object> result = channels.setSenderAllowed(channelNo, auth.groupId(),
         request.senderId(), request.enabled() == null || request.enabled());
     config.channel(auth.groupId(), Frames.R_SENDERS_UPDATED, channelNo);

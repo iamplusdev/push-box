@@ -2,7 +2,7 @@ package dev.pushbox.server.web;
 
 import dev.pushbox.core.api.DeviceApi;
 import dev.pushbox.core.protocol.Frames;
-import dev.pushbox.core.protocol.Json;
+import dev.pushbox.core.protocol.Frames;
 import dev.pushbox.server.push.PushRegistry;
 import dev.pushbox.server.service.ConfigNotifier;
 import dev.pushbox.server.service.DeviceService;
@@ -45,7 +45,7 @@ public class DeviceController {
     if (body == null || body.length > 8192) {
       throw ApiException.invalidParam("请求体过大");
     }
-    return Json.readBytes(body, type);
+    return RequestBodyJson.read(body, type);
   }
 
   @PostMapping("/register")

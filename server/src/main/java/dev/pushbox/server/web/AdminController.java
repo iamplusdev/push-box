@@ -1,7 +1,6 @@
 package dev.pushbox.server.web;
 
 import com.mybatisflex.core.row.Row;
-import dev.pushbox.core.protocol.Json;
 import dev.pushbox.server.repo.PbStore;
 import dev.pushbox.server.service.ChannelService;
 import dev.pushbox.server.service.DeviceService;
@@ -259,7 +258,7 @@ public class AdminController {
   public Map<String, Object> setScheduledTaskEnabled(@PathVariable String taskId,
       @RequestBody byte[] body, HttpServletRequest http) {
     guard.require(http, null);
-    EnabledRequest request = readJson(body == null ? new byte[0] : body, EnabledRequest.class);
+    EnabledRequest request = RequestBodyJson.read(body == null ? new byte[0] : body, EnabledRequest.class);
     Map<String, Object> resp = new LinkedHashMap<>();
     resp.put("ok", true);
     resp.put("task", scheduledTasks.setEnabled(taskId, request.enabled() != null && request.enabled() == 1));
@@ -287,27 +286,14 @@ public class AdminController {
     if (body == null || body.length > 8192) {
       throw ApiException.invalidParam("请求体过大");
     }
-    return readJson(body, CreateChannelRequest.class);
+    return RequestBodyJson.read(body, CreateChannelRequest.class);
   }
 
   private ScheduledTaskService.TaskInput readTaskInput(byte[] body) {
     if (body == null || body.length > MAX_TASK_BODY_BYTES) {
       throw ApiException.invalidParam("请求体过大（上限 " + MAX_TASK_BODY_BYTES + " 字节）");
     }
-    return readJson(body, ScheduledTaskService.TaskInput.class);
-  }
-
-  /**
-   * 绑定 {@code byte[]} 的端点必须自己收口解析失败：{@link Json#readBytes} 抛的是
-   * IllegalArgumentException，而 GlobalExceptionHandler 不接它，症状是 HTTP 500 加 Spring 默认错误体，
-   * 而不是全站那份 {@code {ok,error,hint}} 信封。措辞与 handleBadJson 保持一致。
-   */
-  private static <T> T readJson(byte[] body, Class<T> type) {
-    try {
-      return Json.readBytes(body, type);
-    } catch (IllegalArgumentException e) {
-      throw ApiException.invalidParam("请求体必须是合法 JSON");
-    }
+    return RequestBodyJson.read(body, ScheduledTaskService.TaskInput.class);
   }
 
   record CreateChannelRequest(String groupId, String name, String maxLevel, Integer maxImages) {}
