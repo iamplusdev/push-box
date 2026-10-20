@@ -320,7 +320,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 两处 CI 专属适配（都不改本地开发用的文件）：`gradle-wrapper.properties` 已经写死官方 `services.gradle.org` 发行包，CI 上不再需要临时改写；APK 质量闸就是"能编出来并签上名"。服务端测试**已经进 CI 了**——`ci.yml` 用 service container 起真 MySQL 8.4（带 `--ngram_token_size=2`）与真 RustFS，本地不需要 `deploy/env/local.env` 也能得到同一份判据；早先"因为依赖外部存储所以不放 CI"的说法已经作废。
 
-> 门禁的真实运行要等代码推到远端。2026-10-20 先把四个 job 的本地等价命令各跑了一遍并全绿：服务端 261 条（跳过 0）、管理台 `npm ci && npm run build`、Windows 556/556、Android `assembleDebug` + `assembleRelease`。
+> `ci.yml` 那四个 job 的真实运行要等代码落到 `main`（或 PR → main）。2026-10-20 先把四个 job 的本地等价命令各跑了一遍并全绿：服务端 261 条（跳过 0）、管理台 `npm ci && npm run build`、Windows 556/556、Android `assembleDebug` + `assembleRelease`。同一天在 GitHub 的 runner 上真跑绿的只有 `docker-publish.yml`（手动 dry-run：构建 + 登录凭据全绿，没往 Docker Hub 写任何东西），它不跑测试，所以不能顶替上面那条。
 
 ---
 

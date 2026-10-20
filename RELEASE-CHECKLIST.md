@@ -5,7 +5,7 @@
 > 下面的勾选状态是 **v1.1.0 这一轮**（截至 2026-10-20）的实况：勾上的每一项都对应一条真跑过的命令，没勾的就是还没做或做不了。发下一版时先把复选框清干净。
 >
 > **未勾项分四类，阻塞原因不同，别混在一起当成"待办"**（数字是 `grep -c '^- \[ \]'` 现数出来的，会随版本变）：
-> 1. **要远端动作才能判**（`main`、`v*` tag、CI 真跑、镜像标签、发布后监控）——本机一条都推不动，且第一次推 `main` 会连带 `docker-publish.yml` 真往 Docker Hub 推镜像，不可逆。想在没有 `main` 的情况下先验门禁：`ci.yml` 没有发布步，`build-apk.yml` / `build-msi.yml` 的 `gh release` 都带 `if: startsWith(github.ref,'refs/tags/v')`，所以**对 `publish` 分支手动 `workflow_dispatch` 这三个是零不可逆的**；`docker-publish.yml` 的 dispatch 现在**默认是 dry-run**（`dry_run` 输入框默认勾上 → 只构建并 load 进 runner，不推 Hub），点它可以在真发布前验出 `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` 能不能登录、metadata 算出的标签清单长什么样；把勾去掉才会真推。
+> 1. **要远端动作才能判**（`main`、`v*` tag、CI 真跑、镜像标签、发布后监控）——本机一条都推不动，且第一次推 `main` 会连带 `docker-publish.yml` 真往 Docker Hub 推镜像，不可逆。想在没有 `main` 的情况下先验门禁：`ci.yml` 没有发布步，`build-apk.yml` / `build-msi.yml` 的 `gh release` 都带 `if: startsWith(github.ref,'refs/tags/v')`，所以**对 `publish` 分支手动 `workflow_dispatch` 这三个是零不可逆的**；`docker-publish.yml` 的 dispatch 现在**默认是 dry-run**（`dry_run` 输入框默认勾上 → 只构建并 load 进 runner，不推 Hub），点它可以在真发布前验出 `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` 能不能登录、metadata 算出的标签清单长什么样；把勾去掉才会真推。**这一条 2026-10-20 已经点过一次并全绿**，实测结论记在「Docker 镜像发布 → 标签管理」里。
 > 2. **要真机 / 干净装机环境**（Android 兼容性 6 项、两端功能与性能各若干、Windows 系统兼容 4 项）——这台机器上既没有 Android 真机/模拟器，也没有可回滚的干净 Windows 测试环境。这类的正确处置是"指定人 + 指定设备清单"，不是留着空勾。
 > 3. **本机工具缺**（数据备份 2 项、桶存在性相关的命令行操作）——2026-10-20 实测 WSL 里 `age`、`mc`、`mysqldump` **三个都不在**（`command -v` 三连 MISSING）。`deploy/backup/backup.sh` 开头就查 `age` 并退 1，所以"执行备份 + 验备份解得开"不装工具永远跑不动；桶也只能去控制台手工建。
 > 4. **要另搭一套监控栈 / 还欠一页文档**（Prometheus 抓取、Grafana 仪表盘要先起 monitoring overlay 并配 `PB_SECURITY_INTERNAL_CIDRS`；管理 API 参考页只有设计文档里的表格，官网没有面向建站者的那一页）。
@@ -29,7 +29,14 @@
 - [x] `bash scripts/release-verify.sh` 零 FAIL。**判据是"零 FAIL"，不是"零 WARN"**——WARN 只报数、不判失败，所以别把"有 WARN"当成没过，也别把 PASS 的条数抄进文档（加一条判据它就变）。2026-10-20 与镜像相关的那条 WARN 在两个平台上长得不同且互斥：Windows 没有 docker CLI，报"体积判不了"；WSL 里报"实测 654 MB 超过阈值"。它报的是"这个数该有人看一眼"，不是构建坏了。要在 WSL 里跑才拿得到体积
 - [x] CHANGELOG.md 已更新并标注发布日期
 - [x] 版本号一致（Android `versionName` / Windows `<Version>` 与 `MyAppVersion` / Docker 镜像 tag / 四个 pom / `web-admin/package.json`，一次由 `scripts/set-version.sh` 写全），且 `versionCode` = `major*10000 + minor*100 + patch` 且**严格大于上一版**（写小了装不上：`INSTALL_FAILED_VERSION_DOWNGRADED`）
-- [ ] CI 门禁已经真的跑过一遍（工作流被 git 跟踪、目标分支是 `main`、四个 job 全绿）——"文件在本机存在"不等于门禁在运行，这一条以前就是这样空了一整版。2026-10-20 现状：代码已推到 GitHub/Gitee/Gitea，但推的是 `publish` 分支（为避免 `docker-publish.yml` 的 `push: true` 真往 Docker Hub 推镜像），所以 `main` 还不存在、门禁一次都没跑过；GitHub 公开 API `GET /repos/iamplusdev/push-box/actions/runs` 的 `total_count` 实测为 0，可以用它复核
+- [ ] CI 门禁已经真的跑过一遍（工作流被 git 跟踪、目标分支是 `main`、四个 job 全绿）——"文件在本机存在"不等于门禁在运行，这一条以前就是这样空了一整版。2026-10-20 现状：代码已推到 GitHub/Gitee/Gitea，但推的是 `publish` 分支（推 `main` 会连带 `docker-publish.yml` 真往 Docker Hub 推镜像，不可逆），所以 `main` 还不存在、**`ci.yml` 那四个 job 一次都没跑过**。**但"GitHub 上一个 workflow 都没跑过"这句已经不成立了**：同日对 `publish` 分支点过一次 `docker-publish.yml` 的 dry-run dispatch，`run 39362849035` 全 9 步 success（凭据校验 → 版本号闸门 → dry-run 闸门 → buildx → **真登录 Hub** → metadata → 多阶段构建 → 标签清单，约 3 分钟），而 `hub.docker.com/v2/repositories/iamplusdev/push-box/tags` 仍是 **404**（对照组 `library/mysql` 200）——两件事合起来才是"闸门与凭据有效、且确实一个字节都没推上去"的证据。**这一条要勾的是 `ci.yml`，不能拿那次 dry-run 顶账**：它不跑测试、不签 APK、不出 MSI。复核口径用命令别抄条数（按 workflow 分别数，比在 `/actions/runs` 上 grep `name` 干净——那里面还混着 actor 与仓库名）：
+  ```bash
+  for f in ci.yml docker-publish.yml build-apk.yml build-msi.yml; do
+    printf "%-22s " "$f"
+    curl -sS "https://api.github.com/repos/iamplusdev/push-box/actions/workflows/$f/runs?per_page=1" | grep -oE '"total_count": *[0-9]+'
+  done
+  ```
+  勾这一条的判据是前四行**全都不为 0 且最新一次 conclusion=success**（2026-10-20 实测 `ci.yml` 与两个 build 都还是 0，只有 `docker-publish.yml` 因为那次 dry-run 是 1）。
 - [x] 发布分支就是要打的那份代码：`git status` 干净，且本地 tip 与三端一致——判据用这条命令，别把 commit sha 抄进文档（抄了下一提交就腐烂）：`for r in github gitee gitea; do git ls-remote $r refs/heads/publish; done` 三行输出必须相同且等于 `git rev-parse publish`；2026-10-20 实测三端一致且无 tag。四个 CI job 的本地等价命令同日全绿，见上一条与下方三端复跑
 
 ---
@@ -87,7 +94,7 @@
 ## Android 发布
 
 ### 签名验证
-- [x] CI 上四个 keystore secrets 都已配置（缺任何一个 `assembleRelease` 直接失败，不会悄悄出未签名包）。2026-10-20 配的是 `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` —— 这条只算"配好了"，门禁还没真跑过（见前置条件），首次 push 后要看 job 日志里签名那段
+- [x] CI 上四个 keystore secrets 都已配置（缺任何一个 `assembleRelease` 直接失败，不会悄悄出未签名包）。2026-10-20 配的是 `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` —— 这条只算"配好了"，**`build-apk.yml` 一次都没跑过**（按上一条那段命令数出来是 0；跑绿的只有 `docker-publish.yml` 那次 dry-run，而它不签名 APK），首次 push 后要看 job 日志里签名那段
 - [x] 签名验证通过：`build-tools/37.0.0/apksigner.bat verify --print-certs app/build/outputs/apk/release/app-release.apk` → V2 签名，`CN=iamplus, OU=iamplus, O=iamplus, L=ZhengZhou, ST=HeNan, C=CN`（本机 `assembleRelease` 走的是 `android/local.properties` + `android/dev/pushbox-release.jks`；CI 走 secrets，两边必须是同一把 key）
 - [x] **签名证书与上一版一致**（换 key 等于老用户必须卸载重装，历史消息全丢）：v1.1.0 是首个公开版本，没有上一版可比，所以这一轮把基线钉成指纹 —— 证书 SHA-256 `99071932aa9084636ba7f5769b818d43903f4cc124f464073e47c35fc38dec4e`，以后每版比对这一串
 - [x] Keystore 与 `mapping.txt` 备份到安全位置（不在 Git 中；R8 崩溃栈全靠 mapping）——2026-10-20 维护者已手工备份。**这一条的勾是人的陈述，不是命令的证据**：脚本验不了备份介质存在或可读，接手时请真去解开一次。另外两条口径留着别忘：不换 key 意味着这把 key 要签后续所有版本，丢了就永久签不出升级包；`mapping.txt` 只进 workflow artifact 时，公开仓保留期上限 90 天，过期再也 retrace 不了，所以自存的那一份才是长期依据
@@ -157,6 +164,8 @@
 ### 标签管理
 
 这四条原本都是"凭印象打勾"的形状，现在写成一条命令就能自证。前三条的根据是 2026-10-20 读过 `.github/workflows/docker-publish.yml` 的 `docker/metadata-action` 配置：`type=ref,event=branch` + `type=sha,prefix=sha-,format=short` + `type=semver,pattern={{version}}` + `type=semver,pattern={{major}}.{{minor}}` + `latest` 只在**正式（不含 `-`）标签**时生效。也就是打 `v1.1.0` 应得到 `1.1.0`、`1.1`、`latest`，push main 应得到 `main`、`sha-<7位>`。**这三条要等 `v1.1.0` 真的存在才勾得上**：tag 还没打，打 tag 与推 tag 都算不可逆的远端动作、要单独确认，Hub 上那个仓库目前仍是 404（见第四条），所以现在只能是空的。
+
+顺带一句别误读：同一天那次 dry-run 全绿只证明**凭据能用、构建链在 GitHub runner 上编得过**（见「前置条件」里 CI 那条），它证明不了这三条——dispatch 是分支事件，metadata 在这种事件上按配置根本不会产出 `1.1.0`/`latest`，所以别拿"那次跑出来的标签清单"当版本标签的验收证据。
 
 **版本号只有一个来源，就是仓库里已提交的那份**（`pom.xml`；`scripts/set-version.sh` 会把同一个 X.Y.Z 一次写全三端构建配置、两份 compose 与官网页面）。workflow 不再在构建现场改写它；取而代之的是构建前的一道闸门：**在 `v*` 事件上**，tag 说的版本、pom 写的版本、compose 钉的标签三者必须相等，否则在 buildx 与 login 之前就红（分支事件只要求 pom 读得出 X.Y.Z，那个值拿去当镜像标签）。发布顺序因此是**先 `bash scripts/set-version.sh X.Y.Z` 并提交，再在那个提交上打 `vX.Y.Z`**——反过来的话 tag 触发的那次构建会被闸门拦下，报错信息里直接写了该跑哪条命令补。这条判据本机验过：`tag v1.1.0` + pom 1.1.0 通过；`tag v9.9.9` + pom 1.1.0 退 1；pom 写成 `1.1.0-SNAPSHOT` 也退 1（取值把 `<version>` 尖括号一起锚定，否则 `-SNAPSHOT` 会被读成 `1.1.0`，闸门就成了假绿）。
 
