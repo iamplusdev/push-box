@@ -2,7 +2,7 @@ name: CI
 
 # PR / 推 main 的门禁：只判红绿，不出制品（制品由 build-apk / build-msi / docker-publish 三个 workflow 负责）。
 # 这个 workflow 存在的唯一理由是 docker-publish.yml 顶上那句"不在这里跑 mvn verify"：
-# 服务端有 112 个用例靠 PB_S3_ACCESS_KEY 这个环境变量决定跑不跑（见 dev/pushbox 测试约定），
+# 服务端有 114 个用例靠 PB_S3_ACCESS_KEY 这个环境变量决定跑不跑（见 dev/pushbox 测试约定），
 # 没有库和桶时它们会静默 skip，于是"全绿"可以意味着"什么都没测"。这里用 service container 起真
 # MySQL + 真 RustFS，并在最后把 surefire 汇总的 skipped 断成必须为 0 —— 这一条才是"闸门用例真跑过"的证据。
 # 三端各自的最小可跑口径：
@@ -111,10 +111,12 @@ jobs:
 
       # 闸门用例的存在性证明：skipped 必须为 0，且执行总数不低于实测基线。
       # 只判"mvn 退出码 0"是不够的 —— 凭据没传进去时它同样退 0。
-      # 基线是 2026-10-20 用 JDK 21 实跑出来的 surefire 汇总：server 232（其中 112 条是闸门类）+ core 38 = 270。
+      # 基线是 2026-10-21 用 JDK 21 实跑出来的 surefire 汇总：server 235（其中 114 条是闸门类）+ core 38 = 273。
       # 这个数字只许涨不许跌；跌了说明有人删了测试或改了 include 规则，而不是"环境不一样"。
       # 223 → 227 是 AdminControllerBodyTest 那 4 条（管理台坏请求体返 400 的收口用例）；
       # 227 → 232 是 DeviceControllerBodyTest 那 5 条（设备侧同一收口），两次都是同版本 JDK 实跑抬的。
+      # 232 → 235 是定时任务分类标签：1 条归一与回显（Mockito）+ 2 条真库往返（ScheduledTaskStoreTest，
+      # 它同时是 Flyway V9 与 insertScheduledTask 那份列清单/占位符的往返证明）。
       - name: 断言 DB 闸门用例真的执行了
         run: |
           set -euo pipefail
@@ -132,8 +134,8 @@ jobs:
           if skipped != 0:
               print("::error::有 %d 条用例被跳过：DB/S3 凭据没传到位（见本 job 顶部说明），全绿不代表测过" % skipped)
               sys.exit(1)
-          if tests < 270:
-              print("::error::用例总数 %d 低于基线 270，测试被静默裁剪了" % tests); sys.exit(1)
+          if tests < 273:
+              print("::error::用例总数 %d 低于基线 273，测试被静默裁剪了" % tests); sys.exit(1)
           print("✅ 闸门用例全部执行")
           PY
 

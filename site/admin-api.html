@@ -276,6 +276,7 @@ curl -s -X DELETE "$BASE/api/v1/admin/devices/01J8ZK3Q7M2XW4V9HTNBSFY6PD" -H "Au
 {
   "channelNo": "12345678",
   "name": "每晚巡检提醒",
+  "category": "巡检",
   "title": "该跑 nightly-check 了",
   "content": "### 巡检\n1. 磁盘\n2. 证书",
   "level": "info",
@@ -293,6 +294,7 @@ JSON</code></pre>
       <tr><td><code>content</code></td><td><span class="tag req">必填</span></td><td>非空，且<b>按 UTF-8 字节</b>不得超过该频道的 <code>max_body_bytes</code>（默认 32768）。按字节卡是为了和投递时同一把尺子：否则一个"3 万个汉字"的任务会创建成功、然后每分钟失败一次。超限 400，<code>hint</code> 里带实际字节数</td></tr>
       <tr><td><code>cronExpr</code></td><td><span class="tag req">必填</span></td><td><b>6 段：秒 分 时 日 月 周</b>（Spring 的格式，<u>不认 5 段 unix cron</u>）。"每天 21:30" 写 <code>0 30 21 * * *</code>，不是 <code>30 21 * * *</code>。空 → 400 <code>cron_expr 必填</code>；段数或取值非法 → 400，<code>hint</code> 带 Spring 的原始报错；"已经没有下一次"（如过去的日期）→ 400</td></tr>
       <tr><td><code>level</code></td><td><span class="tag opt">可选</span></td><td>创建时就归一化到 <code>info</code>/<code>warning</code>/<code>error</code> 并<b>存归一后的值</b>。写 <code>warn</code> 不会报错，会安静变成 <code>info</code>——所以列表里看到 <code>level:"info"</code> 而你以为给的是 warn，先检查拼写。触发时还会再过一遍频道 <code>max_level</code> 的向下截断</td></tr>
+      <tr><td><code>category</code></td><td><span class="tag opt">可选</span></td><td>管理台列表用的<b>自由标签</b>（公告 / 巡检 / 营销……），不是字典表：服务端只做 <b>trim + 截到 32 字符</b>，<b>不校验取值、不报 400</b>，空串与不填都是有效值且存成 <code>""</code>（列是 <code>NOT NULL DEFAULT ''</code>，所以库里永远不会出现 null）。Flyway V9 加的列。别把它当枚举用——拼错的标签会安静地多出一个分类，管理台的筛选下拉是"从当前列表里现取选项 + 可以顺手新建"，没有独立的管理页</td></tr>
       <tr><td><code>name</code> / <code>title</code> / <code>senderName</code></td><td><span class="tag opt">可选</span></td><td>分别 trim 后截断 64 / 512 / 64 字符；空串按 <code>null</code> 存，响应里回 <code>""</code></td></tr>
       <tr><td><code>images</code></td><td><span class="tag opt">可选</span></td><td><b>外链</b>数组，最多 4 条、单条 ≤1024 字符、只允许 http/https（<code>data:</code> 不行）。抓取与转存走入站那套异步流程（含 SSRF 闸），见<a href="api.html#media">入站 API → 图片</a></td></tr>
       <tr><td><code>enabled</code></td><td><span class="tag opt">可选</span></td><td><b>省略 = 1（启用）</b>；除 <code>1</code> 以外一律当 0。<code>next_fire_at</code> 由 cron 从当下往后算，<b>不接受调用方指定</b></td></tr>
@@ -302,8 +304,8 @@ JSON</code></pre>
   <table>
     <thead><tr><th>字段</th><th>出现在</th><th>含义</th></tr></thead>
     <tbody>
-      <tr><td><code>task_id</code>、<code>group_id</code>、<code>channel_no</code>、<code>name</code>、<code>title</code>、<code>level</code>、<code>sender_name</code>、<code>cron_expr</code>、<code>enabled</code>、<code>created_at</code>、<code>updated_at</code></td><td><b>三种响应都有</b>（列表、详情、写操作）</td><td><code>enabled</code> 是 0/1，不是布尔（实测 <code>typeof</code> 为 number）。<code>name</code>/<code>title</code>/<code>sender_name</code> 没填时回 <code>""</code>，不是省略</td></tr>
-      <tr><td><code>channel_name</code></td><td><b>只有列表</b></td><td>列表查询 LEFT JOIN 了频道表带出来的名字；<b><code>GET /scheduled-tasks/{taskId}</code> 详情、以及 <code>POST</code>/<code>PUT</code>/<code>enabled</code> 三个写操作的响应里都没有这个键</b>（实测键数：列表 15、详情 15、写响应 14）。前端别指望详情响应里有频道名</td></tr>
+      <tr><td><code>task_id</code>、<code>group_id</code>、<code>channel_no</code>、<code>name</code>、<code>category</code>、<code>title</code>、<code>level</code>、<code>sender_name</code>、<code>cron_expr</code>、<code>enabled</code>、<code>created_at</code>、<code>updated_at</code></td><td><b>三种响应都有</b>（列表、详情、写操作）</td><td><code>enabled</code> 是 0/1，不是布尔（实测 <code>typeof</code> 为 number）。<code>name</code>/<code>title</code>/<code>sender_name</code> 没填时回 <code>""</code>，不是省略；<code>category</code> 没填同样回 <code>""</code>，但它<b>永远是字符串、不会出现 null 或键消失</b></td></tr>
+      <tr><td><code>channel_name</code></td><td><b>只有列表</b></td><td>列表查询 LEFT JOIN 了频道表带出来的名字；<b><code>GET /scheduled-tasks/{taskId}</code> 详情、以及 <code>POST</code>/<code>PUT</code>/<code>enabled</code> 三个写操作的响应里都没有这个键</b>。键数现查，别信文档里抄的数字（这类数一改就烂）：<code>jq '.tasks[0] | keys | length'</code> 打列表、<code>jq '.task | keys | length'</code> 打详情与写响应。刚建、从没触发过的任务是 <b>列表 16 / 详情 16 / 写响应 15</b>（2026-10-21 加了 <code>category</code> 之后各 +1；少的那 3 个键是 <code>last_*</code>，见下面那条）。前端别指望详情响应里有频道名</td></tr>
       <tr><td><code>content_head</code></td><td><b>列表与写操作</b></td><td>正文前 <b>80 个字符</b>。这两种形状故意不回全文</td></tr>
       <tr><td><code>content</code>、<code>images[]</code></td><td><b>只有详情</b></td><td>编辑弹窗要完整载荷就取详情；详情里<b>没有 <code>content_head</code></b></td></tr>
       <tr><td><code>next_fire_at</code>、<code>last_fire_at</code>、<code>created_at</code>、<code>updated_at</code></td><td>都有</td><td>epoch 毫秒；<b>空值回 <code>0</code> 而不是 <code>null</code>，键也不会消失</b>（实测从没跑过的任务 = <code>last_fire_at: 0</code>）</td></tr>

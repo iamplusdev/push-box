@@ -119,10 +119,10 @@ versionName = "1.26.0"
 **建议**: 在 CI 环境中定期运行全量测试套件，确保持续符合声称值
 
 **2026-10-20 复验（上面的声称值全部作废，以这里为准）**:
-- Java 测试: **270 条全执行（core 38 + server 232），0 失败 0 错误 0 跳过** —— 前提是 source `deploy/env/local.env` 且 DB 有权限；不带凭据时少 112 条，而 `mvn test` 退出码仍是 0。这一行 2026-10-20 当晚从 261（server 223）抬到 265：补了 `AdminControllerBodyTest` 4 条，把管理台 4 个 `byte[]` 端点的坏请求体从 HTTP 500 收成 400
+- Java 测试: **273 条全执行（core 38 + server 235），0 失败 0 错误 0 跳过**（2026-10-21 凌晨重跑，多的那 3 条是定时任务分类标签：1 条 Mockito 判归一与回显、2 条 `ScheduledTaskStoreTest` 走真库）—— 前提是 source `deploy/env/local.env` 且 DB 有权限；不带凭据时少 114 条，而 `mvn test` 退出码仍是 0。这一行 2026-10-20 当晚从 261（server 223）抬到 265：补了 `AdminControllerBodyTest` 4 条，把管理台 4 个 `byte[]` 端点的坏请求体从 HTTP 500 收成 400
 - Windows 测试: **556/556**（`dotnet test PushBox.Crypto.Tests -c Release`）
 - 端到端探针: 本轮没有重跑（探针会往在用的库里写测试设备与消息，不做没把握的复述）。但静态数了一遍脚本：`deploy/probe/p0-e2e.mjs` 里带序号的 `check(` 站点有 26 处（①–㉓ 减去没标签的，另有 `0a/0b/0c` 与三处把阈值拼进标签的模板串），所以 **"23/23" 是旧口径**。README、开发指南、测试指南与 `site/` 四处已改成"末行 `N/N` 且 0 失败"这种不会腐烂的写法。真机连接判据那边 ①–⑫ 齐，"12/12" 仍然对得上。同轮复查又抓到两处漏改的 `23`：`site/overview.html` 的 `# 端到端验收：23/23` 与 `site/client-api.html` 的「23 条判据」，已一并换成"以脚本末行 `N/N` 为准"。
-- 判据已自动化: `.github/workflows/ci.yml` 的服务端 job 末尾断言 `skipped == 0 && tests >= 270`，测试被静默裁剪时门禁直接红（基线随用例数只许涨；runner 上第一次绿的那次跑的是 `>= 261` 那一版）
+- 判据已自动化: `.github/workflows/ci.yml` 的服务端 job 末尾断言 `skipped == 0 && tests >= 271`，测试被静默裁剪时门禁直接红（基线随用例数只许涨；runner 上第一次绿的那次跑的是 `>= 261` 那一版）
 
 ---
 
