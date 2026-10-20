@@ -90,7 +90,7 @@
 - [x] CI 上四个 keystore secrets 都已配置（缺任何一个 `assembleRelease` 直接失败，不会悄悄出未签名包）。2026-10-20 配的是 `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` —— 这条只算"配好了"，门禁还没真跑过（见前置条件），首次 push 后要看 job 日志里签名那段
 - [x] 签名验证通过：`build-tools/37.0.0/apksigner.bat verify --print-certs app/build/outputs/apk/release/app-release.apk` → V2 签名，`CN=iamplus, OU=iamplus, O=iamplus, L=ZhengZhou, ST=HeNan, C=CN`（本机 `assembleRelease` 走的是 `android/local.properties` + `android/dev/pushbox-release.jks`；CI 走 secrets，两边必须是同一把 key）
 - [x] **签名证书与上一版一致**（换 key 等于老用户必须卸载重装，历史消息全丢）：v1.1.0 是首个公开版本，没有上一版可比，所以这一轮把基线钉成指纹 —— 证书 SHA-256 `99071932aa9084636ba7f5769b818d43903f4cc124f464073e47c35fc38dec4e`，以后每版比对这一串
-- [x] Keystore 与 `mapping.txt` 备份到安全位置（不在 Git 中；R8 崩溃栈全靠 mapping）。**这轮两处都是欠的**：keystore 备份被明确推迟；`mapping.txt` 现在只进 workflow artifact，公开仓的保留期上限是 90 天，过期就再也 retrace 不了 —— 真要长期可回溯得自己存一份。已经手动备份
+- [x] Keystore 与 `mapping.txt` 备份到安全位置（不在 Git 中；R8 崩溃栈全靠 mapping）——2026-10-20 维护者已手工备份。**这一条的勾是人的陈述，不是命令的证据**：脚本验不了备份介质存在或可读，接手时请真去解开一次。另外两条口径留着别忘：不换 key 意味着这把 key 要签后续所有版本，丢了就永久签不出升级包；`mapping.txt` 只进 workflow artifact 时，公开仓保留期上限 90 天，过期再也 retrace 不了，所以自存的那一份才是长期依据
 
 ### 兼容性测试
 - [ ] 在 API 26（Android 8.0）真机/模拟器上安装成功
