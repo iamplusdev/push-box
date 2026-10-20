@@ -3,6 +3,14 @@
     <div class="page-header">
       <h2>定时推送</h2>
       <div class="header-actions">
+        <el-select v-model="categoryFilter" placeholder="全部分类" clearable style="width: 160px">
+          <el-option
+            v-for="c in categoryOptions"
+            :key="c"
+            :label="c === UNSET ? '未分类' : c"
+            :value="c"
+          />
+        </el-select>
         <el-input
           v-model="keyword"
           placeholder="搜索任务名 / 频道"
@@ -20,6 +28,12 @@
 
     <el-table v-loading="loading" :data="filtered" stripe border style="width: 100%">
       <el-table-column prop="name" label="任务名" min-width="140" show-overflow-tooltip />
+      <el-table-column label="分类" width="120" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span v-if="row.category">{{ row.category }}</span>
+          <span v-else class="unset">未分类</span>
+        </template>
+      </el-table-column>
       <el-table-column label="目标频道" width="180">
         <template #default="{ row }">
           <router-link :to="`/channels/${row.channel_no}`" class="channel-link">
@@ -76,7 +90,7 @@
     </el-table>
 
     <div class="table-footer" v-if="!loading">
-      共 {{ tasks.length }} 个任务<template v-if="keyword">，筛选后 {{ filtered.length }} 个</template>
+      共 {{ tasks.length }} 个任务<template v-if="keyword || categoryFilter">，筛选后 {{ filtered.length }} 个</template>
     </div>
     <el-empty v-if="!loading && tasks.length === 0" description="暂无定时推送任务" />
 
@@ -89,6 +103,22 @@
       <el-form :model="form" label-width="90px">
         <el-form-item label="任务名">
           <el-input v-model="form.name" maxlength="64" placeholder="例如：每日晨报" />
+        </el-form-item>
+        <el-form-item label="分类">
+          <el-select
+            v-model="form.category"
+            placeholder="选已有分类，或直接输入新建一个"
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            style="width: 100%"
+          >
+            <el-option v-for="c in namedCategories" :key="c" :label="c" :value="c" />
+          </el-select>
+          <div class="field-hint">
+            自由标签，32 字以内；留空的任务在上方筛选里选「未分类」能找到
+          </div>
         </el-form-item>
         <el-form-item label="目标频道" required>
           <el-select v-model="form.channelNo" placeholder="选择频道" filterable style="width: 100%">
@@ -189,9 +219,16 @@ const saving = ref(false)
 const tasks = ref<ScheduledTask[]>([])
 const channels = ref<Channel[]>([])
 const keyword = ref('')
+const categoryFilter = ref('')
 const toggling = ref('')
 const dialogVisible = ref(false)
 const editingId = ref('')
+
+/**
+ * 筛选下拉里"未分类"用的哨兵值。不能用空串当它的 value：el-select 里空串等于没选，
+ * 选中后显示的是 placeholder，看不出自己到底筛的是哪一档。
+ */
+const UNSET = '__unset__'
 
 const emptyForm = (): ScheduledTaskInput => ({
   channelNo: '',
@@ -202,7 +239,8 @@ const emptyForm = (): ScheduledTaskInput => ({
   senderName: '',
   images: [],
   cronExpr: '0 0 9 * * *',
-  enabled: 1
+  enabled: 1,
+  category: ''
 })
 const form = ref<ScheduledTaskInput>(emptyForm())
 
@@ -226,10 +264,30 @@ const maxImages = computed(() => {
   return channel?.max_images || 4
 })
 
+/** 列表里已经用过的分类，去重排序；没建过字典表，所以候选值只能从现有任务里现取。 */
+const namedCategories = computed(() =>
+  [...new Set(tasks.value.map(t => (t.category || '').trim()).filter(c => c))]
+    .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+)
+
+/** 筛选下拉的选项：有任务没分类时才多挂一节「未分类」，否则那一档筛出来永远是空的。 */
+const categoryOptions = computed(() => {
+  const hasUnset = tasks.value.some(t => !(t.category || '').trim())
+  return hasUnset ? [...namedCategories.value, UNSET] : namedCategories.value
+})
+
 const filtered = computed(() => {
+  let out = tasks.value
+  if (categoryFilter.value) {
+    out = out.filter(t =>
+      categoryFilter.value === UNSET
+        ? !(t.category || '').trim()
+        : (t.category || '').trim() === categoryFilter.value
+    )
+  }
   const k = keyword.value.trim().toLowerCase()
-  if (!k) return tasks.value
-  return tasks.value.filter(
+  if (!k) return out
+  return out.filter(
     t =>
       (t.name || '').toLowerCase().includes(k) ||
       t.channel_no.toLowerCase().includes(k) ||
@@ -272,6 +330,7 @@ async function openEdit(row: ScheduledTask) {
     form.value = {
       channelNo: task.channel_no,
       name: task.name,
+      category: task.category || '',
       title: task.title,
       content: task.content || '',
       level: task.level || 'info',
@@ -313,8 +372,16 @@ async function handleSave() {
     ElMessage.warning('cron 表达式必填')
     return
   }
+  // 分类是 allow-create 的下拉，没有 maxlength 可挡，超长只能在这儿拦：
+  // 服务端会静默截到 32 字，截出来的那个词和用户想写的就不是同一个分类了。
+  const category = (form.value.category || '').trim()
+  if (category.length > 32) {
+    ElMessage.warning('分类不能超过 32 字，现在是 ' + category.length + ' 字')
+    return
+  }
   const payload: ScheduledTaskInput = {
     ...form.value,
+    category,
     images: form.value.images.filter(url => url.trim())
   }
   saving.value = true
@@ -422,6 +489,17 @@ onMounted(() => {
   margin-left: 8px;
   font-size: 12px;
   color: #909399;
+}
+
+.field-hint {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #909399;
+}
+
+.unset {
+  color: #909399;
+  font-size: 12px;
 }
 
 .table-footer {

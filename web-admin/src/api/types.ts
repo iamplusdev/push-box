@@ -33,6 +33,7 @@ export interface ScheduledTask {
   channel_no: string
   channel_name?: string
   name: string
+  category: string
   title: string
   content?: string
   content_head?: string

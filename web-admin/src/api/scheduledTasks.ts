@@ -56,4 +56,6 @@ export interface ScheduledTaskInput {
   images: string[]
   cronExpr: string
   enabled?: number
+  /** 自由标签；留空即"未分类"。服务端只做 trim 与 32 字收口，不校验取值集合。 */
+  category?: string
 }
