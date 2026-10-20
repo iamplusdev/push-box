@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import dev.pushbox.core.protocol.Envelope;
 import dev.pushbox.core.protocol.Frames;
 import dev.pushbox.core.protocol.Json;
@@ -308,6 +309,10 @@ class CryptoVectorsTest {
         "markdown_stripped", dev.pushbox.core.text.Summary.stripMarkdown("正文 **粗体**\n> 引用")));
 
     ObjectMapper mapper = new ObjectMapper();
+    // 必须按 key 排序输出：上面这些嵌套块用的是 Map.of()，它的迭代顺序 JDK 不保证、跨进程还会变，
+    // 不排序的话每次跑测试 vectors.json 都换一套 key 顺序，内容一样却报成一片 diff——
+    // 下一版真改了某个向量，评审里根本分不出"语义变了"和"顺序变了"。
+    mapper.configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
     mapper.writerWithDefaultPrettyPrinter().writeValue(vectorPath().toFile(), vectors);
     assertTrue(Files.exists(vectorPath()), "vectors.json 必须产出，P3 Windows 依赖它");
   }
