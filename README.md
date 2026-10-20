@@ -304,7 +304,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 | `docker-publish.yml` | push main / `v*` 标签 / 手动 | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`：标签上打 `1.1.0`/`1.1`/`latest`，main 上只打 `main`/`sha-*`（版本标签必须不可变）。构建前先跑版本闸门——tag、`pom.xml`、compose 三者版本号不一致就直接红，不会推出去一个自称某版、里面跑着另一版的镜像。手动触发默认是 **dry-run**（只构建不推），用它可以在不碰 Hub 的前提下验 `DOCKERHUB_*` 这对 secrets |
 | `build-apk.yml` | push main / `v*` 标签 | 只出 `assembleRelease`（R8 + 签名），用 `apksigner verify` 把关后上传 `pushbox-release-*.apk`；标签时发 Release。没配 keystore 时构建直接失败，不再退化成"发一只 debug 包" |
 | `build-msi.yml` | push main / `v*` 标签 | `windows-latest` 上 `dotnet publish self-contained win-x64` + Inno Setup 出 `setup.exe`，上传 artifact；标签时发 Release |
-| `update-dockerhub-description.yml` | push main 且改动含 `README.md`（这是五个工作流里**唯一**带 `paths:` 过滤的） | 把 `README.md` 同步为 Docker Hub 仓库说明 |
+| `update-dockerhub-description.yml` | push main 且改动含 `README.md`（这是五个工作流里**唯一**带 `paths:` 过滤的） | 把 `README.md` 同步为 Docker Hub 仓库说明。**至今没跑过**：唯一那次 `main` 推送是"新建分支"（`before` 是全零），GitHub 算不出改动文件集，带 `paths:` 的它被跳过、另外四个照跑；因为它从没被登记过，连网页上的「Run workflow」都不存在，补跑只能等下一次改到 `README.md` 的 `main` 常规推送（判据与证据见 `RELEASE-CHECKLIST.md`「Hub 仓库说明」） |
 
 前四个工作流没有 `paths:` 过滤：只要落到 `main` 或 `v*` 标签，哪怕只改一个像素也会整套跑一遍。**推其它分支名（例如发布前的 `publish` 分支）不触发任何工作流**，这也是"代码先上远端、CI 暂时不动"能成立的原因。
 

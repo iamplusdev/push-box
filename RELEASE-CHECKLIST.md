@@ -38,7 +38,7 @@
     if [ "$code" = 200 ]; then grep -oE '"total_count": *[0-9]+' /tmp/wf.json; else echo "HTTP $code = 这个 workflow 从没被 GitHub 登记过，更没跑过"; fi
   done
   ```
-  **两种"没跑过"长得不一样**：200 + `total_count: 0` 是"登记了但一次没跑"，404 是"文件在仓库里、GitHub 连 workflow 资源都没建"（`build-apk.yml`/`build-msi.yml` 在推 `main` 之前就是 404 这个形状，推过之后必然变成 200 + ≥1，所以这一句只教你认形状，别拿它当现状）。勾这一条的判据是**四行都出现 `total_count` ≥ 1 且最新一次 `conclusion=success`**——2026-10-20 深夜实测四个出制品/门禁 workflow 都满足（`ci.yml` 与 `docker-publish.yml` 与 `build-apk.yml` 最新一条 success，`build-msi.yml` 只有 push `main` 那一次 success；条数会涨，别抄），**唯独 `update-dockerhub-description.yml` 仍是 404，即从没被 GitHub 登记过，见下面 Hub 说明那一节**。上面那段 curl 现在会返回 **403**（同一个 IP 匿名请求 60 次/小时，实测限流），判据不变，换个有 token 的口子或隔一小时再读。
+  **两种"没跑过"长得不一样**：200 + `total_count: 0` 是"登记了但一次没跑"，404 是"文件在仓库里、GitHub 连 workflow 资源都没建"（`build-apk.yml`/`build-msi.yml` 在推 `main` 之前就是 404 这个形状，推过之后必然变成 200 + ≥1，所以这一句只教你认形状，别拿它当现状）。勾这一条的判据是**四行都出现 `total_count` ≥ 1 且最新一次 `conclusion=success`**——2026-10-20 深夜实测四个出制品/门禁 workflow 都满足（`ci.yml` 与 `docker-publish.yml` 与 `build-apk.yml` 最新一条 success，`build-msi.yml` 只有 push `main` 那一次 success；条数会涨，别抄），**唯独 `update-dockerhub-description.yml` 仍是 404，即从没被 GitHub 登记过，也**没法手动补跑**（没有 workflow 资源就没有「Run workflow」按钮），原因与它第一次跑绿的形状见下面「Hub 仓库说明」那一节**。上面那段 curl 现在会返回 **403**（同一个 IP 匿名请求 60 次/小时，实测限流），判据不变，换个有 token 的口子或隔一小时再读。
 - [x] 发布分支就是要打的那份代码：`git status` 干净，且本地 tip 与三端一致——判据用这条命令，别把 commit sha 抄进文档（抄了下一提交就腐烂）：`for r in github gitee gitea; do git ls-remote $r refs/heads/publish; done` 三行输出必须相同且等于 `git rev-parse publish`；2026-10-20 实测三端一致且无 tag。四个 CI job 的本地等价命令同日全绿，见上一条与下方三端复跑
 
 ---
@@ -186,6 +186,29 @@ curl -sS https://hub.docker.com/v2/repositories/iamplusdev/push-box/tags?page_si
 - [ ] 语义化版本标签正确（如 `1.1.0`、`1.1` 两个都要在）
 - [ ] SHA 短哈希标签生成（如 `sha-a1b2c3d`）
 - [x] `deploy/docker-compose.yml` 的 `image:` 与本次 tag 一致：**这条 2026-10-20 起有机器兜底了**——上面那道闸门在 tag 事件上现读 pom 与 compose 比对，不一致直接红，不再靠人记得去 `grep`。本机核对仍是 `grep -n 'image: docker.io' deploy/docker-compose.yml` → `iamplusdev/push-box:1.1.0`，等于 `pom.xml` 的 `<version>1.1.0</version>`。**但注意这条勾只证"写对了"，不证"拉得到"**：2026-10-20 实测该 Hub 仓库 `.../v2/repositories/iamplusdev/push-box/tags` 返回 **404（对照 `library/mysql` 返 200，所以不是网络假象）= 从未创建**。回落已经实测过：`docker compose -f deploy/docker-compose.yml --dry-run up -d` 的计划是 `Pulling → manifest unknown → Building → naming to docker.io/iamplusdev/push-box:1.1.0`，compose 会自动改成本地构建，新用户不加 `--build` 也起得来（代价是首次要现场编、且用不上 CI 的 `latest/sha-*` 标签）
+
+### Hub 仓库说明（`update-dockerhub-description.yml`）
+
+这是五个工作流里**唯一从没跑过、也唯一带 `paths:` 过滤**的那个，形状与另外四个不一样，别拿上面那套"点一次 dispatch 就绿"的经验套它。判据用这条命令现查（按文件名查 workflow 资源，不需要 token）：
+
+```bash
+for f in ci.yml update-dockerhub-description.yml; do printf "%-32s " "$f"; curl -sS -o /tmp/w.json -w "%{http_code}\n" "https://api.github.com/repos/iamplusdev/push-box/actions/workflows/$f"; done
+```
+
+2026-10-20 深夜实测：`ci.yml` **200**，`update-dockerhub-description.yml` **404**。404 不是"没权限看"，是 **GitHub 连这个 workflow 的资源都没建**——它从来没被任何一次事件评估认领过。三个后果是连着的：Actions 侧栏的工作流列表里没有它（实测侧栏只有 4 条）、网页上没有「Run workflow」按钮（直接访问那个 `.yml` 地址返回 "Workflow not found"）、REST 的 dispatch 也要先有 workflow 资源才点得动。**所以"给它手动补跑一次"这条路本身不存在**，不是没 token 的问题。
+
+唯一那次 `main` 推送（`f6b9a53`，2026-10-20 03:24）为什么跳过了它，四条证据：
+
+- `/repos/.../events` 里那一秒是一条 `CreateEvent{ref:"main", ref_type:"branch"}`，`main` 在那之前不存在——也就是那次推送是**新建分支**，事件里的 `before` 是全零 SHA，GitHub 没有可比的基线，算不出"这次改了哪些文件"，带 `paths:` 的过滤器就判不匹配。
+- 同一次推送把另外 4 个工作流全触发了（`/actions/runs` 里 event=push、branch=main、同一秒、同一个 `f6b9a53`），它们只有 `branches: [main]`、没有 `paths:`。**同一事件、同一分支、同一 commit，唯一变量就是 `paths:`** —— 这是这轮排查里最干净的一组对照。
+- 不是"README 没变"：`commits?sha=main&path=README.md` 数出来 README 在那 17 个提交里被改过 3 次（`4c1717d`、`45f1656`、`9d5d70d`），文件也确实在推上去的那棵树里。
+- 也不是"文件坏了"：`main` 与 `publish` 两边都有这个文件，Python `yaml` 解析通过、`on:` 里 `push` 与 `workflow_dispatch` 都在，行尾是 CRLF——另外 4 个同为 CRLF 的工作流照跑，所以行尾不是变量。
+
+上面第一条那个"新建分支时 GitHub 算不出改动文件集"是**推断**，不是文档原文——GitHub 的 events/过滤器文档没写新建分支（`before` 全零）时 `paths:` 取什么值。推断的底气在于这组对照没有第二个变量：同一事件、同一分支、同一 commit，README 确实改过三次，跑掉的四个都没有 `paths:`，没跑的那个是唯一的 `paths:`。想把它证成事实，得另建一条带 `paths:` 的临时分支推送做实验，那要在公开仓库上开一个用完即删的分支，本轮没做。
+
+**它第一次能跑绿长什么样**：`main` 现在已经存在，从下一次"改动含 `README.md` 或这个文件本身"的 **`main` 常规推送**起，这条会被自然触发并顺带登记下来（此后才谈得上手动 dispatch）。而 Hub 侧还有个前置：`iamplusdev/push-box` 这个仓库至今**没被创建过**（上面「标签管理」第四条那次实测是 404），`dockerhub-description` 这个 action 只 PUT 描述、不建仓库，所以在那之前就算触发也只会红在 404。把仓库建出来这件事由同一次 `main` 推送里的 `docker-publish.yml` 真推镜像来完成——**也就是说这条欠账并不"零不可逆"，它的绿和推 `main` 是绑在一起的**。
+
+诚实边界：Hub 那个 404 是 2026-10-20 早间在 WSL 里实测的；当晚想复验时 Windows 侧代理客户端没在跑，`hub.docker.com` 从本机与 WSL 都是**连不上**（`000`，不是 404），所以"仓库仍不存在"记的是早间那次实测，不是当晚现查。要复验就先把代理客户端起来再跑 `curl -sS -o /dev/null -w '%{http_code}\n' https://hub.docker.com/v2/repositories/iamplusdev/push-box/`。
 
 ### 部署验证
 - [x] `docker compose up -d` 能成功启动所有服务。**主文件里不该再有任何"只有监控才需要"的必填项**：compose 的 `${VAR:?}` 插值作用于整本文件、与 profile 是否激活无关，所以 `GRAFANA_ADMIN_PASSWORD` 一旦留在主文件，"只起服务端"的部署会在解析阶段就报 required variable missing（prometheus/grafana 现在在 `docker-compose.monitoring.yml`）
