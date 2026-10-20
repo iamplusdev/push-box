@@ -321,6 +321,25 @@ else
     pass "发布链路与客户端都只认签名 release 包"
 fi
 
+# 签名证书指纹的单一来源：android/release-cert.sha256 给 build-apk.yml 现读现比，
+# RELEASE-CHECKLIST.md 那句"每版比对这一串"必须还是同一串。两处分开腐烂过一次，
+# 就变成"CI 验的是 A、人写的是 B"，比没验更坏。
+CERT_BASELINE_FILE="$ROOT_DIR/android/release-cert.sha256"
+if [ ! -f "$CERT_BASELINE_FILE" ]; then
+    fail "缺 android/release-cert.sha256（build-apk.yml 的签名核对没有基线可读）"
+else
+    CERT_BASELINE=$(tr -d '[:space:]' < "$CERT_BASELINE_FILE")
+    if ! printf '%s' "$CERT_BASELINE" | grep -qE '^[0-9a-f]{64}$'; then
+        fail "android/release-cert.sha256 不是 64 位小写十六进制（读到：$CERT_BASELINE）"
+    elif ! grep -q 'release-cert.sha256' "$ROOT_DIR/.github/workflows/build-apk.yml"; then
+        fail "build-apk.yml 没在读 android/release-cert.sha256，签名步退回了只判 debug"
+    elif ! grep -q "$CERT_BASELINE" "$ROOT_DIR/RELEASE-CHECKLIST.md"; then
+        fail "RELEASE-CHECKLIST.md 里的证书指纹与 android/release-cert.sha256（$CERT_BASELINE）不是同一串"
+    else
+        pass "证书指纹基线单一来源且 CI 与清单一致（$CERT_BASELINE）"
+    fi
+fi
+
 # 机器专属绝对路径不该进仓库（换一台机器就构建不了）
 if grep -q 'installations.paths' "$ROOT_DIR/android/gradle.properties"; then
     fail "android/gradle.properties 写死了本机 JDK 路径"

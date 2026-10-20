@@ -92,6 +92,9 @@ jobs:
 
       # 廉价校验：release APK 必须由正式 keystore 签名。未签名（app-release-unsigned.apk）
       # 或误用 debug 签名的产物一律判失败，绝不把不能安装的包发出去。
+      # 指纹基线在 android/release-cert.sha256（RELEASE-CHECKLIST 的"签名证书与上一版一致"引用同一串）。
+      # 换 key 是有意的破坏性动作：老用户必须卸载重装、历史消息全丢，所以真要改那一串，
+      # 先把这件事写进 CHANGELOG 再改文件，别让它静默跟着 secrets 一起换掉。
       - name: Verify release APK signature
         working-directory: android
         run: |
@@ -109,7 +112,21 @@ jobs:
           if echo "$certs" | grep -qi 'android debug'; then
             echo "❌ release APK 使用的是 debug 签名，不能作为正式产物发布。"; exit 1
           fi
-          echo "✅ release APK 已用正式密钥签名"
+          [ -f release-cert.sha256 ] || { echo "❌ 缺 android/release-cert.sha256，没法核对证书指纹"; exit 1; }
+          expected="$(tr -d '[:space:]' < release-cert.sha256)"
+          echo "$expected" | grep -qE '^[0-9a-f]{64}$' || {
+            echo "❌ release-cert.sha256 不是 64 位小写十六进制（读到：$expected）"; exit 1; }
+          # 取每一个 signer 的 SHA-256：多 signer 时逐条核，缺基线的那一条也算红。
+          # 锚 `certificate SHA-256 digest:` 整串——--verbose 还会打 public key SHA-256，那是另一个数。
+          digests="$(echo "$certs" | tr -d '\r' | sed -n 's/.*certificate SHA-256 digest: *//p' | tr 'A-F' 'a-f')"
+          [ -n "$digests" ] || { echo "❌ apksigner 没打印出任何证书 SHA-256，判据本身坏了"; exit 1; }
+          echo "$digests" | grep -qx "$expected" || {
+            echo "❌ 签名证书与基线不符，这等于换 key：老用户要卸载重装、历史消息全丢。"
+            echo "   基线（release-cert.sha256）：$expected"
+            echo "   这份 APK 实际用的："
+            echo "$digests" | sed 's/^/     /'
+            exit 1; }
+          echo "✅ release APK 已用正式密钥签名，且证书指纹与基线一致（$expected）"
 
       - name: Resolve version label
         id: ver
