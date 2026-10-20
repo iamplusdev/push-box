@@ -375,14 +375,22 @@ fi
 # ========================================
 section "检查 CI/CD 工作流"
 
-# 出制品的三个必须由 tag 注入版本号；ci.yml 反过来——它是门禁，跑的就是仓库里那份代码，
-# 给它加版本注入等于让它去测一个不是要发出去的东西。
-WORKFLOWS=("build-apk.yml" "build-msi.yml" "docker-publish.yml")
+# 判"这个 workflow 有没有真的在构建现场跑版本注入"，只认行首（或 `run:` 之后）的那句 `bash scripts/set-version.sh`。
+# 不能写 `grep -q 'set-version.sh'` 就算数：docker-publish.yml 的报错文案里正主让运维去跑这条命令，
+# 一把全文件 grep 会把"解释该怎么做"读成"我自己做了"，闸门反而判红。
+injects_version() {
+    grep -qE '^[[:space:]]*(run:[[:space:]]*)?bash scripts/set-version\.sh' "$1"
+}
+
+# 出制品的三个 workflow 对版本号的处理**不再一致，这是故意的**：build-apk / build-msi 仍然在构建
+# 现场由 tag 注入，产物自称哪一版跟 tag 走，而 GitHub Release 删了重传得回来；docker-publish 反过来
+# ——镜像推上 Hub 收不回来，所以它只**核对**仓库里已提交的那份版本，绝不现场改写。
+WORKFLOWS=("build-apk.yml" "build-msi.yml")
 for wf in "${WORKFLOWS[@]}"; do
     if [ -f "$ROOT_DIR/.github/workflows/$wf" ]; then
         # 检查是否包含版本注入步骤
-        if grep -q 'set-version.sh' "$ROOT_DIR/.github/workflows/$wf"; then
-            pass "$wf 包含版本管理脚本"
+        if injects_version "$ROOT_DIR/.github/workflows/$wf"; then
+            pass "$wf 由 tag 注入版本号"
         else
             warn "$wf 可能缺少版本注入步骤"
         fi
@@ -390,6 +398,17 @@ for wf in "${WORKFLOWS[@]}"; do
         fail "$wf 工作流文件缺失"
     fi
 done
+
+DP="$ROOT_DIR/.github/workflows/docker-publish.yml"
+if [ ! -f "$DP" ]; then
+    fail "docker-publish.yml 工作流文件缺失"
+elif injects_version "$DP"; then
+    fail "docker-publish.yml 还在构建现场改写版本号：那样能推出一个自称 v1.2.3、里面跑着 1.1.0 的镜像，而 Hub 上收不回来"
+elif grep -q '版本号一致性闸门' "$DP"; then
+    pass "docker-publish.yml 只核对版本、不改写（tag / pom / compose 不一致在构建前就红）"
+else
+    fail "docker-publish.yml 既没有注入也没有核对闸门：tag、pom、compose 三者对不上时没有任何东西会拦下来"
+fi
 
 # 文件在磁盘上不等于门禁在跑：.github/ 曾被 .gitignore 挡着，那时四个 workflow 全都只活在本机，
 # 推上去的仓库里一个 workflow 都没有，"CI 全绿"其实是"CI 从没运行"。
@@ -400,7 +419,7 @@ else
     fail ".github/workflows/ci.yml 没进 git（.gitignore 还在挡？门禁不会被 GitHub 执行）"
 fi
 
-if grep -q 'set-version.sh' "$ROOT_DIR/.github/workflows/ci.yml" 2>/dev/null; then
+if injects_version "$ROOT_DIR/.github/workflows/ci.yml"; then
     fail "ci.yml 里做了版本注入：门禁应当测仓库里那份代码，改过版本号就不是同一件事了"
 else
     pass "ci.yml 不改版本号，测的就是提交里的那份"

@@ -4,13 +4,27 @@ name: Build and Push Docker Image
 # 构建上下文必须是仓库根（Dockerfile 要 core/ + server/ + web-admin/ + 根 pom.xml），dockerfile 用 deploy/Dockerfile。
 # Secrets：DOCKERHUB_USERNAME / DOCKERHUB_TOKEN（access token，不是登录密码）。
 # 质量闸就是"镜像能编出来"：多阶段里 mvn package 会编译 core+server、npm run build 会 tsc 前端。
-# 不在这里跑 mvn verify —— 服务端测试要连外部 MySQL/RustFS（见项目约定），CI 上没库会误红。
+# 这里**不跑测试**：服务端那套要连真库真桶，已由 `ci.yml` 用 service container 跑并断言"闸门用例一条没被跳过"；
+# 在两个 workflow 里各跑一遍只会让同一个红出现两次，而推送这条的判据本来就不是测试。
 # tag 事件不再带 paths 过滤（否则只改了其它目录的 commit 打 tag 会静默不发布）。
+#
+# 版本号的唯一来源是**仓库里已提交的那份**（`pom.xml`，由 `scripts/set-version.sh` 写全），workflow 不再现场改写它。
+# 旧写法在 `v*` 事件上跑 `set-version.sh "${GITHUB_REF_NAME#v}"`，于是"tag 说 1.2.3、pom 说 1.1.0"也能
+# 构建成功：推上去的是一个自称 1.2.3、里面跑的却是 1.1.0 的镜像，而 Docker Hub 推出去收不回来——被人拉走的
+# 那份 manifest 就是错的。现在这种不一致在构建之前就被下面那道闸门拦红。
+# 版本标签只在 `v*` 事件上打（`1.1.0` / `1.1` / `latest`）；push main 只出 `main` 与 `sha-<7位>`。
+# 这不是偷懒，是不可变性：`1.1.0` 如果被每次合并都覆盖一次，钉着它的人今天和上周拉到的就不是同一个镜像，
+# "回滚到 1.1.0"这件事就不存在了。要让 main 也推 X.Y.Z，得先接受这一点。
 on:
   push:
     branches: [main]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 只构建、不推 Docker Hub（用来验 DOCKERHUB_* secrets 和 metadata 算出来的标签清单）
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -43,22 +57,68 @@ jobs:
           fi
           echo "✅ Docker Hub 凭据已配置"
 
+      # 版本一致性闸门：tag 说的版本、pom 写的版本、compose 钉的标签必须是同一个值，且都从仓库现读。
+      # 放在 buildx 与 login 之前——这三样里任何一样不对，都不该有一个字节被推出去。
+      - name: 版本号一致性闸门
+        id: version
+        env:
+          # 用 github context 而不是 GITHUB_REF_TYPE 那个环境变量：本仓的门禁至今一次都没真跑过，
+          # 少依赖一个"文档里说有、没人验过"的隐式变量就少一处可能翻红。
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # 两条取值都要接 `|| true`：grep 没匹配上时退出码非 0，会被上面的 set -e 直接掐掉这一步，
+          # 于是下面那两条错误说明永远打印不出来——闸门红了却没人知道为什么红。
+          # pom 这条要连标签尖括号一起锚定：只写 grep -oE '[0-9]+\.[0-9]+\.[0-9]+' 的话，
+          # 1.1.0-SNAPSHOT 也会被读成 1.1.0，闸门就成了假绿。本仓全仓零 SNAPSHOT，所以直接判死；
+          # 哪天改成 SNAPSHOT 开发版，这条要在分支事件上容忍后缀，别把闸门删掉。
+          POM_VERSION=$(grep -m1 -oE '<version>[0-9]+\.[0-9]+\.[0-9]+</version>' pom.xml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+          COMPOSE_TAG=$(grep -m1 -E 'image: docker\.io/iamplusdev/push-box:' deploy/docker-compose.yml | sed -E 's#^.*:##' || true)
+          echo "ref=${REF_TYPE}/${REF_NAME} pom=${POM_VERSION} compose=${COMPOSE_TAG}"
+          if [ -z "${POM_VERSION}" ]; then
+            echo "::error::没从 pom.xml 读出 X.Y.Z 版本号（pom 写法变了就改这条判据的取值方式，别把它删了）"
+            exit 1
+          fi
+          if [ -z "${COMPOSE_TAG}" ]; then
+            echo "::error::没在 deploy/docker-compose.yml 找到 image: docker.io/iamplusdev/push-box:<tag>——照 compose 起的人不知道该拉哪一版"
+            exit 1
+          fi
+          if [ "${REF_TYPE}" = "tag" ]; then
+            TAG_VERSION="${REF_NAME#v}"
+            if [ "${TAG_VERSION}" != "${POM_VERSION}" ]; then
+              echo "::error::tag 是 v${TAG_VERSION}，pom.xml 写的却是 ${POM_VERSION}。先 bash scripts/set-version.sh ${TAG_VERSION} 并提交，再重新打这个 tag。不能推一个自称 v${TAG_VERSION}、里面跑着 ${POM_VERSION} 的镜像——推送不可逆，被人拉走的那份 manifest 永远错着"
+              exit 1
+            fi
+            if [ "${COMPOSE_TAG}" != "${POM_VERSION}" ]; then
+              echo "::error::compose 钉的是 :${COMPOSE_TAG}，本次推的是 :${POM_VERSION}；照 compose 起的人拉不到刚发的这一版"
+              exit 1
+            fi
+          fi
+          echo "version=${POM_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "✅ 版本口径一致：${POM_VERSION}"
+
+      # dry-run（workflow_dispatch 勾了"不推"）时只构建并 load 进 runner 本地 daemon：
+      # 用来验 DOCKERHUB_* 这对 secrets 到底能不能登录、metadata 算出的标签清单长什么样，
+      # 而不在 Docker Hub 上留下任何东西。注意 push=false 且没有任何导出目标时 buildx 会直接失败
+      # （没有 export target），所以这里必须配一个 load。
+      - name: 本次是否真推 Docker Hub
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ "${DRY_RUN}" = "true" ]; then
+            echo "push=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::dry-run：只构建，不推 Docker Hub。下面打印的标签本次不会真的写进仓库"
+          else
+            echo "push=true" >> "$GITHUB_OUTPUT"
+            echo "✅ 本次会真的推送（${EVENT_NAME}）"
+          fi
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      # 统一版本号注入（确保 Dockerfile 构建时使用正确版本）
-      - name: Set version from git tag
-        id: version
-        run: |
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            VERSION="0.1.0-${GITHUB_RUN_NUMBER}"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          # 正式 tag（X.Y.Z）才注入 docker-compose 镜像标签；非正式版本脚本判失败，这里容忍。
-          bash scripts/set-version.sh "$VERSION" \
-            || echo "⚠️ 非正式版本（$VERSION）跳过注入，沿用已提交 docker-compose 镜像标签。"
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -80,15 +140,30 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             # latest 只给正式（非预发布）标签：v1.0.0 更新 latest，v1.0.0-rc1 不覆盖。
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+          labels: |
+            # 版本号还要打进镜像本身：`docker image inspect` 读得到，不用靠标签名猜自己跑的是哪一版。
+            # metadata 自己的 org.opencontainers.image.version 在 tag 事件上取 git tag 名、
+            # 在分支事件上取成分支名，所以统一由上面那道闸门从 pom 现读一个值盖掉它。
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/Dockerfile
-          push: true
+          push: ${{ steps.gate.outputs.push }}
+          load: ${{ steps.gate.outputs.push != 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # GitHub Actions 层缓存：源码没动的阶段（如 node 依赖层）下次复用。
           cache-from: type=gha,scope=server
           cache-to: type=gha,scope=server,mode=max
+
+      # 留痕用：发布后核对 Docker Hub 上的实际标签，就拿这一行对（Hub 的 tags API 匿名可读）。
+      - name: 本次的标签清单
+        env:
+          PUSH_MODE: ${{ steps.gate.outputs.push }}
+        run: |
+          echo "push=${PUSH_MODE} version=${{ steps.version.outputs.version }}"
+          echo "${{ steps.meta.outputs.tags }}"
+
