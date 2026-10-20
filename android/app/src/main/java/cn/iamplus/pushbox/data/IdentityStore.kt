@@ -157,6 +157,14 @@ class IdentityStore(context: Context) {
 
     suspend fun setKeepAliveGuided(done: Boolean) = store.edit { it[KEEPALIVE_GUIDED] = done }
 
+    /**
+     * §7.2 通知权限被"不再询问"之后那一发恢复提示：默认未提示，永久拒绝时提示一次。
+     * 只留一个布尔位是为了别变成天天拦人——系统的框已经不会再出现了，本应用也只想说一次。
+     */
+    suspend fun notifyRecoveryShown(): Boolean = store.data.first()[NOTIFY_RECOVERY_SHOWN] ?: false
+
+    suspend fun setNotifyRecoveryShown(shown: Boolean) = store.edit { it[NOTIFY_RECOVERY_SHOWN] = shown }
+
     /** §7.2 极致省电轮询模式：默认关（走常驻长连接）；开则停 FGS 改为 WorkManager 周期补拉。 */
     suspend fun pollingMode(): Boolean = store.data.first()[POLLING_MODE] ?: false
 
@@ -199,6 +207,7 @@ class IdentityStore(context: Context) {
         private val THEME_MODE = stringPreferencesKey("theme_mode")
         private val APP_LOCK_ENABLED = booleanPreferencesKey("app_lock_enabled")
         private val KEEPALIVE_GUIDED = booleanPreferencesKey("keepalive_guided")
+        private val NOTIFY_RECOVERY_SHOWN = booleanPreferencesKey("notify_recovery_shown")
         private val APP_LOCK_PIN = stringPreferencesKey("app_lock_pin")
         private val BIOMETRIC_ENABLED = booleanPreferencesKey("biometric_enabled")
         private val QUIET_ENABLED = booleanPreferencesKey("quiet_enabled")

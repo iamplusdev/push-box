@@ -98,6 +98,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cn.iamplus.pushbox.data.MessageRow
@@ -383,9 +384,20 @@ private fun PushBoxRoot(deepLink: kotlinx.coroutines.flow.MutableStateFlow<Pair<
         value = app.identity.load()
     }
 
-    // Android 13+ 的 POST_NOTIFICATIONS 是运行时权限；被拒时消息仍入库，只是静默
+    // Android 13+ 的 POST_NOTIFICATIONS 是运行时权限；被拒时消息仍入库，只是静默。
+    // "这次拒了"和"永久拒了"得分开：前者下次冷启动系统还会再问，后者系统不再弹框，
+    // `launch` 只会静默回一个 false —— 那就只剩用户自己去设置里开，所以这里要给出那条路。
+    val activity = LocalContext.current as? FragmentActivity
+    val recoveryShown by app.notifyRecoveryShown.collectAsState()
+    var askRecovery by remember { mutableStateOf(false) }
     val askPermission = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()) { }
+        ActivityResultContracts.RequestPermission()) { granted ->
+        val rationale = activity?.let {
+            ActivityCompat.shouldShowRequestPermissionRationale(
+                it, Manifest.permission.POST_NOTIFICATIONS)
+        } ?: false
+        askRecovery = !granted && !rationale
+    }
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(app, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -425,6 +437,88 @@ private fun PushBoxRoot(deepLink: kotlinx.coroutines.flow.MutableStateFlow<Pair<
     // 发现新版的确认框挂在根节点：冷启动静默查到的、还是"关于"里点出来的，都走这同一只，
     // 下载这一步永远要用户在框里点一次才发生。AlertDialog 自成一层，放最后不影响下面的布局。
     UpdateConfirmDialog(app)
+    if (askRecovery && !recoveryShown) {
+        NotifyRecoveryDialog(onDone = { app.finishNotifyRecovery() })
+    }
+}
+
+/**
+ * §7.2 通知权限被"不再询问"之后的恢复入口：系统不会再弹框，消息一直静默入库，
+ * 所以这里给一次可以说清现状的提示，点「去设置」落到本应用的通知设置页。
+ * 说过一次就不再拦人，长期入口挂在「设置 → 通知」那一行（见 [NotifyPermissionRow]）。
+ */
+@Composable
+private fun NotifyRecoveryDialog(onDone: () -> Unit) {
+    val context = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text(stringResource(R.string.notify_recovery_title)) },
+        text = { Text(stringResource(R.string.notify_recovery_body)) },
+        confirmButton = {
+            Button(onClick = {
+                openAppNotificationSettings(context)
+                onDone()
+            }) { Text(stringResource(R.string.notify_recovery_open)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDone) { Text(stringResource(R.string.notify_recovery_later)) }
+        }
+    )
+}
+
+/** 跳本应用的通知设置页；ROM 上这个 action 偶尔没人实现，退回应用详情页，再不行就只能算了。 */
+private fun openAppNotificationSettings(context: android.content.Context) {
+    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    runCatching { context.startActivity(intent) }.onFailure {
+        runCatching {
+            context.startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.parse("package:${context.packageName}"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+}
+
+/** 低版本没有这个运行时权限，一律当作"能发通知"，免得在 Android 12 上挂出一行无意义的提醒。 */
+private fun notifPermissionGranted(context: android.content.Context): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+        PackageManager.PERMISSION_GRANTED
+
+/**
+ * 「设置 → 通知」里的长期恢复入口：系统级 POST_NOTIFICATIONS 没开就一直挂着这一行，
+ * 用户从设置页回来（ON_RESUME）就重读一次，开了即消失。
+ * 冷启动那次提示只说一遍，这条是之后还能找到路的凭据。
+ */
+@Composable
+private fun NotifyPermissionRow() {
+    val context = LocalContext.current
+    var granted by remember { mutableStateOf(notifPermissionGranted(context)) }
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) granted = notifPermissionGranted(context)
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || granted) return
+    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(stringResource(R.string.notif_permission_title),
+                style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.notif_permission_desc),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        TextButton(onClick = { openAppNotificationSettings(context) }) {
+            Text(stringResource(R.string.notify_recovery_open))
+        }
+    }
 }
 
 /** §7.5 首启：填服务器地址 → 本地生成两把密钥 → register 或 join → 恢复码要用户确认抄下。 */
@@ -2517,6 +2611,9 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
                     scope.launch { app.identity.setNotificationsEnabled(it) }
                 })
             }
+            // 应用内这个开关只管"要不要发"，Android 13+ 上面还压着一道系统级权限：
+            // 权限被拒（尤其是勾了"不再询问"）时消息照样入库但永不出通知，所以长期入口挂在这儿。
+            NotifyPermissionRow()
             // §7.4 静默时段：窗口内非 error 消息只静默入通知栏，不响铃不横幅
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),

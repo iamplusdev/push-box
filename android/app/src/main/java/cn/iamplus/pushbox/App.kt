@@ -65,6 +65,13 @@ class App : android.app.Application() {
     /** §7.2 D18 首启保活引导页是否已完成；true 之后不再拦截主界面。 */
     val keepAliveGuided = MutableStateFlow(true)
 
+    /**
+     * §7.2 通知权限的恢复提示是否已经说过。权限被"拒绝并勾选不再询问"之后系统不再弹框，
+     * 消息会一直静默入库，而设置页那一行入口藏得比较深，所以冷启动时补一次可跳系统设置的提示；
+     * 说过一次就不再打扰（这是提示，不是开关，状态不随用户在设置页里改成什么而回滚）。
+     */
+    val notifyRecoveryShown = MutableStateFlow(false)
+
     /** §7.2 极致省电轮询模式：开则停常驻长连接、改由 WorkManager 周期补拉（消息可能延迟）。 */
     val pollingMode = MutableStateFlow(false)
 
@@ -99,6 +106,11 @@ class App : android.app.Application() {
     fun finishKeepAliveGuide() {
         keepAliveGuided.value = true
         scope.launch { identity.setKeepAliveGuided(true) }
+    }
+
+    fun finishNotifyRecovery() {
+        notifyRecoveryShown.value = true
+        scope.launch { identity.setNotifyRecoveryShown(true) }
     }
 
     fun setThemeMode(mode: String) {
@@ -240,6 +252,7 @@ class App : android.app.Application() {
         scope.launch { fontScale.value = identity.fontScale() }
         scope.launch { summaryLines.value = identity.summaryLines() }
         scope.launch { keepAliveGuided.value = identity.keepAliveGuided() }
+        scope.launch { notifyRecoveryShown.value = identity.notifyRecoveryShown() }
         scope.launch { pollingMode.value = identity.pollingMode() }
         scope.launch { autoCheckUpdate.value = identity.autoCheckUpdate() }
         scope.launch {

@@ -166,6 +166,12 @@
     <string name="hide">隐藏</string>
     <string name="notif_new_message">新消息通知</string>
     <string name="notif_new_message_desc">关闭后消息仍会接收，只是不再弹出通知。</string>
+    <string name="notif_permission_title">系统通知权限没开</string>
+    <string name="notif_permission_desc">消息照常接收并保存，但不会有任何提醒。打开开关只影响应用内的设置，这一项要到系统设置里改。</string>
+    <string name="notify_recovery_title">通知权限已被永久拒绝</string>
+    <string name="notify_recovery_body">系统不会再弹这个授权框。消息仍然收得到、也存得住，只是一直静默、不进通知栏。要恢复提醒请到系统设置里打开 PushBox 的通知权限；这里只会提示一次，之后可以在「设置 → 通知」里找到入口。</string>
+    <string name="notify_recovery_open">去设置</string>
+    <string name="notify_recovery_later">知道了</string>
     <string name="notif_quiet_title">静默时段</string>
     <string name="notif_quiet_desc">时段内非紧急消息只进通知栏，不响铃、不横幅；error 级别仍可打扰。</string>
     <string name="notif_quiet_start">开始</string>
