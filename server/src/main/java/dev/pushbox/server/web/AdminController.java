@@ -53,10 +53,7 @@ public class AdminController {
   @PostMapping("/channels")
   public Map<String, Object> createChannel(@RequestBody byte[] body, HttpServletRequest http) {
     DeviceGuard.Authenticated auth = guard.require(http, null);
-    if (body == null || body.length > 8192) {
-      throw ApiException.invalidParam("请求体过大");
-    }
-    CreateChannelRequest request = dev.pushbox.core.protocol.Json.readBytes(body, CreateChannelRequest.class);
+    CreateChannelRequest request = readCreateChannel(body);
     String groupId = request.groupId() != null ? request.groupId() : auth.groupId();
     ChannelService.Created created = channels.create(groupId, request.name(), request.maxLevel(), request.maxImages());
     Map<String, Object> resp = new LinkedHashMap<>();
@@ -262,7 +259,7 @@ public class AdminController {
   public Map<String, Object> setScheduledTaskEnabled(@PathVariable String taskId,
       @RequestBody byte[] body, HttpServletRequest http) {
     guard.require(http, null);
-    EnabledRequest request = Json.readBytes(body == null ? new byte[0] : body, EnabledRequest.class);
+    EnabledRequest request = readJson(body == null ? new byte[0] : body, EnabledRequest.class);
     Map<String, Object> resp = new LinkedHashMap<>();
     resp.put("ok", true);
     resp.put("task", scheduledTasks.setEnabled(taskId, request.enabled() != null && request.enabled() == 1));
@@ -286,11 +283,31 @@ public class AdminController {
    */
   private static final int MAX_TASK_BODY_BYTES = 64 * 1024;
 
+  private CreateChannelRequest readCreateChannel(byte[] body) {
+    if (body == null || body.length > 8192) {
+      throw ApiException.invalidParam("请求体过大");
+    }
+    return readJson(body, CreateChannelRequest.class);
+  }
+
   private ScheduledTaskService.TaskInput readTaskInput(byte[] body) {
     if (body == null || body.length > MAX_TASK_BODY_BYTES) {
       throw ApiException.invalidParam("请求体过大（上限 " + MAX_TASK_BODY_BYTES + " 字节）");
     }
-    return Json.readBytes(body, ScheduledTaskService.TaskInput.class);
+    return readJson(body, ScheduledTaskService.TaskInput.class);
+  }
+
+  /**
+   * 绑定 {@code byte[]} 的端点必须自己收口解析失败：{@link Json#readBytes} 抛的是
+   * IllegalArgumentException，而 GlobalExceptionHandler 不接它，症状是 HTTP 500 加 Spring 默认错误体，
+   * 而不是全站那份 {@code {ok,error,hint}} 信封。措辞与 handleBadJson 保持一致。
+   */
+  private static <T> T readJson(byte[] body, Class<T> type) {
+    try {
+      return Json.readBytes(body, type);
+    } catch (IllegalArgumentException e) {
+      throw ApiException.invalidParam("请求体必须是合法 JSON");
+    }
   }
 
   record CreateChannelRequest(String groupId, String name, String maxLevel, Integer maxImages) {}
