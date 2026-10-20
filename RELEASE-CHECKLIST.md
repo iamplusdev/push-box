@@ -165,7 +165,7 @@
 
 ### 标签管理
 
-这四条原本都是"凭印象打勾"的形状，现在写成一条命令就能自证。前三条的根据是 2026-10-20 读过 `.github/workflows/docker-publish.yml` 的 `docker/metadata-action` 配置：`type=ref,event=branch` + `type=sha,prefix=sha-,format=short` + `type=semver,pattern={{version}}` + `type=semver,pattern={{major}}.{{minor}}` + `latest` 只在**正式（不含 `-`）标签**时生效。也就是打 `v1.1.0` 应得到 `1.1.0`、`1.1`、`latest`，push main 应得到 `main`、`sha-<7位>`。**这三条要等 `v1.1.0` 真的存在才勾得上**：tag 还没打，打 tag 与推 tag 都算不可逆的远端动作、要单独确认，Hub 上那个仓库目前仍是 404（见第四条），所以现在只能是空的。
+这四条原本都是"凭印象打勾"的形状，现在写成一条命令就能自证。前三条的根据是 2026-10-20 读过 `.github/workflows/docker-publish.yml` 的 `docker/metadata-action` 配置：`type=ref,event=branch` + `type=sha,prefix=sha-,format=short` + `type=semver,pattern={{version}}` + `type=semver,pattern={{major}}.{{minor}}` + `latest` 只在**正式（不含 `-`）标签**时生效。也就是打 `v1.1.0` 应得到 `1.1.0`、`1.1`、`latest`，push main 应得到 `main`、`sha-<7位>`。**这三条要等 `v1.1.0` 真的存在才勾得上**：tag 还没打，打 tag 与推 tag 都算不可逆的远端动作、要单独确认。仓库本身**已经存在了**（2026-10-20 那次 `publish`→`main` 的推送里 `docker-publish.yml` 真推上去的，`.../push-box/tags` 实测 `count=2`：`main` 与 `sha-f6b9a53`，`full_size` 223450397 字节 ≈213 MB 压缩后）——这一句把本节原来"仓库仍是 404 = 从未创建"的说法作废，那是**更早一次**实测，被同一天的推送覆盖了，见第四条。所以现在缺的只有版本号那一份标签，不是整个仓库。
 
 顺带一句别误读：同一天那次 dry-run 全绿只证明**凭据能用、构建链在 GitHub runner 上编得过**（见「前置条件」里 CI 那条），它证明不了这三条——dispatch 是分支事件，metadata 在这种事件上按配置根本不会产出 `1.1.0`/`latest`，所以别拿"那次跑出来的标签清单"当版本标签的验收证据。
 
@@ -185,7 +185,7 @@ curl -sS https://hub.docker.com/v2/repositories/iamplusdev/push-box/tags?page_si
 - [ ] `latest` 标签指向最新稳定版（上一条命令里 `latest` 应等于本次 semver 那份 manifest）
 - [ ] 语义化版本标签正确（如 `1.1.0`、`1.1` 两个都要在）
 - [ ] SHA 短哈希标签生成（如 `sha-a1b2c3d`）
-- [x] `deploy/docker-compose.yml` 的 `image:` 与本次 tag 一致：**这条 2026-10-20 起有机器兜底了**——上面那道闸门在 tag 事件上现读 pom 与 compose 比对，不一致直接红，不再靠人记得去 `grep`。本机核对仍是 `grep -n 'image: docker.io' deploy/docker-compose.yml` → `iamplusdev/push-box:1.1.0`，等于 `pom.xml` 的 `<version>1.1.0</version>`。**但注意这条勾只证"写对了"，不证"拉得到"**：2026-10-20 实测该 Hub 仓库 `.../v2/repositories/iamplusdev/push-box/tags` 返回 **404（对照 `library/mysql` 返 200，所以不是网络假象）= 从未创建**。回落已经实测过：`docker compose -f deploy/docker-compose.yml --dry-run up -d` 的计划是 `Pulling → manifest unknown → Building → naming to docker.io/iamplusdev/push-box:1.1.0`，compose 会自动改成本地构建，新用户不加 `--build` 也起得来（代价是首次要现场编、且用不上 CI 的 `latest/sha-*` 标签）
+- [x] `deploy/docker-compose.yml` 的 `image:` 与本次 tag 一致：**这条 2026-10-20 起有机器兜底了**——上面那道闸门在 tag 事件上现读 pom 与 compose 比对，不一致直接红，不再靠人记得去 `grep`。本机核对仍是 `grep -n 'image: docker.io' deploy/docker-compose.yml` → `iamplusdev/push-box:1.1.0`，等于 `pom.xml` 的 `<version>1.1.0</version>`。**但注意这条勾只证"写对了"，不证"拉得到"**：2026-10-20 实测该 Hub 仓库 `.../v2/repositories/iamplusdev/push-box/tags` 返回 **404（对照 `library/mysql` 返 200，所以不是网络假象）= 从未创建**。回落已经实测过：`docker compose -f deploy/docker-compose.yml --dry-run up -d` 的计划是 `Pulling → manifest unknown → Building → naming to docker.io/iamplusdev/push-box:1.1.0`，compose 会自动改成本地构建，新用户不加 `--build` 也起得来（代价是首次要现场编、且用不上 CI 的 `latest/sha-*` 标签）。**这句里的 404 已经过期，别照着它下结论**：同一天把 `publish` 推成 `main` 之后，`docker-publish.yml` 真推了一次，仓库随推送被创建，`.../push-box/tags` 复测 `count=2`（`main`、`sha-f6b9a53`）。**2026-10-20 当晚想再复验一次没复验成**：`hub.docker.com` 从本机 curl、WSL curl 与浏览器三条路都是连接超时（**是连不通，不是 404**，代理客户端当时没在跑），所以"仓库存在、两个标签"记的是推送当天那一次实测。
 
 ### Hub 仓库说明（`update-dockerhub-description.yml`）
 
@@ -206,9 +206,9 @@ for f in ci.yml update-dockerhub-description.yml; do printf "%-32s " "$f"; curl 
 
 上面第一条那个"新建分支时 GitHub 算不出改动文件集"是**推断**，不是文档原文——GitHub 的 events/过滤器文档没写新建分支（`before` 全零）时 `paths:` 取什么值。推断的底气在于这组对照没有第二个变量：同一事件、同一分支、同一 commit，README 确实改过三次，跑掉的四个都没有 `paths:`，没跑的那个是唯一的 `paths:`。想把它证成事实，得另建一条带 `paths:` 的临时分支推送做实验，那要在公开仓库上开一个用完即删的分支，本轮没做。
 
-**它第一次能跑绿长什么样**：`main` 现在已经存在，从下一次"改动含 `README.md` 或这个文件本身"的 **`main` 常规推送**起，这条会被自然触发并顺带登记下来（此后才谈得上手动 dispatch）。而 Hub 侧还有个前置：`iamplusdev/push-box` 这个仓库至今**没被创建过**（上面「标签管理」第四条那次实测是 404），`dockerhub-description` 这个 action 只 PUT 描述、不建仓库，所以在那之前就算触发也只会红在 404。把仓库建出来这件事由同一次 `main` 推送里的 `docker-publish.yml` 真推镜像来完成——**也就是说这条欠账并不"零不可逆"，它的绿和推 `main` 是绑在一起的**。
+**它第一次能跑绿长什么样**：`main` 现在已经存在，从下一次"改动含 `README.md` 或这个文件本身"的 **`main` 常规推送**起，这条会被自然触发并顺带登记下来（此后才谈得上手动 dispatch）。它依赖的 Hub 仓库**也已经存在了**（同一天那次 `publish`→`main` 推送里由 `docker-publish.yml` 真推创建，见上面「标签管理」），所以触发时不会再撞上"仓库不存在"——`dockerhub-description` 这个 action 只 PUT 描述、不建仓库，这一点上现在没有阻塞。**结论：今天没有任何动作能把这条关掉**——手动跑没有入口（workflow 资源不存在），自动跑要等一次 `main` 推送，而 `push` 到 `main` 会连带 `docker-publish.yml` 真推镜像（不受 dry_run 影响，不可逆），不在"零不可逆"这一批里。
 
-诚实边界：Hub 那个 404 是 2026-10-20 早间在 WSL 里实测的；当晚想复验时 Windows 侧代理客户端没在跑，`hub.docker.com` 从本机与 WSL 都是**连不上**（`000`，不是 404），所以"仓库仍不存在"记的是早间那次实测，不是当晚现查。要复验就先把代理客户端起来再跑 `curl -sS -o /dev/null -w '%{http_code}\n' https://hub.docker.com/v2/repositories/iamplusdev/push-box/`。
+诚实边界：Hub 仓库存在、`main` 与 `sha-f6b9a53` 两个标签，是 2026-10-20 那次 main 推送**之后当场实测**的（`.../push-box/tags` `count=2`）；当晚想复核时 `hub.docker.com` 从本机 curl、WSL curl 与浏览器三条路全是连接超时（**连不通，不是 404**，Windows 侧代理客户端没在跑），所以这一条是"当天实测、当晚未复核"。要复核先把代理客户端起来，再跑 `curl -sS -o /dev/null -w '%{http_code}\n' https://hub.docker.com/v2/repositories/iamplusdev/push-box/`。
 
 ### 部署验证
 - [x] `docker compose up -d` 能成功启动所有服务。**主文件里不该再有任何"只有监控才需要"的必填项**：compose 的 `${VAR:?}` 插值作用于整本文件、与 profile 是否激活无关，所以 `GRAFANA_ADMIN_PASSWORD` 一旦留在主文件，"只起服务端"的部署会在解析阶段就报 required variable missing（prometheus/grafana 现在在 `docker-compose.monitoring.yml`）

@@ -136,7 +136,7 @@ docker compose up -d                    # 拉 CI 推到 Docker Hub 的镜像
 docker compose up -d --build
 # 监控栈（Prometheus + Grafana）在另一本文件里，要监控才多传一个 -f：
 docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d</code></pre>
-  <div class="callout warn"><b>诚实说明</b><p>生产这套资产在 2026-10-20 用隔离 project <b>真起过一次</b> <code>docker compose up</code>（MySQL / RustFS 复用测试栈），一轮下来撞出并修掉五个"配置里写了、进程不消费"的缺陷——完整清单见 <code>RELEASE-CHECKLIST.md</code> 与 CHANGELOG。<b>还没验过的是另一件事</b>：从 Docker Hub 拉 CI 产物那条路（镜像要等首次 tag 才推），以及真实 TLS/反代前置。第一次上生产仍然请留一次现场验证的余量。</p></div>
+  <div class="callout warn"><b>诚实说明</b><p>生产这套资产在 2026-10-20 用隔离 project <b>真起过一次</b> <code>docker compose up</code>（MySQL / RustFS 复用测试栈），一轮下来撞出并修掉五个"配置里写了、进程不消费"的缺陷——完整清单见 <code>RELEASE-CHECKLIST.md</code> 与 CHANGELOG。<b>还没验过的是另一件事</b>：从 Docker Hub 拉一份 CI 产物、在干净机器上按这份 compose 起起来这条整链。Hub 上现在确有 <code>main</code> 与 <code>sha-f6b9a53</code> 两个标签（2026-10-20 那次 <code>main</code> 推送真推上去的），<code>latest</code> 与版本号标签要等首个 <code>v*</code> tag，但"有标签"不等于"照着这份 compose 拉得动、起得来"——那次实测跑的是本地构建的镜像。真实 TLS/反代前置同样还没验。第一次上生产仍然请留一次现场验证的余量。</p></div>
 
   <h3>HTTPS 与自签 CA</h3>
   <p>当前联调走的是裸 HTTP（内网）。生产要么用 Caddy 的 Let's Encrypt，要么走自签根 CA。<b>两端接证书的方式完全不同</b>：</p>
