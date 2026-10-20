@@ -264,7 +264,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 | 跑法 | 判什么 |
 |------|--------|
-| `JAVA_HOME=… mvn -B -pl core,server test` | 服务端与加密库（**261/261**，core 38 + server 223）。要先 `source deploy/env/local.env`：112 条挂 `PB_S3_*` 门控，缺凭据时整批静默 skip，而 `mvn test` 的退出码仍然是 0 |
+| `JAVA_HOME=… mvn -B -pl core,server test` | 服务端与加密库（**265/265**，core 38 + server 227）。要先 `source deploy/env/local.env`：112 条挂 `PB_S3_*` 门控，缺凭据时整批静默 skip，而 `mvn test` 的退出码仍然是 0 |
 | `node deploy/probe/p0-e2e.mjs` | 端到端协议（**0 失败**；条数以脚本末行的 `N/N` 为准） |
 | `cd android && ./gradlew :app:assembleDebug` | Android 编译通过 |
 | `cd web-admin && npm ci && npm run build` | 管理台 `vue-tsc` 类型检查与 `dist/` 产物 |
@@ -322,7 +322,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 > **2026-10-20 深夜：门禁这条链第一次在 GitHub runner 上全绿**——`ci.yml` 对 `publish` 的 dispatch（`run 39377846888`，head `60c86ad`）四个 job 全 success，其中「等 RustFS 就绪并建桶」与「断言 DB 闸门用例真的执行了」（`skipped == 0` 且用例数 ≥ 261）都是第一次真跑到；`build-apk.yml` 同日 dispatch（`run 39376573834`，同一个 head）也全绿，`Verify release APK signature` 这一步第一次真签出并验了名。**当天最后一次 dispatch（`run 39381072797`，head `5293801`）又把签名步升级成"证书 SHA-256 必须等于 `android/release-cert.sha256` 里的基线"并且绿了**，所以"CI 出的包用的就是那把正式 key"是 CI 自己验过的事实，不再靠间接推断。**这一路是四次 dispatch 逐段红出来的，四个根因都不在本仓代码里**：建桶步原来拉的 `minio/mc` 镜像在 Docker Hub 已取不到（→ 404，`dl.min.io` 的 mc 二进制 → 410 Gone），改用 runner 预装的 AWS CLI v2；`android-actions/setup-android@v3` 要装同样已下架的 legacy `tools` 包，改用 runner 预装 SDK 加一步"现读 `compileSdk`、断言 platform 与 build-tools 在位"的入镜检查；KSP 插件 marker 报"六个仓库都找不到"的根因是 runner 打 `maven.aliyun.com` 的三个仓库**整片 502**（境外数据中心 IP 被拒，本机在墙内看不见，所以本地一直绿），现已改成默认只走官方源、开发机在 `android/local.properties` 加 `pb.maven.cnMirror=true` 才插回镜像（见 `docs/开发指南.md`）；最后一步红在 `ANDROID_KEYSTORE_BASE64` 不是标准 base64（`Illegal base64 character 2d`，`2d` 就是 `-`，`certutil -encode` 的 PEM 包头产物就是这个形状），重存后通过，判据写在 `build-apk.yml` 文件头与 `RELEASE-CHECKLIST.md`。
 >
-> **还没被证明的两件事，别拿这次绿顶账**：一是 `main` 上从没绿过——`main` 仍停在 `f6b9a53`（那次红过两条 job），在它上面重跑要先把 `publish` 推成 `main`，而那会连带 `docker-publish.yml` 真推 Docker Hub（push 事件不受 dry-run 输入影响，不可逆）；二是 `v*` 标签事件那条发布路径（`gh release`、版本号一致性闸门、`1.1.0`/`latest` 标签）至今没在 runner 上跑过，本机只能验到闸门脚本。2026-10-20 四个 job 的**本地等价命令**也各跑了一遍并全绿：服务端 261 条（跳过 0）、管理台 `npm ci && npm run build`、Windows 556/556、Android `assembleDebug` + `assembleRelease`。哪个 workflow 跑过几次、最新一次结论如何，用 `RELEASE-CHECKLIST.md` 里那段按 workflow 分别数的命令现查，不要抄条数。
+> **还没被证明的两件事，别拿这次绿顶账**：一是 `main` 上从没绿过——`main` 仍停在 `f6b9a53`（那次红过两条 job），在它上面重跑要先把 `publish` 推成 `main`，而那会连带 `docker-publish.yml` 真推 Docker Hub（push 事件不受 dry-run 输入影响，不可逆）；二是 `v*` 标签事件那条发布路径（`gh release`、版本号一致性闸门、`1.1.0`/`latest` 标签）至今没在 runner 上跑过，本机只能验到闸门脚本。2026-10-20 四个 job 的**本地等价命令**也各跑了一遍并全绿：服务端 265 条（跳过 0，当天实跑的是 261 条那一版，`AdminControllerBodyTest` 那 4 条是当晚补的）、管理台 `npm ci && npm run build`、Windows 556/556、Android `assembleDebug` + `assembleRelease`。哪个 workflow 跑过几次、最新一次结论如何，用 `RELEASE-CHECKLIST.md` 里那段按 workflow 分别数的命令现查，不要抄条数。
 
 ---
 
