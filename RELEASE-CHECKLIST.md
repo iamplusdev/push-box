@@ -3,7 +3,14 @@
 本文档定义每次正式发布前必须完成的验证步骤。自动化能覆盖的部分写在 `scripts/release-verify.sh`（先跑它，再动手查剩下的）。
 
 > 下面的勾选状态是 **v1.1.0 这一轮**（截至 2026-10-20）的实况：勾上的每一项都对应一条真跑过的命令，没勾的就是还没做或做不了。发下一版时先把复选框清干净。
-> 本轮刻意留空的：CI 门禁的真实运行（要等 push 到远端）、Prometheus/Grafana 起栈（`age` 与监控栈没在这台 WSL 上装/起）、镜像标签与 Docker Hub 推送、`max_level` 拦截用例。
+>
+> **未勾项分四类，阻塞原因不同，别混在一起当成"待办"**（数字是 `grep -c '^- \[ \]'` 现数出来的，会随版本变）：
+> 1. **要远端动作才能判**（`main`、`v*` tag、CI 真跑、镜像标签、发布后监控）——本机一条都推不动，且第一次推 `main` 会连带 `docker-publish.yml` 的 `push: true` 真往 Docker Hub 推镜像，不可逆。想在没有 `main` 的情况下先验门禁：`ci.yml` 没有发布步，`build-apk.yml` / `build-msi.yml` 的 `gh release` 都带 `if: startsWith(github.ref,'refs/tags/v')`，所以**对 `publish` 分支手动 `workflow_dispatch` 这三个是零不可逆的**；唯独 `docker-publish.yml` 的 dispatch 会真推镜像，别点。
+> 2. **要真机 / 干净装机环境**（Android 兼容性 6 项、两端功能与性能各若干、Windows 系统兼容 4 项）——这台机器上既没有 Android 真机/模拟器，也没有可回滚的干净 Windows 测试环境。这类的正确处置是"指定人 + 指定设备清单"，不是留着空勾。
+> 3. **本机工具缺**（数据备份 2 项、桶存在性相关的命令行操作）——2026-10-20 实测 WSL 里 `age`、`mc`、`mysqldump` **三个都不在**（`command -v` 三连 MISSING）。`deploy/backup/backup.sh` 开头就查 `age` 并退 1，所以"执行备份 + 验备份解得开"不装工具永远跑不动；桶也只能去控制台手工建。
+> 4. **真·未覆盖的功能缺口**（`max_level` 拦截用例）——这条是唯一"该变成自动化测试却还没有"的，其余多是环境或排期问题。
+>
+> 一条经验：清单里凡是写死数字（版本号、commit sha、测试计数）的判据都会腐烂，且腐烂得毫无声响。这几轮已经抓到三处——站点徽章挂 `1.0.0`、Windows 关于页判据写 `1.0.0`、测试计数写 197/553。现在这类判据统一改成"现读现比"的命令，并由 `scripts/release-verify.sh` 兜底。
 
 ---
 
@@ -15,7 +22,7 @@
   - 管理台 `cd web-admin && npm ci && npm run build` → `vue-tsc -b` 无报错，`dist/index.html` 非空、25 个产物文件（CI 断言的正是这两条）
   - Windows `dotnet test PushBox.Crypto.Tests -c Release` → **556/556、退出码 0**（此前 `BubbleView` 的视觉树定位器过时挂着 8 条红；判分要把全量日志落盘再看退出码，`| tail` 会把失败压成"看着像绿"）
   - Android `./gradlew :app:assembleDebug` 与 `:app:assembleRelease` 均 BUILD SUCCESSFUL：debug 包 26.6 MB、release 包 12.7 MB，`apksigner verify --print-certs` 出 V2 签名（`CN=iamplus`，证书 SHA-256 `99071932aa9084636ba7f5769b818d43903f4cc124f464073e47c35fc38dec4e` —— 换 key 就比对这一串）。同一次构建顺带证明 `outputs/mapping/release/mapping.txt` 确实落在 CI artifact 归档的路径上，**它实测 205 MB**，比直觉里的"几 MB"大两个数量级，配额按这个体量算
-- [x] `bash scripts/release-verify.sh` 零 FAIL
+- [x] `bash scripts/release-verify.sh` 零 FAIL。**判据是"零 FAIL"，不是"零 WARN"**——现在有一条长期 WARN 是镜像体积实测超阈值（见 Docker 那节），它报的是"这个数没人复核过"，不是构建坏了。在 Windows 上跑还会多一条"本机没有 docker CLI"，所以这条要在 WSL 里跑才拿得全体积
 - [x] CHANGELOG.md 已更新并标注发布日期
 - [x] 版本号一致（Android `versionName` / Windows `<Version>` 与 `MyAppVersion` / Docker 镜像 tag / 四个 pom / `web-admin/package.json`，一次由 `scripts/set-version.sh` 写全），且 `versionCode` = `major*10000 + minor*100 + patch` 且**严格大于上一版**（写小了装不上：`INSTALL_FAILED_VERSION_DOWNGRADED`）
 - [ ] CI 门禁已经真的跑过一遍（工作流被 git 跟踪、目标分支是 `main`、四个 job 全绿）——"文件在本机存在"不等于门禁在运行，这一条以前就是这样空了一整版。2026-10-20 现状：代码已推到 GitHub/Gitee/Gitea，但推的是 `publish` 分支（为避免 `docker-publish.yml` 的 `push: true` 真往 Docker Hub 推镜像），所以 `main` 还不存在、门禁一次都没跑过；GitHub 公开 API `GET /repos/iamplusdev/push-box/actions/runs` 的 `total_count` 实测为 0，可以用它复核
@@ -34,14 +41,14 @@
 - [x] `PB_S3_ENDPOINT` 的端口跟着拓扑走：`rustfs/rustfs:latest` 镜像听 **9000**（Console 9001），§11.1 那台远端实例挂在 **7101**，两边互抄都会中招
 - [x] `PB_CADDY_HOST` 是 Caddy 站点的主机匹配值：请求的 `Host` 不在它上面就落到 Caddy 的空响应里（`Content-Length: 0` 的 200，不是 404，容易被当成"通了"）。`deploy/Caddyfile` 只监听 80 做 HTTP 反代、**不管证书**，TLS 由前面的 Nginx/Traefik 终止（示例见 README），所以本清单不再有 `deploy/certs/` 与 SAN 那一条
 - [x] `PB_SECURITY_INTERNAL_CIDRS` 留空即"只放行容器环回"（compose 的默认值就是空）。要 Prometheus 抓指标才把这条网络实际分到的子网写进来（`docker network inspect pushbox_default`），别写 `172.16.0.0/12` 整段
-- [ ] TLS 口径确认过：`useSSL=false` 与 `http://` 意味链路明文可听，跨主机部署应改 `useSSL=true&requireSSL=true` 与 `https://`
+- [x] TLS 口径确认过：`useSSL=false` 与 `http://` 意味链路明文可听，跨主机部署应改 `useSSL=true&requireSSL=true` 与 `https://`。2026-10-20 核对该口径**确实写在用户会读到的两处**：`deploy/env/prod.env.example` 的 DB 段与 S3 段各自解释了"什么时候能留明文、什么时候必须翻 true、为什么默认不翻"（默认不翻是因为内部 MySQL 没开 TLS 时驱动直接连不上，宁可用不安全也不能起不来）
 
 ### 安全审查
 - [x] 无明文密钥提交到 Git（`git grep -I -n -E '(PASSWORD|SECRET|KEY)=[A-Za-z0-9+/]{16,}'` 只应命中占位符；真实值只在 gitignored 的 `.env` / `local.env`）
 - [x] `.idea/` 仍被忽略：IDEA 会把运行配置里的 Environment variables 原样写进 `.idea/workspace.xml`，本机这份现在就带着 dev 的库口令与桶密钥。用 `set-user-env.ps1`（写用户环境变量）而不是往运行配置里填，就是为了让明文不进工程目录——填过的那次要靠 `.gitignore` 兜，所以 `scripts/release-verify.sh` 直接断言这三条忽略规则还在（`deploy/env/local.env`、`.env`、`.idea/`）
 - [x] `deploy/Caddyfile` 保留 `@metrics path /actuator/*` → `respond 403`；服务端侧还有第二道门（`InternalAccessFilter` 只放行环回 + `PB_SECURITY_INTERNAL_CIDRS`），确认没有把其中一道当成全部依赖。**注意 Caddyfile 只挡 `/actuator/*`，`/healthz` 是经 Caddy 可达的**——真正把运维端点关在里面的是第二道门（`PB_SECURITY_INTERNAL_CIDRS` 留空）
 - [x] 管理台登录限速：连续失败按来源 IP 锁定并返回 429（默认 5 次 / 5 分钟窗口）；Caddy 在前面时服务端看到的是代理地址，别指望它区分客户端
-- [ ] 日志抽样：`docker compose logs pushbox-server | grep -iE 'recovery|token|secret|BEGIN PRIVATE'` 无命中；消息正文不进日志（§14 口径）
+- [x] 日志抽样：2026-10-20 在**真跑起来的容器**上抽过（`docker logs <容器> 2>&1 | grep -icE 'recovery code|BEGIN PRIVATE|secret|access.?key|password'` → **0 命中**，命中的是 `PB_*_SECRET/PASSWORD/KEY` 这类键名赋值形态，也是 0）。"消息正文不进日志"这一半是静态判据而非抽样判据：`grep -rn -E 'log(ger)?\.(info|warn|debug|error)\([^)]*\b(getBody|body|content|text)\b' server/src/main/java` → 空。抽样只能证明"这段时间的日志里没有"，代码里不存在把正文联到 logger 的调用点才是那句 §14 口径的根据
 - [x] 启动阶段的拒绝项要能在容器日志里看到**键名而不是键值**：`deploy/Dockerfile` 的入口脚本负责 SSE-C 与 JWT 长度这两关
 
 ### 数据备份
@@ -54,7 +61,11 @@
   docker compose exec -T -e MYSQL_PWD="$PB_DB_PASSWORD" mysql \
     mysql -u pushbox pushbox -e "SELECT version, success FROM flyway_schema_history ORDER BY installed_rank DESC LIMIT 3"
   ```
-- [ ] 新版本含 Flyway 迁移时，先在预发/备份副本上跑一次 `mvn -B -pl server -am flyway:migrate` 或直接起一次容器观察 `flyway_schema_history` 是否只追加、`success=1`
+- [x] 新版本含 Flyway 迁移时，先跑一次并观察 `flyway_schema_history` 只追加、`success=1`。**本轮确实有迁移**（相对 tag `v1.0.0` 的增量是 `V7__media_channel_index.sql` 与 `V8__scheduled_push_tasks.sql`，用 `git diff --name-only v1.0.0 <发布分支> -- server/src/main/resources/db/migration` 现查，别凭印象判断"这版没动库"）。2026-10-20 在全新卷上起过一次完整栈，查得 `1 init … 8 scheduled push tasks` **八行、`success` 全为 1**、1–6 未被改写。注意判据的边界：这台机器上**没有生产库可拷**，所以这条证的是"迁移链本身能干净前滚"，不是"你那份数据前滚得动"——真上线前必须在生产副本上再走一遍同一条命令
+  ```bash
+  docker exec <mysql 容器> sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" pushbox -N \
+    -e "SELECT version,description,success FROM flyway_schema_history ORDER BY installed_rank"'
+  ```
 
 ### 健康检查
 - [x] 容器起来后在**容器内**取 `/healthz` → `{"ok":true,"db":"up","storage":"up"}`：
@@ -91,7 +102,7 @@
 - [ ] 长按会话行弹出菜单（置顶/免打扰/清空等）
 - [ ] 图片消息能正确加载和保存
 - [ ] 深色模式切换正常
-- [ ] 「检查更新」只列 `pushbox-release-*` 资产；只有 debug 包时提示"暂无可安装的正式版本"而不是去装 debug
+- [x] 「检查更新」只列 `pushbox-release-*` 资产的**代码层已核对**：`android/app/src/main/java/cn/iamplus/pushbox/net/UpdateApi.kt:70` 用 `a.path("name").asText("").startsWith("pushbox-release-")` 过滤，且不回落到 debug 包（同文件 63 行注释记着这条决定）。**没有验的是运行时**：GitHub Releases 的 `total_count` 实测为 0，`releases/latest` 现在根本没有可返回的东西，所以"只有 debug 包时提示『暂无可安装的正式版本』"这句在发布前无法验——它要等第一个打了 `v*` 的 Release
 
 ### 性能检查
 - [ ] 冷启动时间 < 3 秒（中端设备）
@@ -103,17 +114,18 @@
 ## Windows 发布
 
 ### 安装包验证
-- [ ] `setup.exe` 能通过 Windows SmartScreen（需代码签名证书；未签名时 CI 只告警不失败，发布说明里要写清）
+- [ ] `setup.exe` 能通过 Windows SmartScreen（需代码签名证书；未签名时 CI 只告警不失败，发布说明里要写清）。2026-10-20 现状：`CODESIGN_CERT_BASE64` / `CODESIGN_PASSWORD` **两个都没配**（GitHub Secrets 里只有 4 个 `ANDROID_*` + 2 个 `DOCKERHUB_*`），所以 v1.1.0 的 MSI **必然未签名**——那就必须把"会弹 SmartScreen、点『更多信息→仍要运行』"写进官网安装页与 Release 说明；本轮两处都还没写，这条的实质是文档欠的那一句，不是证书本身
 - [ ] 卸载只清"指向本程序目录"的注册表键与开机自启项；**用户数据（`%LOCALAPPDATA%\PushBox\`）默认保留**，重装即恢复——这是设计口径，不是漏清
 - [ ] 单实例机制正常（第二次启动提示已运行）
-- [ ] 装机后「关于」页显示 `1.0.0`，`dotnet` 侧 `AppVersion` 与 `.iss` 的 `MyAppVersion` 同源
+- [x] 版本号三处同源。**判据里不写具体数字**——写死就会腐烂，这一条之前挂着的是 `1.0.0`，而 `scripts/set-version.sh` 根本不碰它。现在的口径：`windows/PushBox.Windows/PushBox.Windows.csproj` 的 `<Version>` 是**唯一来源**，`windows/installer/PushBox.iss` 用 `#ifndef MyAppVersion` 兜底、真值由 `build-installer.sh` 读 csproj 后 `/DMyAppVersion` 传入，`AppVersion={#MyAppVersion}` 再进注册表；`scripts/release-verify.sh` 已经是"去 csproj 现读一个值再比"，不是比字符串常量
+- [ ] 装机后「关于」页显示的字符串与上面同源（这一半要真跑一次 `setup.exe` 再打开关于页，本轮没装过；上面那条勾只证配置层同源）
 
 ### 系统兼容性
 - [ ] Windows 10 (19041+) 安装成功
 - [ ] Windows 11 运行正常
 - [ ] 高 DPI 屏幕下 UI 不模糊
 - [ ] 托盘图标右键菜单正常
-- [ ] 主窗口冷启不崩（`XamlParseException` 类问题由 `ThemeTest` 在 CI 拦，见 `dotnet test`）
+- [x] 主窗口冷启不崩（`XamlParseException` 类问题由 `ThemeTest` 在 CI 拦，见 `dotnet test`）：2026-10-20 在 Windows 上实跑 `dotnet test PushBox.Crypto.Tests -c Release` → **556/556、退出码 0**，其中含 `windows/PushBox.Crypto.Tests/ThemeTest.cs`。它拦的是真出事的那一类——注释里记着实测两次：顶栏 ⚙ 拿了 `Text.H2`、返回 ← 拿了 `Text.H3`，同一种写法换 `StaticResource` 就当场抛 `XamlParseException`。**边界要说清**：这证的是"资源字典与视觉树的拼装不炸"，不证 Windows 10/11 各版本上的真实冷启，那半仍在上面四条里
 
 ### 功能验证
 - [ ] 首次启动引导流程完整（服务器地址 → 设备名 → 恢复码）
@@ -133,16 +145,21 @@
 ## Docker 镜像发布
 
 ### 镜像质量
-- [ ] 镜像大小 < 500MB（多阶段构建优化）
-- [ ] 以非 root 用户运行（`USER pushbox`）
+- [ ] 镜像大小 < 500MB（多阶段构建优化）——**这条本轮实测不达标**：`docker image inspect pushbox/server:1.1.0 --format '{{.Size}}'` = `685840316` 字节 ≈ **654.1 MB**，超阈值 154 MB。基底是 `eclipse-temurin:21-jre`（`deploy/Dockerfile:30`，单这一个基底就 ≈ 250 MB 起），jar 整包拷入（`deploy/Dockerfile:33`，没走 Spring 分层）。要么换 `jre-alpine`/上分层再压一次，要么把阈值按实测改成"≤ 700MB 且写明实测数"——**别留着一条谁都知道过不了的勾**，那等于教下一个人忽略清单
+- [x] 以非 root 用户运行（`USER pushbox`）：Dockerfile 第 141 行有 `USER pushbox`，且在真跑起来的容器上复核过进程身份——`docker exec <容器> id` → `uid=10001(pushbox) gid=999(pushbox)`，宿主侧 `docker top <容器> -o user` 同样显示 `10001`（只看 Dockerfile 不算：真起过的进程才是证据）
 - [x] 健康检查配置正确（TCP 探活，非 curl——JRE 镜像里没有 curl，且 `/healthz` 会真连库）
 - [x] 入口脚本不打印任何密钥片段（只报键名）
 
 ### 标签管理
-- [ ] `latest` 标签指向最新稳定版
-- [ ] 语义化版本标签正确（如 `1.0.0`、`1.0`）
+
+这四条原本都是"凭印象打勾"的形状，现在写成一条命令就能自证。前三条的根据是 2026-10-20 读过 `.github/workflows/docker-publish.yml` 的 `docker/metadata-action` 配置：`type=ref,event=branch` + `type=sha,prefix=sha-,format=short` + `type=semver,pattern={{version}}` + `type=semver,pattern={{major}}.{{minor}}` + `latest` 只在**正式（不含 `-`）标签**时生效。也就是打 `v1.1.0` 应得到 `1.1.0`、`1.1`、`latest`，push main 应得到 `main`、`sha-<7位>`。**发布后核对（本机直连不了 Hub，在 WSL 里 `curl` 可以）：**
+```bash
+curl -sS https://hub.docker.com/v2/repositories/iamplusdev/push-box/tags?page_size=50 | grep -oE '"name":"[^"]+'
+```
+- [ ] `latest` 标签指向最新稳定版（上一条命令里 `latest` 应等于本次 semver 那份 manifest）
+- [ ] 语义化版本标签正确（如 `1.1.0`、`1.1` 两个都要在）
 - [ ] SHA 短哈希标签生成（如 `sha-a1b2c3d`）
-- [ ] `deploy/docker-compose.yml` 的 `image:` 与本次 tag 一致
+- [x] `deploy/docker-compose.yml` 的 `image:` 与本次 tag 一致：现查 `grep -n 'image: docker.io' deploy/docker-compose.yml` → `iamplusdev/push-box:1.1.0`，等于 `pom.xml` 的 `<version>1.1.0</version>`。**但注意这条勾只证"写对了"，不证"拉得到"**：2026-10-20 实测该 Hub 仓库 `.../v2/repositories/iamplusdev/push-box/tags` 返回 **404（对照 `library/mysql` 返 200，所以不是网络假象）= 从未创建**。回落已经实测过：`docker compose -f deploy/docker-compose.yml --dry-run up -d` 的计划是 `Pulling → manifest unknown → Building → naming to docker.io/iamplusdev/push-box:1.1.0`，compose 会自动改成本地构建，新用户不加 `--build` 也起得来（代价是首次要现场编、且用不上 CI 的 `latest/sha-*` 标签）
 
 ### 部署验证
 - [x] `docker compose up -d` 能成功启动所有服务。**主文件里不该再有任何"只有监控才需要"的必填项**：compose 的 `${VAR:?}` 插值作用于整本文件、与 profile 是否激活无关，所以 `GRAFANA_ADMIN_PASSWORD` 一旦留在主文件，"只起服务端"的部署会在解析阶段就报 required variable missing（prometheus/grafana 现在在 `docker-compose.monitoring.yml`）
@@ -153,7 +170,8 @@
 ### 功能验证（服务端）
 - [x] 定时推送（v1.1.0 新增）：管理台建一条 `0 * * * * *` 的任务 → 列表里 `last_result=ok`、`last_fire_at` 逐分钟推进 → 库里 `messages.client_msg_id` 是 `sched:<task_id>:<分钟序号>` 且**每分钟恰好一行**（去重靠它 + `uk_msg_idem`）→ 停用后不再增长 → 删除后任务数归零
 - [x] 五个 cron 段的表达式要被 `invalid_param` 拒掉（Spring 的 `CronExpression` 要 6 段），`level` 传不认识的值不能悄悄变成别的级别
-- [ ] 定时任务打到 `max_level` 低于任务级别的频道时不能发出去（频道上限优先于任务配置）
+- [ ] 定时任务打到 `max_level` 低于任务级别的频道时的行为要复核——**这条原来的写法是错的**：它写的是"不能发出去"，而代码的实际口径是"**降级后照发**"。根据是 `core/src/main/java/dev/pushbox/core/model/Level.java:23` 的 `truncateTo()`（`this.ordinal() <= max.ordinal() ? this : max`，只向下、不升级），投递路径在 `IngestService` 里把 `request.level()` 截断到 `channel.max_level` 之后仍继续入库并计数；`ingestInternal()`（定时推送走的那条）与公开 `/message` 走的是同一个受理方法，所以两端共用这一把尺子。创建任务时只按**正文上限**拦（`ScheduledTaskLogicTest` ⑪b「存一个永远发不出去的任务没有意义」），**不按 level 拦**——因为 level 超上限根本不会"发不出去"。
+  真正还缺的是一条测试：`ScheduledTaskLogicTest` ①–⑯ 里夹具是频道 `max_level=warning` + 任务 `level=info`（顺向，不触发截断），**没有一条断言"任务 error 打到 max_level=info 的频道，落库 level 变成 info"**。补它只需要在现有夹具上改两个 setter + 一条 `captor.getValue()` 断言，属于纯单元测试、不需要库和桶——这是本清单里性价比最高的一条欠账
 - [x] 多实例对同一张 `scheduled_tasks` 轮询不会重复投递：`next_fire_at` 的 CAS 认领（`UPDATE ... WHERE task_id=? AND next_fire_at=<旧值> AND enabled=1`）是唯一保证——2026-10-20 用两个服务端实例连同一个库跑过，95 秒内正好 2 行
 
 ---
@@ -205,5 +223,5 @@ age -d -i ~/.age/keys.txt backup/<时间戳>/pushbox-<时间戳>.sql.gz.age | gu
 
 ---
 
-**最后更新**：2026-10-20（v1.1.0，生产 compose 全链路实跑后）  
+**最后更新**：2026-10-20（v1.1.0；本轮把 54 项未勾缩到 47 项——关掉的是真跑过命令的，改写法的是原判据本身错的或会腐烂的，剩下 47 项按顶部四类分组各有一个明确的阻塞原因）  
 **负责人**：开发团队轮值

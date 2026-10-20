@@ -86,6 +86,30 @@ else
     fail "官网徽章里的版本是 $(echo "$BADGE_VERSIONS" | tr '\n' ' ')，与 pom 的 $MAVEN_VERSION 不一致（跑 bash scripts/set-version.sh）"
 fi
 
+# 镜像体积只在真构建过之后才知道，而清单里那条 "< 500MB" 已经连着几版没人复核过
+# （v1.1.0 实测 654 MB）。所以这里只报实测数、不判失败：阈值本身是该不该改的决定，
+# 但"报了数"和"没人报"差别很大——后者会让下一个发版的人继续勾一条他以为过了的勾。
+IMAGE_REF=$(grep -m1 -E 'image: docker\.io/' "$ROOT_DIR/deploy/docker-compose.yml" | awk '{print $2}')
+# 本机日常构建落的是 pushbox/server:<版本> 这个名字（compose 的 image: 只在拉 CI 产物时才用得上），
+# 所以两个名字都要试，否则脚本在开发机上永远报"判不了"，等于没加这条。
+LOCAL_REF="$IMAGE_REF"
+if ! docker image inspect "$LOCAL_REF" >/dev/null 2>&1; then
+    LOCAL_REF="pushbox/server:$MAVEN_VERSION"
+fi
+if ! command -v docker >/dev/null 2>&1; then
+    warn "本机没有 docker CLI，镜像体积判不了（在 WSL 里跑这个脚本，或 docker image inspect $IMAGE_REF --format '{{.Size}}'）"
+elif ! docker image inspect "$LOCAL_REF" >/dev/null 2>&1; then
+    warn "本地既没有 $IMAGE_REF 也没有 pushbox/server:$MAVEN_VERSION，体积判不了；先起一次 compose 让它编出来"
+else
+    IMAGE_BYTES=$(docker image inspect "$LOCAL_REF" --format '{{.Size}}')
+    IMAGE_MB=$((IMAGE_BYTES / 1048576))
+    if [ "$IMAGE_MB" -le 500 ]; then
+        pass "镜像体积 ${IMAGE_MB} MB（$LOCAL_REF，≤ 500 MB）"
+    else
+        warn "镜像体积 ${IMAGE_MB} MB（$LOCAL_REF），超过清单里写的 500 MB 阈值——要么换基底/上 Spring 分层，要么把 RELEASE-CHECKLIST 那条阈值改成实测口径，别留着过不了的勾"
+    fi
+fi
+
 # ========================================
 # 2. 密钥配置检查
 # ========================================
