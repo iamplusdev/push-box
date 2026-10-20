@@ -277,6 +277,7 @@ public class ScheduledTaskService {
     row.set("group_id", channel.getString("group_id"));
     row.set("channel_no", channel.getString("channel_no"));
     row.set("name", clamp(input.name(), 64));
+    row.set("category", normalizeCategory(input.category()));
     row.set("title", clamp(input.title(), 512));
     row.set("content", input.content());
     // 归一化到 Level 的 wire 值：存 "warn" 这类近义写法会在触发时被 fromWire 静默降级成 info，
@@ -318,6 +319,7 @@ public class ScheduledTaskService {
       out.put("channel_name", task.getString("channel_name"));
     }
     out.put("name", nullToEmpty(task.getString("name")));
+    out.put("category", nullToEmpty(task.getString("category")));
     out.put("title", nullToEmpty(task.getString("title")));
     if (withContent) {
       out.put("content", task.getString("content"));
@@ -366,6 +368,19 @@ public class ScheduledTaskService {
     return t.length() <= max ? t : t.substring(0, max);
   }
 
+  /**
+   * 分类标签的收口：列宽 32，超了就截——与 name/title 同一套做法，而不是报 400。
+   * 空串是有效值（列表上显示成"未分类"），所以这里不能像 {@link #clamp} 那样把空串折成 null：
+   * 列是 NOT NULL DEFAULT ''，塞 null 进去会被 MySQL 严格模式当场拒掉，任务连建都建不出来。
+   */
+  private static String normalizeCategory(String s) {
+    if (s == null) {
+      return "";
+    }
+    String t = s.trim();
+    return t.length() <= 32 ? t : t.substring(0, 32);
+  }
+
   private static String stringValue(Row row, String column) {
     Object v = row.get(column);
     return v == null ? null : String.valueOf(v);
@@ -393,7 +408,11 @@ public class ScheduledTaskService {
     return v == null ? "" : v;
   }
 
-  /** 管理台请求体。命名沿用管理台既有接口的驼峰风格（响应才是下划线）。 */
+  /**
+   * 管理台请求体。命名沿用管理台既有接口的驼峰风格（响应才是下划线）。
+   * {@code category} 排在最后而不是紧跟 {@code name}：这个 record 在本仓有按位置构造的调用点，
+   * 插到中间会让后面每个参数集体错位，而它们大多同为 String，编译器拦不住。
+   */
   public record TaskInput(String channelNo, String name, String title, String content, String level,
-      String senderName, List<String> images, String cronExpr, Integer enabled) {}
+      String senderName, List<String> images, String cronExpr, Integer enabled, String category) {}
 }

@@ -247,9 +247,9 @@ class ScheduledTaskLogicTest {
     when(store.findScheduledTask(anyString())).thenReturn(dueTask(1000L));
 
     service.create(new ScheduledTaskService.TaskInput(CHANNEL_NO, "任务", null, "正文", "warning",
-        null, List.of(), "0 0 9 * * *", 1));
+        null, List.of(), "0 0 9 * * *", 1, null));
     service.create(new ScheduledTaskService.TaskInput(CHANNEL_NO, "任务", null, "正文", "warn",
-        null, List.of(), "0 0 9 * * *", 1));
+        null, List.of(), "0 0 9 * * *", 1, null));
 
     ArgumentCaptor<Row> captor = ArgumentCaptor.forClass(Row.class);
     verify(store, times(2)).insertScheduledTask(captor.capture());
@@ -336,6 +336,33 @@ class ScheduledTaskLogicTest {
     verify(store, never()).deleteScheduledTask(anyString());
   }
 
+  @Test
+  @DisplayName("⑰ 分类标签落库前收口成 32 字符内的非 null 串，且列表视图就带着它")
+  void categoryIsNormalizedAndCarriedInView() {
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+    when(store.findScheduledTask(anyString())).thenReturn(dueTask(1000L));
+
+    service.create(inputWithCategory("  运维 "));
+    service.create(inputWithCategory("   "));
+    service.create(inputWithCategory("分类".repeat(20)));
+
+    ArgumentCaptor<Row> captor = ArgumentCaptor.forClass(Row.class);
+    verify(store, times(3)).insertScheduledTask(captor.capture());
+    List<Row> saved = captor.getAllValues();
+    assertThat(saved.get(0).getString("category")).isEqualTo("运维");
+    // 空白落成空串而不是 null：列是 NOT NULL DEFAULT ''，null 会被 MySQL 严格模式当场拒掉，
+    // 而这个空串在管理台就是"未分类"，是一个有效取值
+    assertThat(saved.get(1).getString("category")).isEmpty();
+    assertThat(saved.get(2).getString("category")).hasSize(32);
+
+    // 分类下拉的选项是从列表现取的，所以 category 必须在 withContent=false 那条路上也回
+    Row listed = dueTask(1000L);
+    listed.set("category", "运维");
+    when(store.listScheduledTasks()).thenReturn(List.of(listed));
+    assertThat(service.listAll().get(0).get("category")).isEqualTo("运维");
+    assertThat(service.detail(TASK_ID).get("category")).isEqualTo("");
+  }
+
   // ---------- helpers ----------
 
   private static String containsReason() {
@@ -386,11 +413,16 @@ class ScheduledTaskLogicTest {
 
   private static ScheduledTaskService.TaskInput input(String channelNo, String content) {
     return new ScheduledTaskService.TaskInput(channelNo, "每日晨报", "晨报", content, "info",
-        "定时推送", List.of(), "0 0 9 * * *", 1);
+        "定时推送", List.of(), "0 0 9 * * *", 1, null);
   }
 
   private static ScheduledTaskService.TaskInput inputWithImages(String... urls) {
     return new ScheduledTaskService.TaskInput(CHANNEL_NO, "带图任务", null, "正文", "info", null,
-        List.of(urls), "0 0 9 * * *", 1);
+        List.of(urls), "0 0 9 * * *", 1, null);
+  }
+
+  private static ScheduledTaskService.TaskInput inputWithCategory(String category) {
+    return new ScheduledTaskService.TaskInput(CHANNEL_NO, "每日晨报", "晨报", "正文", "info", null,
+        List.of(), "0 0 9 * * *", 1, category);
   }
 }
