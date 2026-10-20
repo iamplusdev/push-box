@@ -26,6 +26,7 @@
     <li><a href="usage.html">使用说明</a></li>
     <li><a href="api.html">入站 API（写入）</a></li>
     <li><a href="client-api.html" aria-current="page">客户端 API（读取）</a></li>
+    <li><a href="admin-api.html">管理台 API</a></li>
     <li><a href="protocol.html">长连接与加密</a></li>
   </ul>
   <h3>仓库</h3>
@@ -122,7 +123,7 @@
       <tr><td><span class="tag post">POST</span> <code>/api/v1/devices/rotate-recovery-code</code></td><td>设备</td><td><b>无请求体</b>。旧码即刻失效，新码只在这一次返回明文</td></tr>
     </tbody>
   </table>
-  <h3>频道（App 是唯一控制台，没有 Web 管理台）</h3>
+  <h3>频道（治理位只在这套接口上，Web 管理台没有这个口）</h3>
   <table>
     <thead><tr><th>方法 · 路径</th><th>鉴权</th><th>说明</th></tr></thead>
     <tbody>
@@ -236,7 +237,7 @@ GET /api/v1/avatars/{sha256_hex(sender_id)}
 # 7. 全文搜索（服务端 ngram；参数顺序不能动）
 GET /api/v1/search?q=CPU&amp;channel_no=12345678&amp;since=0&amp;limit=50</code></pre>
 
-  <div class="foot">实时下发不在这页：<a href="protocol.html">长连接与加密</a> —— 握手、帧类型、<code>resume_ok</code> 的语义、截断与密钥轮换。</div>
+  <div class="foot">实时下发不在这页：<a href="protocol.html">长连接与加密</a> —— 握手、帧类型、<code>resume_ok</code> 的语义、截断与密钥轮换。<br>跨 Space 的运维视图（列全部频道/设备、搜全部消息、定时推送、吊销设备）在另一套鉴权上：<a href="admin-api.html">管理台 API</a>。它用的是一条口令换出来的 JWT，<b>不需要这里的四个签名头，响应也不加密</b>。</div>
 </div>
 </main>
 </div>

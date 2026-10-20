@@ -47,19 +47,22 @@ versionName = "1.26.0"
 
 ---
 
-### 2. API 端点 ✅ 通过
+### 2. API 端点 ✅ 通过（2026-10-20 复核并改写）
 
 **验证项**: Web 管理台 API 端点与设计文档 D28 描述一致
 
-**检查结果**:
-- ✅ `POST /api/v1/admin/login` - AdminAuthController.java:29
-- ✅ `GET /api/v1/admin/channels` - AdminController.java:46
-- ✅ `GET /api/v1/admin/messages` - MessageQueryController.java
-- ✅ `DELETE /api/v1/admin/channels/{channelNo}` - AdminController.java:76
-- ✅ JWT token 鉴权走 DeviceGuard admin 分支 - DeviceGuard.java:59-65
-- ✅ validateToken 包含 exp 校验 - AdminAuthController.java:64-73
+**这一节原来写的是文件行号**（`AdminAuthController.java:29` 那一类）。行号是这份报告里最容易腐烂的一种断言：任何一次上面加个方法就会让它指错地方，而它指错了也不会报错——只会让人以为核对过了。现在改成**方法 + 完整路径**，这条判据由 `scripts/release-verify.sh` 的"文档端点必须存在于代码"闸来跑，不靠人眼。
 
-**结论**: 所有管理台端点实现与设计文档完全一致
+**检查结果**（16 个端点全部逐个对照过代码；完整契约见 `site/admin-api.html`）:
+- ✅ 登录 1 个：`POST /api/v1/admin/login`（`AdminAuthController`）
+- ✅ 业务 15 个：`AdminController` 上的频道 5 + 设备 2 + 消息搜索 1 + 概览 1 + 定时任务 6
+- ✅ JWT token 鉴权走 `DeviceGuard.require` 的 `/api/v1/admin/` 分支：只验 JWT，不要求 `X-PB-Device/Ts/Nonce/Sig`
+- ✅ `validateToken` 先验 HMAC 再验 `exp`（过期即失效），`Json` 解析 payload 而非正则
+- ✅ 响应明文不过密封盒：`DeviceGuard.seal` 在 `device == null`（管理台分支）时直接回原对象
+
+**这一轮同时纠正了原报告的两处错误**：
+- 原来把 `GET /api/v1/admin/messages` 归到 `MessageQueryController.java` — 那个类服务的是**设备侧** `GET /api/v1/messages`（要签名、响应加密）；管理台那条在 `AdminController` 上。两者同名不同鉴权，混了就会以为"管理台搜索也要签名"。
+- 原来的结论"所有管理台端点实现与设计文档完全一致"是**从 6 个抽查项推出来的**，而端点有 16 个，且 D28 里没有定时任务那一整组。结论当时并没有它声称的覆盖面。
 
 ---
 

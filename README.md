@@ -226,7 +226,7 @@ curl -sS http://127.0.0.1:7404/message -H 'Content-Type: application/json' \
   --data-binary @payload.json
 ```
 
-详细 API 见 [软件设计方案 §5.1](docs/PushBox-软件设计方案.md)。
+接口参考按鉴权分成三页，别混用（[入站 API](site/api.html) 写消息进来 / [客户端 API](site/client-api.html) 设备读自己的 Space / [管理台 API](site/admin-api.html) 一条口令换 24h JWT、跨 Space 运维）；协议与数据模型的权威描述在 [软件设计方案](docs/PushBox-软件设计方案.md)。
 
 ---
 

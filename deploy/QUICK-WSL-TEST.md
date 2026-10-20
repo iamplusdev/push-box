@@ -111,17 +111,18 @@ curl http://localhost:7404/api/v1/admin/channels \
   -H "Authorization: Bearer $TOKEN"
 
 # 创建新频道（返回明文 secret）
+# groupId 不给就落到字面量 "admin" 这个 Space 里，任何真机都看不到它——先查一个真实 group_id 再建
 curl -X POST http://localhost:7404/api/v1/admin/channels \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"name":"测试频道","maxLevel":"warning","maxImages":4}'
+  -d '{"groupId":"把 /admin/devices 里某个 group_id 抄过来","name":"测试频道","maxLevel":"warning","maxImages":4}'
 
 # 重置频道密钥
 curl -X POST http://localhost:7404/api/v1/admin/channels/12345678/rotate-secret \
   -H "Authorization: Bearer $TOKEN"
 
-# 搜索消息
-curl "http://localhost:7404/api/v1/admin/messages/search?q=test" \
+# 搜索消息（路径就是 /messages，没有 /search 那一段；q 必填）
+curl "http://localhost:7404/api/v1/admin/messages?q=test&limit=50" \
   -H "Authorization: Bearer $TOKEN"
 ```
 

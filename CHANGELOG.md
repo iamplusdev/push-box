@@ -58,6 +58,14 @@
 - **这条链第一次在 GitHub runner 上真跑过（2026-10-20，对 `publish` 分支点 dry-run dispatch）**：9 步全 success，含凭据校验、版本闸门、metadata 与多阶段构建，其中 `Login to Docker Hub` 是真登录——`DOCKERHUB_*` 这对 secrets 因此从"配好了"升级为"验过能用"。而跑完后 `hub.docker.com/v2/repositories/iamplusdev/push-box/tags` 仍是 **404**（对照组 `library/mysql` 返 200，排除网络假象），这才是"确实一个字节都没推上去"的证据。两个证据缺一个都不算验证过
 - `scripts/release-verify.sh` 里"三个出制品 workflow 都该有版本注入"这条改成按 workflow 分别断言（apk/msi 注入、docker-publish 只核对），并新增反向判据：`docker-publish.yml` 里出现真正的注入命令就 FAIL。**判"有没有注入"必须锚定行首的命令**，不能整文件 `grep 'set-version.sh'`——第一版就是这么写的，结果闸门自己的报错文案里那句"先跑 set-version.sh 再重打 tag"被读成了"我在现场改写版本号"，一条正确的改动被判成 FAIL
 
+### 文档
+
+- **管理台 API 第一次有参考页：`site/admin-api.html`**（2026-10-20 新增）。此前官网三页只覆盖入站 `/message`、客户端 `/api/v1/**` 与协议，管理台那 16 个端点（登录 1 + 频道 5 + 设备 2 + 消息搜索 1 + 概览 1 + 定时任务 6）在 `docs/PushBox-软件设计方案.md` 里只有决策描述，给用户一条 curl 都凑不出来。这一页的字段表、错误码与示例全部从代码读出来写：`AdminAuthController`、`AdminController`、`DeviceGuard`、`ChannelService`、`DeviceService`、`ScheduledTaskService`、`PbStore`。其中几条是任何既有文档都没说过的：管理台线是 **camelCase 请求 / snake_case 响应**（Jackson 没配命名策略，请求体字段名拼错会被静默丢掉而不是报错）；`hint` 永远是字符串、不会是 `null`；定时任务的 `channel_name` 与 `content_head`（80 字符）**只在列表里给**，`content`+`images` **只在详情里给**；`last_fire_at` 用 `0` 而不是 `null` 表示从没跑过；`enabled` 只有 `1` 算真；cron 是 6 段 Spring 方言；`msg_key = sched:<id>:<分钟桶>` 意味着一条任务每分钟最多产出一条消息，与 sweep 跑多快无关
+- **顺手修掉的 6 处文档错误 + 自查中新发现的 2 处**：管理台消息搜索被写成 `/api/v1/admin/messages` + `/search` 那一段（真实只有 `/messages?q=`，照抄 404），出现在 `deploy/QUICK-WSL-TEST.md`；`docs/PushBox-软件设计方案.md` 三处把 REST 补拉的游标写成 `since_seq`（那是 WS 连接 URL 上的参数，REST 叫 `after_seq`）、两处媒体/头像路径写的是不存在的形状（真实是 `/api/v1/media/{msg_id}/{idx}` 与 `/api/v1/avatars/{sha256(sender_id)}`）；`site/usage.html` 把入站写入写成挂在 `/api/v1` 下的那条（真实是 `POST /message`，前缀由 `pb.ingest.base-path` 配置），`CHANGELOG.md` v1.0.0 那条同源错误一起改；`site/api.html` 的 `/healthz` 口径整个是旧的（补上：白名单由 `PB_SECURITY_INTERNAL_CIDRS` 控制且默认只放环回、真做 DB `isValid(2s)` 与本地存储写探针、down 时 503，所以它是**就绪探针不是存活探针**）；`docs/AUDIT-REPORT.md` §2 把 `GET /api/v1/admin/messages` 归到了服务设备侧的 `MessageQueryController` 上，且它"所有管理台端点完全一致"的结论是拿 6 个抽查项外推的（当时定时任务那一组还没进视野），连同会静默腐烂的文件行号引用一起改成"方法 + 完整路径"记账
+- **新增一条闸：文档里写到的端点路径必须存在于代码**（`scripts/release-verify.sh`）。代码侧从 `web/*.java` 的 `@RequestMapping`/`@Get…Mapping` 提路由（要处理三种坑：`path = "${pb.ingest.base-path:/message}"` 取默认值、光有注解不带路径的映射到类前缀、以及类前缀必须拼在方法路径前面——第一版没拼，判据把文档里每一条路径都报成不存在）；文档侧扫 `site/*.html` + README + CHANGELOG + RELEASE-CHECKLIST + `docs/*.md` + `deploy/*.md`。同位段先归一化（`{channelNo}`、纯数字、ULID 都归成 `{}`），否则真端点会被误报。**2026-10-20 实跑：代码侧 34 条、文档侧 36 条、全部命中，全脚本 51 PASS / 0 FAIL / 2 WARN**。反向验证往判据里喂一条从未存在的路径，确认可抓出。**这一轮第一次实跑就是红的，红在我自己新写的 RELEASE-CHECKLIST 两条勾选项上**：那两句把"这个路径从来不存在"的错误写法整条抄了出来，而闸是纯字符串匹配，分不出"照着用"和"提醒别这么写"——改的是文档措辞（错误写法不再整条照抄），不是给闸加白名单开口子。**闸只看路径**：请求体字段名、鉴权头、响应形状都不在它的能力范围内，那些仍然只能靠人对着代码读
+- **文档过程中查实并写进页面的三个边界**（此前只有代码知道）：① `POST /api/v1/admin/channels` 省略 `groupId` 会建出一个孤立 Space（管理台分支 `DeviceGuard.require()` 返回 `Authenticated(null, "admin", "admin")`，Space 名就叫 `admin`，真设备永远看不见它，且服务端不校验这个 ID 是否存在）；② **管理台面默认是公网可达的**——`deploy/Caddyfile` 只挡了 `/actuator/*`，`InternalAccessFilter` 的白名单只覆盖 `/healthz` 与 `/actuator/**`，管住 `/api/v1/admin` 的只有登录口令加一把 24 小时 JWT，且没有刷新与吊销；③ 登录失败锁定是**进程内 Caffeine**，重启即清零、多实例不共享
+- **这一轮没有验到的两件事，别当成验过**：① 新页面只做过结构核对（DOM 快照确认导航、JS 生成的目录、各节与复制按钮都在，console 零报错，外加 `curl` 返 200），**浏览器截图这一步在本机取不到视口、没做成**，视觉排版未经目视确认；② 页面上 16 个端点的契约是从代码读出来的，**本轮没有一条真打过运行中的服务端**（没起栈、没跑过任何一次 admin curl）。所以它是"代码级正确"，不是"运行时实测"
+
 ### 测试与验证
 - 新增 `ScheduledTaskLogicTest` 18 个单测（cron 解析与下次时间计算、CAS 抢占失败不投递、msg_key 分钟桶、内部入口不带密钥、频道上限与字节判定、`level` 归一化），纯 Mockito 不碰容器
 - 全量 `mvn -B -pl server -am test` 收集 261 条用例（server 223 + core 38），**source 了 `deploy/env/local.env` 那次是 0 失败 0 跳过**；不带桶凭据时同一份代码只执行 149 条、跳过 112 条（这批用例带 `@EnabledIfEnvironmentVariable(PB_S3_ACCESS_KEY)`），而 `mvn test` 的退出码仍然是 0——这正是 `ci.yml` 要按 surefire XML 断言 `skipped == 0` 的原因。`web-admin` 的 `vue-tsc` 类型检查与 `vite build` 通过
@@ -113,7 +121,7 @@
 自托管的推送中枢：一台自己的服务端，把消息加密下发到 Android 与 Windows 两端，频道由用户自己建、外部系统用一条 curl 就能发进来。三端与 Web 管理台的功能在这一版全部落地。
 
 ### 服务端
-- 唯一入站写入接口 `POST /api/v1/message`：频道凭证鉴权、幂等去重、正文截断标记、图片外链抓取转存后与文字同帧下发
+- 唯一入站写入接口 `POST /message`（不在 `/api/v1` 下，前缀由 `pb.ingest.base-path` 配置）：频道凭证鉴权、幂等去重、正文截断标记、图片外链抓取转存后与文字同帧下发
 - 长连接下发按设备逐条封信封（每条连接自己的会话钥与帧序号），断线重连带 `since_seq` 补拉，补拉批次分页可配
 - 设备与频道治理：注册/接管、恢复码加入、恢复码轮换、频道号重置、发送者白名单、频道静音与订阅模式
 - 配置变更即时广播（`config` 帧），凭证轮换不需要客户端重连

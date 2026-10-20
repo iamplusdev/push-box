@@ -26,6 +26,7 @@
     <li><a href="usage.html" aria-current="page">使用说明</a></li>
     <li><a href="api.html">入站 API（写入）</a></li>
     <li><a href="client-api.html">客户端 API（读取）</a></li>
+    <li><a href="admin-api.html">管理台 API</a></li>
     <li><a href="protocol.html">长连接与加密</a></li>
   </ul>
   <h3>仓库</h3>
@@ -217,7 +218,7 @@ curl -sS https://push.example.com/message \
   <p>通知里会带发送者头像（服务端转存的那份）；大图文通知在图片就绪后补上。锁屏隐藏内容的那条会话，锁屏只显示"PushBox · 收到 1 条新消息"。</p>
 
   <h2 id="fanout">一个频道，两台设备同时收到</h2>
-  <p>能，前提是这两台是<b>同一个 Space 里的两台设备</b>。第三方的那一发 <code>POST /api/v1/message</code> 只让消息<b>落库一次</b>（一个全局 <code>seq</code>），随后服务端<b>遍历这个 Space 里每一条在线连接，各自用它自己的会话密钥封一份发出去</b>——Android 与 PC 拿到的是同一句明文、两条互不相干的信封，几乎同一秒出现在两台机器上。服务端日志里那句 <code>消息已下发 … 在线下发=2</code>，数的就是这里发出去的连接数；它是"两端到底通不通"最省事的自查处。</p>
+  <p>能，前提是这两台是<b>同一个 Space 里的两台设备</b>。第三方的那一发 <code>POST /message</code> 只让消息<b>落库一次</b>（一个全局 <code>seq</code>），随后服务端<b>遍历这个 Space 里每一条在线连接，各自用它自己的会话密钥封一份发出去</b>——Android 与 PC 拿到的是同一句明文、两条互不相干的信封，几乎同一秒出现在两台机器上。服务端日志里那句 <code>消息已下发 … 在线下发=2</code>，数的就是这里发出去的连接数；它是"两端到底通不通"最省事的自查处。</p>
   <ul>
     <li><b>身份不能拷</b>。会话表按设备身份唯一，<b>同一个 <code>device_id</code> 的新连接会直接顶掉旧的那条</b>。把一端的身份文件复制到另一台机器，得到的不是"两台设备"而是"两台抢一条连接"——症状是<b>只有一端收得到、且随启动顺序漂移，全程不报错</b>。加第二台的正当路径是首启时把恢复码交出去——Android 是那个可选的<b>「恢复码（可选）」</b>输入框，PC 是<b>「我有恢复码，加入已有空间」</b>那一屏——让它注册成<b>另一个</b> <code>device_id</code>。</li>
     <li><b>唯一会让两端不一致的功能是「只接收已接入的频道」</b>：它是<b>逐设备</b>的过滤器（<a href="#join">见上面</a>），<b>默认关</b>，所以开箱即用就是两端全收；某一端打开它又没接入这条频道，就只有那一台静默，另一端照常。</li>
@@ -289,10 +290,10 @@ curl -sS https://push.example.com/message \
     <div class="card"><h4 style="margin-top:0">它不是聊天软件</h4><p style="margin:0;font-size:13.5px">客户端<b>没有发送口</b>。第三方只能 <code>POST /message</code>，你不可能从手机回一条消息。想做双向，得自己再加一个写入服务端。</p></div>
     <div class="card"><h4 style="margin-top:0">服务端明文存库</h4><p style="margin:0;font-size:13.5px">加密只做"服务端 → 客户端"这一跳，为的是能全文搜索。能读到数据库的人=能读到全部消息。所以库不要放公网、账号权限按最小给。</p></div>
     <div class="card"><h4 style="margin-top:0">消息永久保留</h4><p style="margin:0;font-size:13.5px">没有自动过期。跑几年得自己清（或用频道「清空」）。日计数器有回收，消息没有。</p></div>
-    <div class="card"><h4 style="margin-top:0">没有 Web 管理台</h4><p style="margin:0;font-size:13.5px">App 是唯一控制台。要改频道治理、看容量、吊销设备，都得在手机或 PC 上做。</p></div>
+    <div class="card"><h4 style="margin-top:0">管理台是运维视图，不是第二个 App</h4><p style="margin:0;font-size:13.5px">自带 Web 管理台（跨 Space 看频道/设备/消息、定时推送、吊销设备），接口契约见 <a href="admin-api.html">管理台 API</a>。但它<b>改不了频道治理位</b>——静音、发送者白名单、日配额、<code>strict_auth</code>、频道号重置仍然只在 App 的「频道治理」里；建频道与重置密钥也只为脚本留了接口，控制台没有按钮。</p></div>
   </div>
 
-  <div class="foot">接口细节：<a href="api.html">入站 API（写入）</a> · <a href="client-api.html">客户端 API（读取）</a> · <a href="protocol.html">长连接与加密</a></div>
+  <div class="foot">接口细节：<a href="api.html">入站 API（写入）</a> · <a href="client-api.html">客户端 API（读取）</a> · <a href="admin-api.html">管理台 API</a> · <a href="protocol.html">长连接与加密</a></div>
 </div>
 </main>
 </div>

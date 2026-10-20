@@ -26,6 +26,7 @@
     <li><a href="usage.html">使用说明</a></li>
     <li><a href="api.html" aria-current="page">入站 API（写入）</a></li>
     <li><a href="client-api.html">客户端 API（读取）</a></li>
+    <li><a href="admin-api.html">管理台 API</a></li>
     <li><a href="protocol.html">长连接与加密</a></li>
   </ul>
   <h3>仓库</h3>
@@ -57,7 +58,7 @@
   <ul>
     <li><b>路径是 <code>/message</code>，不在 <code>/api/v1</code> 下。</b>前缀由 <code>pb.ingest.base-path</code> 配置（默认 <code>/message</code>），反代可以整段改名。<b>没有 <code>/message/media</code> 之类的第二个写入口</b>——图片走同一个端点的 <code>images[]</code> 字段。</li>
     <li>请求头只需要 <code>Content-Type: application/json</code>。<b>凭据全部在 body 里，绝不进 URL 或 header</b>：URL 会落进访问日志、反代日志和浏览器历史，而消息正文与凭据一旦进日志就是泄露（这也是服务端访问日志默认关的原因）。</li>
-    <li><code>GET /healthz</code> 是无鉴权的存活探针，<b>不依赖任何对象存储或数据库往返</b>，可直接当 K8s liveness。</li>
+    <li><code>GET /healthz</code> 无 token，但<b>有来源白名单</b>：默认只放行环回，其余网段必须显式写进 <code>PB_SECURITY_INTERNAL_CIDRS</code>（<code>pb.security.internal-cidrs</code>）。它<b>会真的对数据库做一次 <code>isValid</code>（2 秒超时）</b>，<code>storage.type=local</code> 时还会往存储目录写一个探测文件再删掉，任一项不通就回 <b>503</b>、通了一起回 200。所以它是<b>就绪探针（readiness），不能当存活探针（liveness）用</b>——库抖一下就被 K8s 杀掉重启，只会把故障放大成重启循环。响应只有 <code>{ok,db,storage,uptime_ms}</code>，不带版本号、SQL 与连接池参数。</li>
   </ul>
 
   <h2 id="fields">请求体字段</h2>
@@ -100,7 +101,7 @@
   <ul>
     <li><code>summary</code> 由服务端算，保证<b>各端与通知栏用的是同一句话</b>；上限 <code>pb.notify.summary-chars</code>（默认 60 字符）。</li>
     <li>幂等重放命中历史记录时，返回的是<b>那条原始记录</b>的 id/seq/summary——不是重新生成的。</li>
-    <li>错误响应形状固定：<code>{"ok":false,"error":"invalid_credential","hint":null}</code>。<b>任何错误都不会回显你提交的字段值</b>（防泄露、防枚举）。</li>
+    <li>错误响应形状固定：<code>{"ok":false,"error":"invalid_credential","hint":""}</code>——<b><code>hint</code> 永远是字符串</b>，没有提示时是空串而不是 <code>null</code>；429 另外带一个 <code>Retry-After</code> 响应头。<b>任何错误都不会回显你提交的字段值</b>（防泄露、防枚举）。</li>
   </ul>
 
   <h2 id="errors">错误码</h2>
@@ -302,7 +303,7 @@ PB_BASE=http://127.0.0.1:8081 node deploy/probe/third-party-test.mjs
 PB_BASE=http://127.0.0.1:8081 node deploy/probe/p0-e2e.mjs</code></pre>
   <p>两个脚本都从环境变量取地址与凭据，跑法与坑见 <a href="install.html#server">安装与部署 → 服务端</a>。</p>
 
-  <div class="foot">读侧接口：<a href="client-api.html">客户端 API（读取）</a> —— 设备签名、密封盒与端点全表。它和本页是<b>两套完全不同的鉴权</b>。</div>
+  <div class="foot">读侧接口：<a href="client-api.html">客户端 API（读取）</a> —— 设备签名、密封盒与端点全表。它和本页是<b>两套完全不同的鉴权</b>。<br>要"管这台服务端"而不是"发一条消息"：<a href="admin-api.html">管理台 API</a>（一条口令换 24 小时 JWT，跨 Space，全库读写）。</div>
 </div>
 </main>
 </div>

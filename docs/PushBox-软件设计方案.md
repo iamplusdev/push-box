@@ -325,7 +325,7 @@ fts_messages  -- 本地 FTS，对已缓存消息即时搜索；历史全量搜�
            → 返回 {device_id, group_id, token}
            → 若为首台设备：group_secret 由本地随机生成（= 恢复码），服务端只存其哈希
 新设备加入: 扫描/粘贴恢复码 → POST /api/v1/devices/join {group_secret, pubkeys…}
-           → 服务端比对哈希 → 发同 group_id 的 token → 立刻可 since_seq=0 全量拉历史
+           → 服务端比对哈希 → 发同 group_id 的 token → 立刻可 REST GET /api/v1/messages?after_seq=0 全量拉历史
 ```
 
 ### 恢复码说明
@@ -338,7 +338,7 @@ fts_messages  -- 本地 FTS，对已缓存消息即时搜索；历史全量搜�
 **重装恢复流程**：
 1. 输入恢复码
 2. 新密钥对注册
-3. `GET /api/v1/messages?since_seq=0`
+3. `GET /api/v1/messages?after_seq=0`（REST 补拉的游标叫 `after_seq`；`since_seq` 是 WS 连接 URL 上的参数，两者不是一回事）
 4. 文字与图片完整回来（D3）
 
 **设备管理**：
@@ -707,7 +707,7 @@ Content-Type: application/json
 ```
 
 其余要点：
-- **重装/新设备恢复**：输入恢复码 → `/api/v1/devices/join` → 派生新密钥对 → `GET /api/v1/messages?since_seq=0` 分页拉全量 → 本地重建库与索引 → 历史文字与图片全部回来（图片凭 `media_objects.object_key` 重新下载，抓取时的转存让外链失效不再影响历史；原始 `source_url` 只存服务端，不下发）。
+- **重装/新设备恢复**：输入恢复码 → `/api/v1/devices/join` → 派生新密钥对 → `GET /api/v1/messages?after_seq=0` 分页拉全量 → 本地重建库与索引 → 历史文字与图片全部回来（图片凭 `media_objects.object_key` 重新下载，抓取时的转存让外链失效不再影响历史；原始 `source_url` 只存服务端，不下发）。
 - **已读多端同步**：本端上报游标 → 服务端写 `read_state` → 向他端广播 `read` 帧 → 他端红点即时消失，无需重启。
 - **删除**：本端立刻隐藏 → DELETE → 服务端 tombstone → 广播 `tombstone` 帧 → 他端同步隐藏 + 清 media_cache。
 
@@ -921,7 +921,7 @@ core/push                  后台服务、连接池、重连退避、补拉、�
 > 21. **`resume_ok` 不是心跳，别在连接层就地吞掉**（W9 真服务体检抓到）。`PushConnection` 原来把所有 `SimpleFrame` 都当"连接内部的事"，处理完就 `return`，于是重放结束的 `resume_ok` 到不了引擎，`SyncState.Online` 只剩"有消息落库"这一个来源。后果是**一个还没发过消息的 Space 永远显示"连接中"**：socket 健康、心跳正常、服务端早把这一轮重放收尾了，唯独 UI 在骗人。修法是只吞 `ping`（回 `pong` 是本端自己的回声），其余 `SimpleFrame` 一律转给观察者——`resume_ok` 带的不是正文，是"重放到此结束"这句话，而这句话正是引擎的状态输入。**口径：判"在线"不能靠"收到了东西"，要靠协议里那个明确的结束标记**（§12 P3 验收②③都要读这个状态）。
 > 22. **`Channel` 一旦 `TryComplete()` 就永久关闭，可重启的对象每轮都要换新队列**（W9 同一处抓到）。`SyncEngine` 的帧队列原来是 `readonly` 字段、循环 `finally` 里 `TryComplete()`：单条生命周期内没错，但 `Stop()` 之后再 `Start()`（W13 托盘的"暂停同步"、设置页改完重连都走这条路），上一轮那条已关闭的队列还在原地，`OnFrameAsync` 的 `TryWrite` 从此**静默返回 false**——握手照样成功、`resume_ok` 照样到、`FlushAsync` 照样立刻完成，库里一条都不进，顶栏停在"连接中"再也不动。修法：每轮 `Start()` 换一条新队列和一个代号，`finally` 只关自己那条，也只把**仍是当前这一轮**的状态刷成 `Idle`（否则上一轮的收工会把新一轮刚公布的 `Connecting` 抹掉，用户看到的反而是"还没启动"）。回归断言得真断一次：`ARestartedEngineKeepsTakingFramesIn`（Stop→Start→再落一条）写出来之前，这条路径是零覆盖。
 > 23. **服务端 `read_state` 是 last-write-wins，不是 MAX**（W9 读 `PbStore.upsertReadState` + 真服务体检⑤）。`PUT /api/v1/state/read` 把送来的 `last_read_seq` 直接覆盖上去，并且**朝同组广播一条 `read` 帧**，于是两个方向都要防：本端上报的游标必须**只增不减**（内存里记住每条会话"已经报到哪"，比它小的一律不入队；`DeviceStore.MarkConversationRead` 用的是 SQL 的 `MAX(last_read_seq, last_seq)`），否则一次迟到的重试就把他端刚点亮的红点又吹起来；他端来的 `read` 帧在 `ApplyRead` 里同样取 max（第 16 条那个 upsert 之外再加这一层）。攒批队列**只放内存**是故意的：要落盘就得新增一列记"每条会话报到哪"，§3.3 没有这列，而拿"库里所有大于上次上报值的会话"去重报正好撞上 last-write-wins。代价写明白：PC 离线读完、又在变在线之前重启，这一批就散了（Android 本来就是发一条算一条，同样不保证）。
-> 24. **§5.2 那两个字节接口不是密封盒，别拿 JSON 那条通路去读**（W10）。`/api/v1` 的 JSON 回答一律是一轮密封盒，唯独 `GET /api/v1/media/...` 与 `GET /api/v1/avatars/...` 是 200 + 原始字节（`DeviceGuard.seal` 由控制器自己决定，字节那条走 `ResponseEntity<byte[]>`）；`Cache-Control: no-store` 禁的是 HTTP 缓存，不禁 §4.5 要求落盘的 media_cache。复用原来那条 `SendAsync` 的代价很具体：一张 jpg 被 `ReadAsStringAsync` 当文本读一遍、再送进 `RestSeal.Open`，报出来的是"这个地址可能指向了别的服务、或被反向代理拦下了"——把一个完全成功的取图说成配置错了。所以传输层拆成三块：`OpenAsync`（发送 + 断因）、`FailIfNeeded`（§5.1 错误体→人话，两端共用）、两条读法（文本 / 字节）。字节那条**只在非 2xx 时**把正文读成文本，因为槽位状态就写在错误体的 `hint` 里。
+> 24. **§5.2 那两个字节接口不是密封盒，别拿 JSON 那条通路去读**（W10）。`/api/v1` 的 JSON 回答一律是一轮密封盒，唯独 `GET /api/v1/media/{msg_id}/{idx}` 与 `GET /api/v1/avatars/{sha256(sender_id)}` 是 200 + 原始字节（`DeviceGuard.seal` 由控制器自己决定，字节那条走 `ResponseEntity<byte[]>`）；`Cache-Control: no-store` 禁的是 HTTP 缓存，不禁 §4.5 要求落盘的 media_cache。复用原来那条 `SendAsync` 的代价很具体：一张 jpg 被 `ReadAsStringAsync` 当文本读一遍、再送进 `RestSeal.Open`，报出来的是"这个地址可能指向了别的服务、或被反向代理拦下了"——把一个完全成功的取图说成配置错了。所以传输层拆成三块：`OpenAsync`（发送 + 断因）、`FailIfNeeded`（§5.1 错误体→人话，两端共用）、两条读法（文本 / 字节）。字节那条**只在非 2xx 时**把正文读成文本，因为槽位状态就写在错误体的 `hint` 里。
 > 25. **媒体 404 的 `hint` 就是槽位状态，四种"没有字节"不能塌成一个占位**（W10）。`MediaController` 对没到 `ready` 的槽位回 `404 not_found` + hint=`pending|failed|deleted|purged`，行不存在或桶里字节没了才是 hint=`media`（头像那条是 `avatar`）。全渲染成"图片已失效"会让 §4.5 那个正常的异步抓取窗口看起来像失败，而把 401/5xx 也说成"失效"更是撒谎（那是整片签名接口都坏了，和第 23 条的时钟问题同一个量级）。所以 `MediaState` 有八个值、`Placeholder` 只在"字节不会再来"时给那五个字：`Pending` 继续转圈、`NoSource` 不发请求也不占位（UI 落回首字头像）、`NetworkError` 带原因留给用户点重试、只有 `Failed`/`Deleted`/`Purged`/`Missing` 才是占位。真服务体检⑦ 拿一条服务端并不存在的消息打这一发，确认的就是 `404 hint=media → Missing` 且失败的取图绝不落盘。
 > 26. **缓存键用 `(msg_id, idx, size)` 就是"按 object_key 命名"，但补拉也认得它**（W10）。§4.5 写的是"按 object_key 存"，而 `media[]` 里那个 `key` 只存在于帧内，§3.3 的 `messages` 表只留 `media_status`/`media_count`——**补拉回来的消息没有 key 可读**。对象键本身是 `media/{msg_id}/{idx}` 的确定性拼法（探针 ⑲ 逐帧确认过），所以两种写法等价，但只有前者能让"实时下发时看过的那张图"和"重启后补拉再渲染一次"落在同一个键上，而这条正是验收① 的前提。磁盘文件名取键的 UTF-8 **十六进制**（可逆）：按消息清理只需扫 `hex(msg_id + "#")` 这个前缀，不必为每个对象再维护一份索引；键长到文件名顶不住时退化成整串键的 sha256，代价只是那一条等 LRU 淘汰。缩略图与原图必须两个键（`#t`/`#f`），否则点开大图会把 512px 的小图当原图显示。
 > 27. **头像只进内存，而且"这一帧没带头像"不是失败**（W10）。下发的 `sender_avatar` 是服务端 SQL 现算的那条路径（`avatar_key IS NULL → NULL`），加上转存本来就是异步的，首帧通常是 NULL ⇒ 客户端要分清 `NoSource`（不发请求，UI 落回 `sender_id` 首字占位）和 `Missing`（真 404）。头像对象按 (频道, 发送者)**覆盖写**、token 是 `sha256hex(sender_id)` 永远不变，落盘等于把换掉的头像永久留在这台机器上且再也刷不掉，所以 `MediaCache.Put` 开了 `persist: false` 这一档。磁盘命中时拿不到当初的 Content-Type，由 `ImageMime.Sniff` 按魔数认回来——敢这么做的依据是 §4.5 入库前的 MIME 白名单 + 魔数复验，桶里只可能是 jpeg/png/webp/gif（SVG 在服务端就被拒了）。

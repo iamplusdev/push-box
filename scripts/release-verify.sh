@@ -475,6 +475,107 @@ for doc in "${REQUIRED_DOCS[@]}"; do
     fi
 done
 
+# 文档里写到的端点路径，必须真的能在 controller 注解里找到。
+# 这一条是 2026-10-20 那轮文档复核逼出来的：deploy/QUICK-WSL-TEST.md 里的
+# /api/v1/admin/messages/search 从来没有存在过（真实路径是 GET /api/v1/admin/messages?q=），
+# docs/AUDIT-REPORT.md 又用 6 个抽查项写下"所有管理台端点完全一致"——两份文档互相引用，
+# 谁也没发现对端是个不存在的地址。写给人看的判据会腐烂，所以这条交给机器跑。
+# 判据里不写死"多少个端点"：条数跟着代码与文档一起动，写死就变成下一条会腐烂的断言。
+pb_routes_from_code() {
+    local f base p
+    for f in "$ROOT_DIR"/server/src/main/java/dev/pushbox/server/web/*.java; do
+        base=$(grep -oP '^@RequestMapping\("\K[^"]+' "$f" | head -1 || true)
+        {
+            # 方法级：@GetMapping("/x")，以及 @PostMapping(path = "${pb.ingest.base-path:/message}")
+            grep -oP '^\s+@(Get|Post|Put|Delete|Patch)Mapping\(\s*(path\s*=\s*)?"\K[^"]+' "$f" || true
+            # 光有注解没有路径的（@GetMapping 独占一行）映射到类级前缀本身
+            grep -qP '^\s+@(Get|Post|Put|Delete|Patch)Mapping\s*$' "$f" && echo
+        } | while read -r p; do
+            case "$p" in
+                '${'*'}'*) p="${p#*:}"; p="${p%\}*}" ;;   # 取占位符里的默认值
+            esac
+            printf '%s%s\n' "$base" "$p"
+        done
+    done
+    # WebSocket 端点不在 controller 注解里，是 registry.addHandler(handler, "/ws")
+    grep -rhoP 'addHandler\([^,]*,\s*"\K[^"]+' "$ROOT_DIR"/server/src/main/java --include=*.java || true
+}
+
+# 文档里的路径先归一化再比：`{channelNo}` 与 `{}` 与 `12345678` 与一串 ULID 都是同一个位置上的
+# 一个段，逐字比较会把真实存在的端点误报成不存在（误报多了，这条闸就没人看了）。
+pb_norm_route() {
+    awk -F/ '{
+        out = ""
+        for (i = 1; i <= NF; i++) {
+            s = $i
+            if (s ~ /^\{/) s = "{}"                                       # {msgId} / 未闭合的 {sha256…
+            else if (s ~ /^[0-9]+$/ || (length(s) >= 20 && s ~ /^[0-9A-Za-z]+$/)) s = "{}"
+            out = out (i > 1 ? "/" : "") s
+        }
+        sub(/\/$/, "", out)
+        print out
+    }'
+}
+
+pb_doc_routes() {
+    grep -rhoP '/api/v1/[A-Za-z0-9_/{}.\-]*|(?<![\w/.-])(?:/message|/healthz|/ws)\b' \
+        "$ROOT_DIR"/site/*.html "$ROOT_DIR"/README.md "$ROOT_DIR"/CHANGELOG.md \
+        "$ROOT_DIR"/RELEASE-CHECKLIST.md "$ROOT_DIR"/docs/*.md "$ROOT_DIR"/deploy/*.md 2>/dev/null \
+        | pb_norm_route | sort -u
+}
+
+# $1 = 真实路由（已把 {} 换成 [^/]+）；stdin = 待验路径。/api/v1 与 /api/v1/admin 是前缀不是路由。
+pb_routes_missing() {
+    local patterns="$1" d
+    while IFS= read -r d; do
+        [ -z "$d" ] && continue
+        case "$d" in /api/v1 | /api/v1/admin) continue ;; esac
+        printf '%s\n' "$d" | grep -qxE -f <(printf '%s\n' "$patterns") || printf '%s\n' "$d"
+    done
+}
+
+PB_REAL_ROUTES=$(pb_routes_from_code | sed 's|{[A-Za-z0-9_]*}|[^/]+|g' | grep -v '^$' | sort -u)
+PB_ROUTE_COUNT=$(printf '%s\n' "$PB_REAL_ROUTES" | wc -l)
+if [ "$PB_ROUTE_COUNT" -lt 10 ]; then
+    fail "从代码里只提取到 $PB_ROUTE_COUNT 条路由，判据本身坏了（正常应有几十条），这一轮的端点核对不作数"
+else
+    PB_MISSING_ROUTES=$(pb_doc_routes | pb_routes_missing "$PB_REAL_ROUTES")
+    if [ -z "$PB_MISSING_ROUTES" ]; then
+        pass "文档里写到的端点路径全部存在于代码（代码侧 $PB_ROUTE_COUNT 条路由）"
+    else
+        fail "文档里写到的端点路径在代码里找不到（$(printf '%s\n' "$PB_MISSING_ROUTES" | wc -l) 条）："
+        while IFS= read -r line; do echo "        · $line"; done <<< "$PB_MISSING_ROUTES"
+        echo "    要么改文档，要么这个端点真的还没实现——别让下一份文档继续抄它。"
+    fi
+
+    # 反向验证：喂一条从来没存在过的路径，必须被抓出来。
+    # 不加这一句，"提取到 0 条路由所以谁都匹配不上"和"文档全对"都显示成 PASS。
+    if printf '%s\n' '/api/v1/admin/messages/search' | pb_routes_missing "$PB_REAL_ROUTES" \
+        | grep -q '/api/v1/admin/messages/search'; then
+        pass "端点闸能抓到不存在的端点（反向验证：/api/v1/admin/messages/search）"
+    else
+        fail "端点闸的判据坏了：一条不存在的端点路径没有被抓出来"
+    fi
+fi
+
+# 文档站的导航完整性：admin-api.html 有 16 个端点的完整契约，页面之间互相链到才有用。
+# 判据不列页面名单——加新页面时不该顺手来改这条。
+if [ -f "$ROOT_DIR/site/admin-api.html" ]; then
+    pass "site/admin-api.html 存在"
+    UNLINKED=""
+    for page in "$ROOT_DIR"/site/*.html; do
+        grep -q 'client-api\.html' "$page" || continue            # 没有文档侧栏的页面不参与
+        grep -q 'admin-api\.html' "$page" || UNLINKED="$UNLINKED $(basename "$page")"
+    done
+    if [ -z "$UNLINKED" ]; then
+        pass "每个带文档侧栏的页面都链到了管理台 API"
+    else
+        fail "这些页面的侧栏缺管理台 API 链接：$UNLINKED"
+    fi
+else
+    fail "site/admin-api.html 缺失：管理台那 16 个端点又没有文档了"
+fi
+
 # ========================================
 # 7. Git 状态检查
 # ========================================
