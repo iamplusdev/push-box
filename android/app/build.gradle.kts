@@ -30,6 +30,32 @@ val localProps = Properties().apply {
 
 fun localSigningProp(key: String): String? = localProps.getProperty(key)?.takeIf { it.isNotBlank() }
 
+// CI 的 keystore 由 ANDROID_KEYSTORE_BASE64 提供，要的是"一整行标准 base64 字母表"。
+// 直接让 Base64.getDecoder() 抛的话，日志里只剩 `Illegal base64 character 2d` 一句，看不出是
+// 粘错了格式（Windows 的 certutil -encode 会带 -----BEGIN/END----- 包头）还是 secret 被改坏，
+// 而这一条红掉就等于发不出包。所以把"看到了什么形状"说清楚再失败——注意这一串本身就是密钥
+// 材料，只能报形状与长度，绝不能把内容或片段打进日志。
+fun decodeReleaseKeystore(raw: String): ByteArray {
+    val s = raw.trim()
+    try {
+        return Base64.getDecoder().decode(s)
+    } catch (_: IllegalArgumentException) {
+        val shape = listOfNotNull(
+            "长度 ${s.length}",
+            if (s.contains("-----")) "含 PEM 包头/包尾（-----BEGIN / -----END）" else null,
+            if (s.any { it == '-' || it == '_' }) "含 base64url 的 - 或 _" else null,
+            if (s.any { it.isWhitespace() }) "含换行或空格" else null,
+            if (s.none { it == '+' || it == '/' }) "不含标准字母表特有的 + 或 /" else null,
+        ).joinToString("，")
+        error(
+            "ANDROID_KEYSTORE_BASE64 不是标准 base64（$shape）。这里要的是下面命令的**一整行**输出：\n" +
+                "  Linux/macOS： base64 -w0 android/dev/pushbox-release.jks\n" +
+                "  PowerShell ： [Convert]::ToBase64String([IO.File]::ReadAllBytes(\"android\\dev\\pushbox-release.jks\"))\n" +
+                "`certutil -encode` 那种带 PEM 包头的产物不能用（它加 -----BEGIN/END----- 与换行）。"
+        )
+    }
+}
+
 val localKeystoreFile = rootProject.file("dev/pushbox-release.jks")
 val hasLocalSigning = localKeystoreFile.exists() &&
     listOf("pushbox.signing.storePassword", "pushbox.signing.keyPassword").all { localSigningProp(it) != null }
@@ -55,7 +81,7 @@ android {
             create("release") {
                 val file = layout.buildDirectory.file("pb-release.keystore").get().asFile
                 file.parentFile?.mkdirs()
-                file.writeBytes(Base64.getDecoder().decode(System.getenv("ANDROID_KEYSTORE_BASE64")))
+                file.writeBytes(decodeReleaseKeystore(System.getenv("ANDROID_KEYSTORE_BASE64")))
                 storeFile = file
                 storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("ANDROID_KEY_ALIAS")

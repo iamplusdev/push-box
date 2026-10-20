@@ -2,7 +2,14 @@ name: Build Android APK
 
 # 推 main 打包并挂成 workflow artifact（每次都能下载测试）；打 v* 标签时额外发布到 GitHub Release。
 # 需要配的 Secrets（release 必须签名：未配置或误用 debug 签名一律判失败，不再回退 debug）：
-#   ANDROID_KEYSTORE_BASE64   release keystore 的 base64（keytool 生成后 base64 -w0 keystore.jks）
+#   ANDROID_KEYSTORE_BASE64   release keystore 的 base64，要求"一整行标准字母表"：
+#                             Linux/macOS  base64 -w0 android/dev/pushbox-release.jks
+#                             PowerShell   [Convert]::ToBase64String([IO.File]::ReadAllBytes("android\dev\pushbox-release.jks"))
+#                             写入用  gh secret set ANDROID_KEYSTORE_BASE64 --body "$(base64 -w0 android/dev/pushbox-release.jks)"
+#                             不能是 certutil -encode 那种带 -----BEGIN/END----- 包头的产物，也不能是 base64url（含 -/_）；
+#                             2026-10-20 那次 run 39375007556 就是红在这里，报的是一句看不出所以然的
+#                             "Illegal base64 character 2d"（2d = '-'）。现在 app/build.gradle.kts 会把
+#                             看到的形状（长度 / 有无 PEM 包头 / 有无换行）报出来再失败，不打印内容。
 #   ANDROID_KEYSTORE_PASSWORD keystore 口令
 #   ANDROID_KEY_ALIAS         别名
 #   ANDROID_KEY_PASSWORD      私钥口令（多数与 keystore 口令相同）
@@ -77,29 +84,6 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x android/gradlew
-
-      # 这一步就是定根因的那一步：它打出来的 502/502/502 说明 runner 打 maven.aliyun.com 整片被拒，
-      # 而当时镜像写在 android/settings.gradle.kts 的 pluginManagement 最前面，KSP 的插件 marker 因此
-      # 被报成"六个仓库都没有"（本机在墙内看不见这个 502，所以本地一直绿）。
-      # 口径已改成"默认官方源、开发机用 local.properties 的 pb.maven.cnMirror=true 开镜像"，
-      # 所以这条链一旦跑绿就该删掉这一步——留着就是每次三行没有意义的 502。
-      - name: 探测插件仓库对 KSP marker 的响应
-        run: |
-          set -uo pipefail
-          V=$(grep -m1 -oE '^ksp = "[^"]*"' android/gradle/libs.versions.toml | sed -E 's/.*"([^"]*)".*/\1/')
-          [ -n "$V" ] || { echo "读不到 ksp 版本，跳过探测"; exit 0; }
-          P="com/google/devtools/ksp/com.google.devtools.ksp.gradle.plugin/$V/com.google.devtools.ksp.gradle.plugin-$V.pom"
-          echo "KSP marker：$V"
-          for base in https://maven.aliyun.com/repository/google \
-                      https://maven.aliyun.com/repository/public \
-                      https://maven.aliyun.com/repository/gradle-plugin \
-                      https://dl.google.com/dl/android/maven2 \
-                      https://repo.maven.apache.org/maven2 \
-                      https://plugins.gradle.org/m2 ; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 20 "$base/$P")
-            [ "$code" = 000 ] && code="连接失败"
-            echo "  $code  $base"
-          done
 
       # release APK 由 build.gradle.kts 的 env 驱动 signingConfig 直接签名产出（不再走 debug 兜底）。
       - name: Build release APK
