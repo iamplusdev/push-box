@@ -7,8 +7,10 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.mybatisflex.core.row.Row;
 import dev.pushbox.server.repo.PbStore;
 import dev.pushbox.server.service.ChannelService;
 import dev.pushbox.server.service.DeviceService;
@@ -29,6 +31,10 @@ import org.springframework.mock.web.MockHttpServletRequest;
  * 于是 500 + Spring 默认错误体，与全站 {@code {ok,error,hint}} 纪律两套形状）。
  * 2026-10-20 在活服务端上逐个打坏请求体实测到的就是后者，收口因此落在 {@link RequestBodyJson}，
  * 设备侧那八个端点共用同一处。
+ *
+ * <p>⑥⑦ 管的是同一道门后面那一步：{@code POST /admin/channels} 的 {@code groupId} 从 2026-10-21
+ * 起必填且必须是 {@code groups} 表里真有的一行，不再回退到 {@link DeviceGuard} 那个虚拟的
+ * {@code "admin"}。
  */
 class AdminControllerBodyTest {
 
@@ -98,16 +104,17 @@ class AdminControllerBodyTest {
   }
 
   @Test
-  @DisplayName("④ 合法请求体照旧进得去：这道修复没把正常路径一起判死")
+  @DisplayName("④ 带真实 groupId 的合法请求体照旧进得去：这道修复没把正常路径一起判死")
   void validBodyStillReachesTheService() {
     when(guard.require(any(), any())).thenReturn(
-        new DeviceGuard.Authenticated(null, "ops-space", "admin"));
+        new DeviceGuard.Authenticated(null, "admin", "admin"));
+    when(store.findGroup("ops-space")).thenReturn(new Row());
     when(channels.create(any(), any(), any(), any())).thenReturn(
         new ChannelService.Created("12345678", "secret-issued-once", "运维播报", "warning", 4));
     Map<String, Object> channel = controller.createChannel(
-        "{\"name\":\"运维播报\"}".getBytes(StandardCharsets.UTF_8), request());
+        "{\"groupId\":\"ops-space\",\"name\":\"运维播报\"}".getBytes(StandardCharsets.UTF_8), request());
     assertThat(channel).containsEntry("ok", true).containsEntry("channel_no", "12345678");
-    // groupId 没提交时用登录态那个 Space，而不是凭空造一个孤立 Space
+    // 频道建在提交的那个 Space 上，不再回退到登录态那个虚拟的 "admin"
     verify(channels).create("ops-space", "运维播报", null, null);
 
     when(scheduledTasks.setEnabled(anyString(), anyBoolean())).thenReturn(Map.of("task_id", "t-1"));
@@ -134,6 +141,46 @@ class AdminControllerBodyTest {
             assertThat(e.toError().hint()).isEqualTo("请求体必须是合法 JSON");
           });
     }
+  }
+
+  @Test
+  @DisplayName("⑥ groupId 省略或空白一律 400：不会再悄悄建进设备查不到的虚拟 admin Space")
+  void missingOrBlankGroupIdIsRejected() {
+    when(guard.require(any(), any())).thenReturn(
+        new DeviceGuard.Authenticated(null, "admin", "admin"));
+    for (byte[] body : new byte[][] {
+        "{\"name\":\"运维播报\"}".getBytes(StandardCharsets.UTF_8),
+        "{\"groupId\":\"\",\"name\":\"运维播报\"}".getBytes(StandardCharsets.UTF_8),
+        "{\"groupId\":\"   \",\"name\":\"运维播报\"}".getBytes(StandardCharsets.UTF_8)}) {
+      assertThatThrownBy(() -> controller.createChannel(body, request()))
+          .isInstanceOfSatisfying(ApiException.class, e -> {
+            assertThat(e.status()).isEqualTo(400);
+            assertThat(e.toError().error()).isEqualTo("invalid_param");
+            assertThat(e.toError().hint()).contains("groupId");
+          });
+    }
+    verifyNoInteractions(channels);
+  }
+
+  @Test
+  @DisplayName("⑦ groups 表里查无此 Space 就 400；提交带空白的合法 id 会 trim 后落库")
+  void unknownGroupIdIsRejectedKnownOneIsTrimmed() {
+    when(guard.require(any(), any())).thenReturn(
+        new DeviceGuard.Authenticated(null, "admin", "admin"));
+    assertThatThrownBy(() -> controller.createChannel(
+        "{\"groupId\":\"ghost\",\"name\":\"运维播报\"}".getBytes(StandardCharsets.UTF_8), request()))
+        .isInstanceOfSatisfying(ApiException.class, e -> {
+          assertThat(e.status()).isEqualTo(400);
+          assertThat(e.toError().hint()).contains("groupId 不存在");
+        });
+    verifyNoInteractions(channels);
+
+    when(store.findGroup("ops-space")).thenReturn(new Row());
+    when(channels.create(any(), any(), any(), any())).thenReturn(
+        new ChannelService.Created("12345678", "secret", "运维播报", "info", 4));
+    controller.createChannel(
+        "{\"groupId\":\" ops-space \",\"name\":\"运维播报\"}".getBytes(StandardCharsets.UTF_8), request());
+    verify(channels).create("ops-space", "运维播报", null, null);
   }
 
   private static String repeat(String unit, int times) {

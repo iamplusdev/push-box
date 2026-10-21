@@ -53,7 +53,7 @@ public class AdminController {
   public Map<String, Object> createChannel(@RequestBody byte[] body, HttpServletRequest http) {
     DeviceGuard.Authenticated auth = guard.require(http, null);
     CreateChannelRequest request = readCreateChannel(body);
-    String groupId = request.groupId() != null ? request.groupId() : auth.groupId();
+    String groupId = requireKnownGroup(request.groupId());
     ChannelService.Created created = channels.create(groupId, request.name(), request.maxLevel(), request.maxImages());
     Map<String, Object> resp = new LinkedHashMap<>();
     resp.put("ok", true);
@@ -287,6 +287,27 @@ public class AdminController {
       throw ApiException.invalidParam("请求体过大");
     }
     return RequestBodyJson.read(body, CreateChannelRequest.class);
+  }
+
+  /**
+   * 频道必须建在一个真实存在的 Space 上，不接受"没提交就用登录态那个"。
+   *
+   * <p>管理台的 JWT 没有对应 device row，{@link DeviceGuard} 给的是虚拟身份
+   * {@code Authenticated(null, "admin", "admin")}，它的 {@code groupId()} 是字符串 {@code "admin"}，
+   * {@code groups} 表里并没有这一行。而设备侧的频道列表按 group_id 过滤
+   * （{@code PbStore.listChannels(groupId)}），所以回退出去的频道建得过、存得下、
+   * 但任何设备都永远查不到——只有照着 {@code site/admin-api.html} 用 curl 的人会踩到，
+   * 管理台界面本身没有新建频道的入口。
+   */
+  private String requireKnownGroup(String groupId) {
+    if (groupId == null || groupId.isBlank()) {
+      throw ApiException.invalidParam("缺少 groupId：频道要建在设备所在的那个 Space 下，否则设备查不到");
+    }
+    String trimmed = groupId.trim();
+    if (store.findGroup(trimmed) == null) {
+      throw ApiException.invalidParam("groupId 不存在：这个 Space 里还没有设备注册过");
+    }
+    return trimmed;
   }
 
   private ScheduledTaskService.TaskInput readTaskInput(byte[] body) {
