@@ -269,7 +269,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 | `node deploy/probe/p0-e2e.mjs` | 端到端协议（**0 失败**；条数以脚本末行的 `N/N` 为准） |
 | `cd android && ./gradlew :app:assembleDebug` | Android 编译通过 |
 | `cd web-admin && npm ci && npm run build` | 管理台 `vue-tsc` 类型检查与 `dist/` 产物 |
-| `dotnet test windows/PushBox.sln` | C# 协议向量 + 客户端逻辑（**556/556**） |
+| `dotnet test windows/PushBox.sln` | C# 协议向量 + 客户端逻辑（**554/554**，去掉会话筛选用例后） |
 | `dotnet run --project windows/PushBox.LiveCheck` | PC 端真服务端判据（**12/12**） |
 
 ---
