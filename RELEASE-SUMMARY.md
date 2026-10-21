@@ -106,7 +106,7 @@
 | [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md) | 发布前逐项人工确认 |
 | [CHANGELOG.md](CHANGELOG.md) | v1.0.0 变更摘要 |
 | [docs/开发轮次记录.md](docs/开发轮次记录.md) | 内部轮次（v1.26 及更早）的原始记录 |
-| [docs/CODESIGN-GUIDE.md](docs/CODESIGN-GUIDE.md) | Windows 代码签名证书方案 |
-| [docs/R8-CONFIGURATION.md](docs/R8-CONFIGURATION.md) | Android 混淆配置与验证 |
-| [docs/PushBox-软件设计方案.md](docs/PushBox-软件设计方案.md) | 设计与决策依据 |
+| [docs/代码签名指南.md](docs/代码签名指南.md) | Windows 代码签名证书方案 |
+| [docs/R8混淆配置指南.md](docs/R8混淆配置指南.md) | Android 混淆配置与验证 |
+| [docs/软件设计方案.md](docs/软件设计方案.md) | 设计与决策依据 |
 | [deploy/QUICK-START.md](deploy/QUICK-START.md) | 5 分钟部署 |

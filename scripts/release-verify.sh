@@ -90,7 +90,7 @@ fi
 # 测试指南、RELEASE-CHECKLIST/SUMMARY、CHANGELOG 与 site/ 都写着 "core 38 + server 223"。
 # v1.1.0 这轮抓到过四处同时挂着两版之前的 197/553，靠人肉对齐一定会漏，所以现读现比：
 # 以 ci.yml 里的基线为唯一真值，把上面这些文件里出现的 (core + server) 求和后比对。
-# docs/AUDIT-REPORT.md 不在扫描范围内——它有意把"旧声称值"和"复验值"并排留着当证据，
+# docs/审计报告.md 不在扫描范围内——它有意把"旧声称值"和"复验值"并排留着当证据，
 # 一份文档里同时存在两个数，任何单值判据都会在那里误报。
 CI_BASELINE=$(grep -oE 'if tests < [0-9]+' "$ROOT_DIR/.github/workflows/ci.yml" | grep -oE '[0-9]+' | tail -1)
 TEST_COUNT_PATTERN='(core [0-9]+ \+ server [0-9]+|server [0-9]+ \+ core [0-9]+)'
@@ -389,7 +389,7 @@ else
     fail "build-msi.yml 缺少代码签名配置"
 fi
 
-if [ -f "$ROOT_DIR/docs/CODESIGN-GUIDE.md" ]; then
+if [ -f "$ROOT_DIR/docs/代码签名指南.md" ]; then
     pass "代码签名指南文档存在"
 else
     warn "代码签名指南文档缺失"
@@ -467,9 +467,9 @@ REQUIRED_DOCS=(
     "LICENSE"
     "CHANGELOG.md"
     "RELEASE-CHECKLIST.md"
-    "docs/UX-Improvements-Summary.md"
-    "docs/R8-CONFIGURATION.md"
-    "docs/CODESIGN-GUIDE.md"
+    "docs/交互体验改进总结.md"
+    "docs/R8混淆配置指南.md"
+    "docs/代码签名指南.md"
 )
 
 for doc in "${REQUIRED_DOCS[@]}"; do
@@ -484,7 +484,7 @@ done
 # 文档里写到的端点路径，必须真的能在 controller 注解里找到。
 # 这一条是 2026-10-20 那轮文档复核逼出来的：deploy/QUICK-WSL-TEST.md 里的
 # /api/v1/admin/messages/search 从来没有存在过（真实路径是 GET /api/v1/admin/messages?q=），
-# docs/AUDIT-REPORT.md 又用 6 个抽查项写下"所有管理台端点完全一致"——两份文档互相引用，
+# docs/审计报告.md 又用 6 个抽查项写下"所有管理台端点完全一致"——两份文档互相引用，
 # 谁也没发现对端是个不存在的地址。写给人看的判据会腐烂，所以这条交给机器跑。
 # 判据里不写死"多少个端点"：条数跟着代码与文档一起动，写死就变成下一条会腐烂的断言。
 pb_routes_from_code() {

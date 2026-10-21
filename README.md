@@ -13,7 +13,7 @@
 
 ### 开发者
 
-- 🏗️ [软件设计方案](docs/PushBox-软件设计方案.md) - 架构、协议、加密、数据模型（权威技术参考）
+- 🏗️ [软件设计方案](docs/软件设计方案.md) - 架构、协议、加密、数据模型（权威技术参考）
 - 💻 [开发指南](docs/开发指南.md) - 环境搭建、构建流程、调试技巧
 - 🧪 [测试指南](docs/测试指南.md) - 单测、集成测试、端到端测试、真机走查清单
 - 🔧 [Windows 开发环境安装教程](docs/Windows开发环境安装教程.md) - .NET SDK / Rider / Inno Setup 安装
@@ -226,7 +226,7 @@ curl -sS http://127.0.0.1:7404/message -H 'Content-Type: application/json' \
   --data-binary @payload.json
 ```
 
-接口参考按鉴权分成三页，别混用（[入站 API](site/api.html) 写消息进来 / [客户端 API](site/client-api.html) 设备读自己的 Space / [管理台 API](site/admin-api.html) 一条口令换 24h JWT、跨 Space 运维）；协议与数据模型的权威描述在 [软件设计方案](docs/PushBox-软件设计方案.md)。
+接口参考按鉴权分成三页，别混用（[入站 API](site/api.html) 写消息进来 / [客户端 API](site/client-api.html) 设备读自己的 Space / [管理台 API](site/admin-api.html) 一条口令换 24h JWT、跨 Space 运维）；协议与数据模型的权威描述在 [软件设计方案](docs/软件设计方案.md)。
 
 ---
 
@@ -292,7 +292,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 - **Web 管理台面和业务 API 挂在同一个端口上，默认公网可达**：`/api/v1/admin/*` 前面只有登录口令加一把 24 小时的 HS256 JWT；`deploy/Caddyfile` 只 403 掉 `/actuator/*`，服务端 `InternalAccessFilter` 的白名单也只覆盖 `/healthz` 与 `/actuator/**`。所以"管理台在内网"不是软件给的保证，是部署者要做的事（收紧办法见 [SECURITY.md](SECURITY.md) 的「部署侧该自己做的事」与 `deploy/Caddyfile` 里那段注释示例）。
 - **那把管理台 JWT 不能刷新、也不能吊销**：签名钥是独立的 `PB_ADMIN_JWT_SECRET`，所以改登录口令 `PB_ADMIN_SECRET` 不会让已签出去的 token 失效；能做的事只有等它按 `exp` 自然过期（≤24h），或换掉 `PB_ADMIN_JWT_SECRET`（代价是所有会话都要重新登录）。口令被刷的按 IP 锁定是**进程内 Caffeine**（`AbuseControlService.adminLoginAttempts`，代码注释里写明了"登录没有对应的库行可写"）——重启清零、多实例不共享。
 
-详见 [软件设计方案 §1](docs/PushBox-软件设计方案.md)。
+详见 [软件设计方案 §1](docs/软件设计方案.md)。
 
 ---
 
@@ -314,7 +314,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 - 必需：`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`（Docker Hub access token，不是登录密码）。
 - 必需（APK 工作流）：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。release 签名由这四个环境变量驱动，缺任何一个 `assembleRelease` 就地失败——debug 包不能升级成 release 包（签名不符，`INSTALL_FAILED_UPDATE_INCOMPATIBLE`），客户端也只认 `pushbox-release-*` 资产。
-- 可选（Windows 代码签名）：`CODESIGN_CERT_BASE64`、`CODESIGN_PASSWORD`，见 [docs/CODESIGN-GUIDE.md](docs/CODESIGN-GUIDE.md)；不配则产物未签名、首启有 SmartScreen 提示。
+- 可选（Windows 代码签名）：`CODESIGN_CERT_BASE64`、`CODESIGN_PASSWORD`，见 [docs/代码签名指南.md](docs/代码签名指南.md)；不配则产物未签名、首启有 SmartScreen 提示。
 
 ### 应用内更新
 

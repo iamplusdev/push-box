@@ -27,7 +27,7 @@ body:
     id: boundaries
     attributes:
       label: 与现有设计口径的冲突（先自查，能少走弯路）
-      description: 详见 README「信任边界」与 docs/PushBox-软件设计方案.md §1
+      description: 详见 README「信任边界」与 docs/软件设计方案.md §1
       options:
         - label: 我不需要端到端加密（方案里已否决，代价是服务端不能搜索/摘要/抓图）
           required: false

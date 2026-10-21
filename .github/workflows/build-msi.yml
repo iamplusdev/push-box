@@ -173,7 +173,7 @@ jobs:
           if [ -z "$CERT_B64" ]; then
             NOTE="$NOTE
 
-          **Windows 安装包未签名**（仓库没配 CODESIGN_CERT_BASE64）：首次运行 setup.exe 时 Windows 会弹一层「Windows 保护了你的电脑」，点「更多信息」→「仍要运行」即可继续安装。配置代码签名证书后这一段自动消失，见 docs/CODESIGN-GUIDE.md。"
+          **Windows 安装包未签名**（仓库没配 CODESIGN_CERT_BASE64）：首次运行 setup.exe 时 Windows 会弹一层「Windows 保护了你的电脑」，点「更多信息」→「仍要运行」即可继续安装。配置代码签名证书后这一段自动消失，见 docs/代码签名指南.md。"
           fi
           gh release create "$TAG" --target "$SHA" --title "PushBox $TAG" --notes "$NOTE" --verify-tag 2>/dev/null || true
           shopt -s nullglob
