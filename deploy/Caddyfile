@@ -26,4 +26,28 @@
 	# 两道门任一道生效即可，但别只依赖其中一道。
 	@metrics path /actuator/*
 	respond @metrics 403
+
+	# 管理台默认和业务 API 一样公网可达：上面那条只挡 /actuator/*，不管 /api/v1/admin/*。
+	# 想把它收成"只有指定来源能用"，取消下面这段注释并按自己的网段改 remote_ip 那一行。
+	# 写法必须是这种嵌套 handle——实测另一种"@name path … not remote_ip …"的合并匹配器
+	# 在白名单命中时也返回 403（等于把管理台自己也关在外面），嵌套这份四种用例都对：
+	# 白名单内→正常反代、白名单外→403、其它路径与 /actuator 不受牵连。
+	#
+	# 一个前提：remote_ip 比的是 Caddy 看到的**对端地址**。如果这台前面还有一层 Nginx/云 LB 做
+	# TLS 终止，对端就是那层代理的地址，白名单要么写成代理的地址（等于没限制），要么给 Caddy
+	# 配 trusted_proxies + X-Forwarded-For。
+	#
+	# 验这道门（也包括上面那条 /actuator）时 curl 必须带上本站的 Host：Host 不匹配
+	# PB_CADDY_HOST 时 Caddy 给的是一个空 200，看着像"放行"其实根本没进这个站点块。
+	#   curl -s -o /dev/null -w '%{http_code}\n' -H "Host: localhost" http://127.0.0.1/actuator/prometheus
+	# 期望 403；同一句去掉 -H 会得到 200，那是兜底响应，不是这条规则失效。
+	#
+	#	@admin path /api/v1/admin/*
+	#	@internal remote_ip 127.0.0.1 10.0.0.0/8 192.168.0.0/16
+	#	handle @admin {
+	#		handle @internal {
+	#			reverse_proxy pushbox-server:{$PB_SERVER_PORT:7404}
+	#		}
+	#		respond 403
+	#	}
 }

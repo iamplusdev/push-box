@@ -32,4 +32,5 @@ PushBox 是自托管的消息推送中枢，安全口径写在 [README 的"信�
 - `PB_ADMIN_SECRET` 与 `PB_ADMIN_JWT_SECRET` 必须是两个不同的强随机值（`openssl rand -base64 32`）；相同或过短会被启动阶段直接拒绝。
 - 必填变量缺失时 compose 在 `up` 之前就报错，别用"看起来起来了"当验收；桶是否存在要用 `mc ls` 判，不是 `/healthz`。
 - 运维端点靠两道门：`deploy/Caddyfile` 的 `@metrics path /actuator/*` → `respond 403`，以及服务端 `InternalAccessFilter` 只放行环回加 `PB_SECURITY_INTERNAL_CIDRS`。任何一道都不该被当成全部依赖。
+- **管理台没有第三道门，要自己加**：`/api/v1/admin/*` 与业务 API 同端口同反代，上面那两条 `@metrics` 规则都不覆盖它，公网部署时它默认就是公网可达。挡住它的只有 `PB_ADMIN_SECRET` 加一把 24 小时 JWT，而这把 token **既不刷新也不吊销**（签名钥是独立的 `PB_ADMIN_JWT_SECRET`，改登录口令不会让已签出的 token 失效；泄露了只能等它过期或换签名钥、代价是所有会话重登）。口令被刷的按 IP 锁定写在 `AbuseControlService.adminLoginAttempts`，是进程内 Caffeine：重启清零、多实例不共享。收紧来源的可用写法见 `deploy/Caddyfile` 末尾那段注释示例；不想动反代就换个只监听内网的端口把 `/admin` 与 `/api/v1/admin` 单独暴露。
 - 备份产物必须加密后才出机器（`deploy/backup/backup.sh` + age）。
