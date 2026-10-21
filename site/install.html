@@ -82,11 +82,13 @@ SELECT @@ngram_token_size;              -- 期望 2</code></pre>
 
   <h3>② 凭据：只走环境变量</h3>
   <p>这是一条硬规则。配置文件里出现明文口令就算事故——它会随仓库和 <code>mvn package</code> 打出来的 jar 一起出去。</p>
-  <pre class="code" data-code="bash"><code>cp deploy/env/prod.env.example deploy/env/local.env    # local.env 已在 .gitignore
-# 要填：PB_DB_PASSWORD、PB_S3_ACCESS_KEY、PB_S3_SECRET_KEY（开 sse-c 再加 PB_S3_MASTER_KEY）</code></pre>
+  <pre class="code" data-code="bash"><code>cp deploy/env/local.env.example deploy/env/local.env   # local.env 已在 .gitignore
+# 本机起步只必填一项：PB_DB_PASSWORD
+# 要走对象存储再加三项：PB_S3_ENDPOINT、PB_S3_ACCESS_KEY、PB_S3_SECRET_KEY（开 sse-c 再加 PB_S3_MASTER_KEY）</code></pre>
   <p><code>application-dev.yml</code> 里 <code>password: ${PB_DB_PASSWORD}</code><b>刻意不留默认值</b>：忘了 source 就该启动失败，而不是拿空口令去连库、把配置问题伪装成 <code>Access denied</code>。</p>
+  <p><b>dev 的存储默认是 <code>local</code></b>（<code>pb.storage.type: ${PB_STORAGE_TYPE:local}</code>，图片落 <code>./data/media</code>），所以"起一个能收消息的本机服务端"不需要任何桶：<code>set -a &amp;&amp; . deploy/env/local.env &amp;&amp; set +a &amp;&amp; java -jar server/target/*.jar</code> 一条命令就完事。<code>DevCredentialsGuard</code> 按这个判据点名——<b>缺什么只报什么</b>，跑 local 时不会在报错里出现 <code>PB_S3_ENDPOINT</code> 这种用不到的键；显式 <code>PB_STORAGE_TYPE=s3</code> 时那三项才一起变成必填。prod 不归它管（容器里由 compose 的 <code>${VAR:?}</code> 与 <code>S3Config</code> 守）。</p>
 
-  <h3>③ 对象存储</h3>
+  <h3>③ 对象存储（要用桶时才需要）</h3>
   <ul>
     <li>建一个私有桶（默认名 <code>pushbox</code>）。<b>桶不需要匿名可读</b>——读侧走服务端代理，客户端拿签名 GET 要字节。</li>
     <li><code>pb.s3.path-style: true</code> 不是可选项：endpoint 是裸 IP 时虚拟主机风格（<code>bucket.&lt;存储机&gt;:7101</code>）无法解析。</li>
@@ -97,16 +99,16 @@ SELECT @@ngram_token_size;              -- 期望 2</code></pre>
   <h3>④ 构建与运行</h3>
   <pre class="code" data-code="bash"><code>export JAVA_HOME=/path/to/jdk-21        # 机器默认 JAVA_HOME 常常是 JDK 8
 mvn -B -DskipTests package              # server/target/pushbox-server-1.1.0.jar
-bash deploy/run-dev.sh                  # 默认 8080；脚本自己 source deploy/env/local.env</code></pre>
+bash deploy/run-dev.sh                  # 默认 7404；脚本自己 source deploy/env/local.env</code></pre>
   <p>换端口、改配置一律往后加参数即可（Spring 的命令行覆盖比改 YAML 更适合联调）：</p>
   <pre class="code" data-code="bash"><code>bash deploy/run-dev.sh --server.port=8081 \
   --pb.ws.replay-batch=5 \
   --pb.s3.delete-grace=2s --pb.s3.purge-interval=5s</code></pre>
 
   <h3>⑤ 自检</h3>
-  <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:8080/healthz
+  <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:7404/healthz
 cd deploy/probe &amp;&amp; npm install          # 只需一次（依赖 ws）
-node p0-e2e.mjs                         # 默认打 127.0.0.1:8080；末行 N/N 且 0 失败才算这套装对了
+node p0-e2e.mjs                         # 默认打 127.0.0.1:7404；末行 N/N 且 0 失败才算这套装对了
 PB_BASE=http://127.0.0.1:8081 node p0-e2e.mjs</code></pre>
   <p>探针是一个"软件版 Android 设备"：自己生成两把密钥，逐字节复刻握手、签名、帧加密、补拉与频道接入过滤。它跑通之后，客户端侧只剩 UI 与存储，不会再有协议层意外。</p>
 
@@ -120,15 +122,17 @@ mvn -B -pl core,server test             # 292/292（core 43 + server 249）</cod
 
   <h2 id="prod">生产部署</h2>
 
-  <h3>容器（拓扑 A / B）</h3>
-  <p><code>deploy/Dockerfile</code> 是多阶段构建（Maven 构建层 → <code>temurin:21-jre</code> 运行层，非 root UID 10001）。<code>docker-compose.yml</code> 给两种拓扑：</p>
+  <h3>容器（拓扑 A / B / C）</h3>
+  <p><code>deploy/Dockerfile</code> 是三阶段：<code>node:22-alpine</code> 构建 <code>web-admin</code> → 产物拷进 <code>server/src/main/resources/static</code> → <code>maven:3.9-eclipse-temurin-21</code> 打 fat jar → <code>temurin:21-jre</code> 运行（非 root UID 10001）。<b>也就是说一个镜像同时含服务端与管理台</b>：同一个进程、同一个端口吐 API、WS、入站与页面，同源所以不需要 CORS，反代也不需要第二条规则。<code>docker-compose.yml</code> 给三种拓扑：</p>
   <table>
     <thead><tr><th>拓扑</th><th>起什么</th><th>怎么切</th></tr></thead>
     <tbody>
       <tr><td>A（默认）</td><td><code>pushbox-server</code> + <code>caddy</code></td><td>把 <code>PB_DB_URL</code> / <code>PB_S3_ENDPOINT</code> 指到已有的那台 MySQL / 桶。<b>不要写 <code>SPRING_DATASOURCE_URL</code></b>：prod  profile 里唯一的映射点是 <code>application-prod.yml</code>，两个名字各声称拥有同一个键时，排查盯 yml 会看不出真实取值来自哪</td></tr>
       <tr><td>B（完全独立）</td><td>再加上 <code>mysql:8.4</code>（带 <code>--ngram_token_size=2</code>）与 <code>rustfs</code></td><td>取消 compose 里那两段的注释，地址改回 service-name；嫌手写麻烦可以直接用现成的 <code>docker-compose-wsl.yml</code></td></tr>
+      <tr><td><b>C（不配对象存储）</b></td><td>服务端 + <code>mysql</code>，图片落宿主目录</td><td><code>PB_STORAGE_TYPE=local</code>，<code>PB_S3_*</code> 三项留空即可（compose 已从 <code>${VAR:?}</code> 降成可空，缺了由 <code>S3Config</code> 在 s3 模式下点名）。<b>两件必须记住的事</b>：<code>/app/data/media</code> 要挂卷、目录要归 uid 10001 可写；本地模式仍吃 <code>PB_S3_OBJECT_ENCRYPT</code> 那条明文闸，所以要么 <code>sse-c</code> + 主钥，要么显式 <code>PB_ALLOW_PLAINTEXT_MEDIA=1</code>，否则进程拒绝启动</td></tr>
     </tbody>
   </table>
+  <p>管理台开在<b>根路径 <code>/</code></b>（vite 没配 <code>base</code>，路由是 <code>/dashboard</code>、<code>/channels</code>、<code>/messages</code>……），<b>不是 <code>/admin</code></b>；<code>/admin/*</code> 现在按 <code>SpaWebConfig</code> 的保留名单直接 404，不会再回一段 HTML。不想用 compose 的单容器 <code>docker run</code> 跑法在 <code>deploy/部署快速参考.md</code>「📦 单镜像部署」。</p>
   <pre class="code" data-code="bash"><code>cd deploy
 cp env/prod.env.example .env            # 填真值；.env 不提交
 docker compose up -d                    # 拉 CI 推到 Docker Hub 的镜像
@@ -136,7 +140,7 @@ docker compose up -d                    # 拉 CI 推到 Docker Hub 的镜像
 docker compose up -d --build
 # 监控栈（Prometheus + Grafana）在另一本文件里，要监控才多传一个 -f：
 docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d</code></pre>
-  <div class="callout warn"><b>诚实说明</b><p>生产这套资产在 2026-10-20 用隔离 project <b>真起过一次</b> <code>docker compose up</code>（MySQL / RustFS 复用测试栈），一轮下来撞出并修掉五个"配置里写了、进程不消费"的缺陷——完整清单见 <code>RELEASE-CHECKLIST.md</code> 与 CHANGELOG。<b>还没验过的是另一件事</b>：从 Docker Hub 拉一份 CI 产物、在干净机器上按这份 compose 起起来这条整链。Hub 上现在确有 <code>main</code> 与 <code>sha-f6b9a53</code> 两个标签（2026-10-20 那次 <code>main</code> 推送真推上去的），<code>latest</code> 与版本号标签要等首个 <code>v*</code> tag，但"有标签"不等于"照着这份 compose 拉得动、起得来"——那次实测跑的是本地构建的镜像。真实 TLS/反代前置同样还没验。第一次上生产仍然请留一次现场验证的余量。</p></div>
+  <div class="callout warn"><b>诚实说明</b><p>生产这套资产在 2026-10-20 用隔离 project <b>真起过一次</b> <code>docker compose up</code>（MySQL / RustFS 复用测试栈），一轮下来撞出并修掉五个"配置里写了、进程不消费"的缺陷——完整清单见 <code>发布检查清单.md</code> 与 CHANGELOG。<b>还没验过的是另一件事</b>：从 Docker Hub 拉一份 CI 产物、在干净机器上按这份 compose 起起来这条整链。Hub 上现在确有 <code>main</code> 与 <code>sha-f6b9a53</code> 两个标签（2026-10-20 那次 <code>main</code> 推送真推上去的），<code>latest</code> 与版本号标签要等首个 <code>v*</code> tag，但"有标签"不等于"照着这份 compose 拉得动、起得来"——那次实测跑的是本地构建的镜像。真实 TLS/反代前置同样还没验。第一次上生产仍然请留一次现场验证的余量。</p></div>
 
   <h3>HTTPS 与自签 CA</h3>
   <p>当前联调走的是裸 HTTP（内网）。生产要么用 Caddy 的 Let's Encrypt，要么走自签根 CA。<b>两端接证书的方式完全不同</b>：</p>
@@ -176,7 +180,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk</code></pre>
     <li><b><code>gradle-wrapper.properties</code> 的 <code>distributionUrl</code> 目前指向本地 zip</b>。换机器或要公开构建时改回 <code>https://services.gradle.org/distributions/gradle-9.6.1-all.zip</code>。</li>
     <li><code>settings.gradle.kts</code> 写死了阿里云镜像（全局 <code>~/.gradle/init.gradle</code> 够不到 <code>pluginManagement</code>），内网构建时按需调整。</li>
   </ol>
-  <p><b>连接地址</b>在首启页填：<code>http://10.0.2.2:8080</code>（模拟器访问宿主机）或开发机的局域网地址（真机，须与服务器同网段）。填完走"注册新 Space"或"用恢复码加入"。</p>
+  <p><b>连接地址</b>在首启页填：<code>http://10.0.2.2:7404</code>（模拟器访问宿主机）或开发机的局域网地址（真机，须与服务器同网段）。填完走"注册新 Space"或"用恢复码加入"。</p>
   <p>装机后建议立即做完 <a href="usage.html#keepalive">保活引导</a>——这是本项目体验成败的关键，不依赖厂商推送就要付出让 ROM 放行的代价。</p>
 
   <h2 id="windows">Windows 客户端</h2>
@@ -203,7 +207,7 @@ bash windows/installer/build-installer.sh --skip-publish   # 只改了 .iss 时�
   <p>全在 <code>%LOCALAPPDATA%\PushBox\</code>：<code>identity.json</code>（身份与私钥，DPAPI）、<code>pushbox.db</code>（消息/会话/FTS5/游标）、<code>settings.json</code>（四个开关）、<code>logs\</code>（脱敏留痕）。</p>
 
   <h3>装完先跑两条体检</h3>
-  <pre class="code" data-code="powershell"><code># 十二条真服务端判据（服务端要自己起在 8081，别占用你手上的 8080）
+  <pre class="code" data-code="powershell"><code># 十二条真服务端判据（服务端要自己起在 8081，别占用你手上那个 7404 实例）
 dotnet run --project windows/PushBox.LiveCheck -- http://127.0.0.1:8081
 
 # 不连服务端的系统集成冒烟：HKCU 两处真写进去了、托盘真出来了、toast 真弹出来了
@@ -212,7 +216,7 @@ dotnet run --project windows/PushBox.Windows -- --notify-smoke notify-smoke.txt<
 
   <h2 id="port">端口与交接</h2>
   <ul>
-    <li>服务端默认 <code>8080</code>。联调时代理/脚本一律起在 <code>8081</code>，避免撞上你自己手上那个实例。</li>
+    <li>服务端默认 <code>7404</code>。联调时代理/脚本一律起在 <code>8081</code>，避免撞上你自己手上那个实例。</li>
     <li>Caddy 在 compose 里对外是 80/443，<code>/actuator</code> 与指标端口只绑 127.0.0.1。</li>
     <li>SSRF 闸默认禁抓私网与 <code>100.64.0.0/10</code>。要让服务端去抓内网图片，必须显式把 host 加进 <code>pb.media.allow-hosts</code>（<b>精确 <code>host</code> 或 <code>host:port</code>，不是前缀匹配</b>）。</li>
   </ul>

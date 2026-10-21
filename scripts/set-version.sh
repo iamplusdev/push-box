@@ -18,7 +18,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 if [ $# -gt 0 ]; then
     VERSION="$1"
 elif [ -n "${GITHUB_REF_NAME:-}" ]; then
-    # GitHub Actions 环境：从 tag 提取（v1.25 -> 1.25）
+    # GitHub Actions 环境：从 tag 提取（v1.2.3 -> 1.2.3）
     VERSION="${GITHUB_REF_NAME#v}"
 else
     # 本地开发：从 git describe 获取

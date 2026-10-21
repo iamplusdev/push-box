@@ -126,12 +126,12 @@
   </div>
 
   <h2 id="quickstart">三分钟跑起来</h2>
-  <pre class="code" data-code="bash"><code>cp deploy/env/prod.env.example deploy/env/local.env     # 填 PB_DB_PASSWORD / PB_S3_*
+  <pre class="code" data-code="bash"><code>cp deploy/env/local.env.example deploy/env/local.env    # 起步只必填 PB_DB_PASSWORD
 JAVA_HOME=/path/to/jdk-21 mvn -B -DskipTests package    # 产出 server/target/pushbox-server-1.1.0.jar
-bash deploy/run-dev.sh                                  # 默认 8080，脚本自己 source local.env
+bash deploy/run-dev.sh                                  # 默认 7404，脚本自己 source local.env
 node deploy/probe/p0-e2e.mjs                            # 端到端验收：看末行 N/N，且 0 失败</code></pre>
   <p>然后发第一条消息（入站接口是 <code>POST {base}/message</code>，<b>不在</b> <code>/api/v1</code> 下，凭据在 body 里）：</p>
-  <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:8080/message \
+  <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:7404/message \
   -H 'Content-Type: application/json' \
   --data-binary @payload.json</code></pre>
   <p>字段全表、响应形状、错误码与一个可改参数实时生成 curl 的工具，都在 <a href="api.html">入站 API</a>。三端各自的安装步骤见 <a href="install.html">安装与部署</a>。</p>
@@ -144,7 +144,7 @@ node deploy/probe/p0-e2e.mjs                            # 端到端验收：看�
       <tr><td><code>node deploy/probe/p0-e2e.mjs</code></td><td>逐字节复刻握手、签名、帧加密、补拉与<b>频道接入过滤</b>的端到端验收</td><td>末行 N/N、0 失败</td></tr>
       <tr><td><code>dotnet test windows/PushBox.sln</code></td><td>C# 与 Java 的协议向量对齐 + PC 端每一层逻辑</td><td>556 / 556</td></tr>
       <tr><td><code>dotnet run --project windows/PushBox.LiveCheck</code></td><td>真 WebSocket + 真服务端上的十二条判据</td><td>12 / 12</td></tr>
-      <tr><td>Android 走查</td><td>通知、角标、头像、图片九宫格、断网重连补齐</td><td>发布前逐项走查，判据见 <code>RELEASE-CHECKLIST.md</code></td></tr>
+      <tr><td>Android 走查</td><td>通知、角标、头像、图片九宫格、断网重连补齐</td><td>发布前逐项走查，判据见 <code>发布检查清单.md</code></td></tr>
     </tbody>
   </table>
   <div class="callout warn"><b>还没测的</b><p>小米 / 华为 / OPPO / vivo 的保活与被杀率矩阵只能真机逐品牌跑，模拟器代替不了；深色与字体放大 200% 的系统走查也还没做。</p></div>

@@ -1,6 +1,7 @@
 #!/bin/bash
 # PushBox 发布前自动化验证脚本
-# 用法: bash scripts/release-verify.sh [--skip-build]
+# 用法: bash scripts/release-verify.sh
+# 只做静态检查（配置、文档、闸门一致性），不构建、不跑测试，所以没有 --skip-build 之类的开关。
 
 set -euo pipefail
 
@@ -87,14 +88,14 @@ else
 fi
 
 # 测试计数是第九个自称拥有单一真相的地方，而且和版本号一样是人手抄的：README、开发指南、
-# 测试指南、RELEASE-CHECKLIST/SUMMARY、CHANGELOG 与 site/ 都写着 "core 38 + server 223"。
+# 测试指南、发布检查清单/SUMMARY、CHANGELOG 与 site/ 都写着 "core 38 + server 223"。
 # v1.1.0 这轮抓到过四处同时挂着两版之前的 197/553，靠人肉对齐一定会漏，所以现读现比：
 # 以 ci.yml 里的基线为唯一真值，把上面这些文件里出现的 (core + server) 求和后比对。
 # docs/审计报告.md 不在扫描范围内——它有意把"旧声称值"和"复验值"并排留着当证据，
 # 一份文档里同时存在两个数，任何单值判据都会在那里误报。
 CI_BASELINE=$(grep -oE 'if tests < [0-9]+' "$ROOT_DIR/.github/workflows/ci.yml" | grep -oE '[0-9]+' | tail -1)
 TEST_COUNT_PATTERN='(core [0-9]+ \+ server [0-9]+|server [0-9]+ \+ core [0-9]+)'
-DOC_PATHS=(README.md docs/开发指南.md docs/测试指南.md RELEASE-CHECKLIST.md RELEASE-SUMMARY.md CHANGELOG.md site)
+DOC_PATHS=(README.md docs/开发指南.md docs/测试指南.md 发布检查清单.md 发布准备报告.md CHANGELOG.md site)
 COUNT_HITS=$(git -C "$ROOT_DIR" grep -hhoE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | wc -l)
 COUNT_FILES=$(git -C "$ROOT_DIR" grep -lE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | wc -l)
 DOC_TOTALS=$(git -C "$ROOT_DIR" grep -hhoE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | awk '{print $2 + $5}' | sort -un | tr '\n' ' ')
@@ -243,7 +244,7 @@ done
 # 允许 CIDR 前缀形态（100.64.0.0、192.168.0.0 这类写在网络段说明里的），逐条排除。
 SCAN_TARGETS=(
     "$ROOT_DIR/deploy/env/prod.env.example"
-    "$ROOT_DIR/deploy/QUICK-START.md"
+    "$ROOT_DIR/deploy/部署快速参考.md"
     "$ROOT_DIR/deploy/docker-compose.yml"
     "$ROOT_DIR/deploy/Caddyfile"
     "$ROOT_DIR/deploy/backup/backup.sh"
@@ -328,7 +329,7 @@ else
 fi
 
 # 签名证书指纹的单一来源：android/release-cert.sha256 给 build-apk.yml 现读现比，
-# RELEASE-CHECKLIST.md 那句"每版比对这一串"必须还是同一串。两处分开腐烂过一次，
+# 发布检查清单.md 那句"每版比对这一串"必须还是同一串。两处分开腐烂过一次，
 # 就变成"CI 验的是 A、人写的是 B"，比没验更坏。
 CERT_BASELINE_FILE="$ROOT_DIR/android/release-cert.sha256"
 if [ ! -f "$CERT_BASELINE_FILE" ]; then
@@ -339,8 +340,8 @@ else
         fail "android/release-cert.sha256 不是 64 位小写十六进制（读到：$CERT_BASELINE）"
     elif ! grep -q 'release-cert.sha256' "$ROOT_DIR/.github/workflows/build-apk.yml"; then
         fail "build-apk.yml 没在读 android/release-cert.sha256，签名步退回了只判 debug"
-    elif ! grep -q "$CERT_BASELINE" "$ROOT_DIR/RELEASE-CHECKLIST.md"; then
-        fail "RELEASE-CHECKLIST.md 里的证书指纹与 android/release-cert.sha256（$CERT_BASELINE）不是同一串"
+    elif ! grep -q "$CERT_BASELINE" "$ROOT_DIR/发布检查清单.md"; then
+        fail "发布检查清单.md 里的证书指纹与 android/release-cert.sha256（$CERT_BASELINE）不是同一串"
     else
         pass "证书指纹基线单一来源且 CI 与清单一致（$CERT_BASELINE）"
     fi
@@ -466,7 +467,7 @@ REQUIRED_DOCS=(
     "README.md"
     "LICENSE"
     "CHANGELOG.md"
-    "RELEASE-CHECKLIST.md"
+    "发布检查清单.md"
     "docs/交互体验改进总结.md"
     "docs/R8混淆配置指南.md"
     "docs/代码签名指南.md"
@@ -482,7 +483,7 @@ for doc in "${REQUIRED_DOCS[@]}"; do
 done
 
 # 文档里写到的端点路径，必须真的能在 controller 注解里找到。
-# 这一条是 2026-10-20 那轮文档复核逼出来的：deploy/QUICK-WSL-TEST.md 里的
+# 这一条是 2026-10-20 那轮文档复核逼出来的：deploy/WSL测试速查.md 里的
 # /api/v1/admin/messages/search 从来没有存在过（真实路径是 GET /api/v1/admin/messages?q=），
 # docs/审计报告.md 又用 6 个抽查项写下"所有管理台端点完全一致"——两份文档互相引用，
 # 谁也没发现对端是个不存在的地址。写给人看的判据会腐烂，所以这条交给机器跑。
@@ -526,7 +527,7 @@ pb_norm_route() {
 pb_doc_routes() {
     grep -rhoP '/api/v1/[A-Za-z0-9_/{}.\-]*|(?<![\w/.-])(?:/message|/healthz|/ws)\b' \
         "$ROOT_DIR"/site/*.html "$ROOT_DIR"/README.md "$ROOT_DIR"/CHANGELOG.md \
-        "$ROOT_DIR"/RELEASE-CHECKLIST.md "$ROOT_DIR"/docs/*.md "$ROOT_DIR"/deploy/*.md 2>/dev/null \
+        "$ROOT_DIR"/发布检查清单.md "$ROOT_DIR"/docs/*.md "$ROOT_DIR"/deploy/*.md 2>/dev/null \
         | pb_norm_route | sort -u
 }
 

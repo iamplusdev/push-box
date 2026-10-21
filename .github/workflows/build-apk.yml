@@ -92,7 +92,7 @@ jobs:
 
       # 廉价校验：release APK 必须由正式 keystore 签名。未签名（app-release-unsigned.apk）
       # 或误用 debug 签名的产物一律判失败，绝不把不能安装的包发出去。
-      # 指纹基线在 android/release-cert.sha256（RELEASE-CHECKLIST 的"签名证书与上一版一致"引用同一串）。
+      # 指纹基线在 android/release-cert.sha256（发布检查清单 的"签名证书与上一版一致"引用同一串）。
       # 换 key 是有意的破坏性动作：老用户必须卸载重装、历史消息全丢，所以真要改那一串，
       # 先把这件事写进 CHANGELOG 再改文件，别让它静默跟着 secrets 一起换掉。
       - name: Verify release APK signature

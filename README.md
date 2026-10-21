@@ -125,7 +125,7 @@ curl http://localhost:7404/healthz
 ```
 
 访问浏览器：
-- **Web 管理台**: `https://<PB_CADDY_HOST>/admin`（用 `PB_ADMIN_SECRET` 登录；自签证书要先信任 `deploy/ca` 里那根 CA，或直接改用 `http://<服务器IP>:7404` 走内网明文——服务端只在环回/`PB_SECURITY_INTERNAL_CIDRS` 段放行 `/actuator`，公网打不开它）
+- **Web 管理台**: `https://<PB_CADDY_HOST>/`——注意是**根路径**，不是 `/admin`。管理台 SPA 与 API 打在同一个镜像、由同一个进程在同一个端口上吐出来（`deploy/Dockerfile` 的 node 阶段把 `web-admin/dist` 拷进 jar 的 `classpath:/static/`，`SpaWebConfig` 负责 history 路由的深链回退），所以没有第二个端口、也没有独立的 nginx。用 `PB_ADMIN_SECRET` 登录；自签证书要先信任 `deploy/ca` 里那根 CA，或直接改用 `http://<服务器IP>:7404` 走内网明文——服务端只在环回/`PB_SECURITY_INTERNAL_CIDRS` 段放行 `/actuator`，公网打不开它。
 - **健康检查**: 在服务端机器上 `curl http://127.0.0.1:7404/healthz`
 
 ### 步骤 6: 换成自己的域名 / 证书（可选）
@@ -203,16 +203,17 @@ java -jar /app/app.jar --debug | grep "HikariPool"
 
 ## 一分钟上手（本机联调）
 
-前置：JDK 21、MySQL 8（`ngram_token_size=2`）、S3 兼容桶（本项目用 RustFS）、Node 18+、Maven。
+前置：JDK 21、MySQL 8（`ngram_token_size=2`）、Node 18+、Maven。**不需要对象存储**——dev 的存储默认是本地文件（`PB_STORAGE_TYPE=local`，图片落 `./data/media`），要验桶形态再显式给 `s3`。
 
 ```bash
 # 1) 凭据只走环境变量，值只写在 deploy/env/local.env（已 gitignore）
-cp deploy/env/prod.env.example deploy/env/local.env   # 填 PB_DB_PASSWORD / PB_S3_*
+cp deploy/env/local.env.example deploy/env/local.env   # 起步只必填 PB_DB_PASSWORD；模板每项都带 export
+#    注意别拿 prod.env.example 当本机模板：那一份的口径是容器，键集与默认值都不同
 
 # 2) 构建（机器默认 JAVA_HOME 常是 JDK 8，必须显式覆盖）
 JAVA_HOME=/path/to/jdk-21 mvn -B -DskipTests package
 
-# 3) 起服务端（默认 8080；脚本自己 source local.env）
+# 3) 起服务端（默认 7404；脚本自己 source local.env）
 bash deploy/run-dev.sh
 
 # 4) 验收探针
@@ -264,7 +265,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 | 跑法 | 判什么 |
 |------|--------|
-| `JAVA_HOME=… mvn -B -pl core,server test` | 服务端与加密库（**292/292**，core 43 + server 249）。要先 `source deploy/env/local.env`：114 条挂 `PB_S3_*` 门控，缺凭据时整批静默 skip，而 `mvn test` 的退出码仍然是 0 |
+| `JAVA_HOME=… mvn -B -pl core,server test` | 服务端与加密库（**301/301**，core 43 + server 258）。要先 `set -a && . deploy/env/local.env && set +a`：114 条挂 `PB_S3_ACCESS_KEY` 门控，缺凭据时是 187 执行 + 114 静默 skip，而 `mvn test` 的退出码仍然是 0 |
 | `node deploy/probe/p0-e2e.mjs` | 端到端协议（**0 失败**；条数以脚本末行的 `N/N` 为准） |
 | `cd android && ./gradlew :app:assembleDebug` | Android 编译通过 |
 | `cd web-admin && npm ci && npm run build` | 管理台 `vue-tsc` 类型检查与 `dist/` 产物 |
@@ -306,7 +307,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 | `docker-publish.yml` | push main / `v*` 标签 / 手动 | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`：标签上打 `1.1.0`/`1.1`/`latest`，main 上只打 `main`/`sha-*`（版本标签必须不可变）。构建前先跑版本闸门——tag、`pom.xml`、compose 三者版本号不一致就直接红，不会推出去一个自称某版、里面跑着另一版的镜像。手动触发默认是 **dry-run**（只构建不推），用它可以在不碰 Hub 的前提下验 `DOCKERHUB_*` 这对 secrets |
 | `build-apk.yml` | push main / `v*` 标签 | 只出 `assembleRelease`（R8 + 签名），用 `apksigner verify` 把关后上传 `pushbox-release-*.apk`；标签时发 Release。没配 keystore 时构建直接失败，不再退化成"发一只 debug 包" |
 | `build-msi.yml` | push main / `v*` 标签 | `windows-latest` 上 `dotnet publish self-contained win-x64` + Inno Setup 出 `setup.exe`，上传 artifact；标签时发 Release |
-| `update-dockerhub-description.yml` | push main 且改动含 `README.md`（这是五个工作流里**唯一**带 `paths:` 过滤的） | 把 `README.md` 同步为 Docker Hub 仓库说明。**至今没跑过**：唯一那次 `main` 推送是"新建分支"（`before` 是全零），GitHub 算不出改动文件集，带 `paths:` 的它被跳过、另外四个照跑；因为它从没被登记过，连网页上的「Run workflow」都不存在，补跑只能等下一次改到 `README.md` 的 `main` 常规推送（判据与证据见 `RELEASE-CHECKLIST.md`「Hub 仓库说明」） |
+| `update-dockerhub-description.yml` | push main 且改动含 `README.md`（这是五个工作流里**唯一**带 `paths:` 过滤的） | 把 `README.md` 同步为 Docker Hub 仓库说明。**至今没跑过**：唯一那次 `main` 推送是"新建分支"（`before` 是全零），GitHub 算不出改动文件集，带 `paths:` 的它被跳过、另外四个照跑；因为它从没被登记过，连网页上的「Run workflow」都不存在，补跑只能等下一次改到 `README.md` 的 `main` 常规推送（判据与证据见 `发布检查清单.md`「Hub 仓库说明」） |
 
 前四个工作流没有 `paths:` 过滤：只要落到 `main` 或 `v*` 标签，哪怕只改一个像素也会整套跑一遍。**推其它分支名（例如发布前的 `publish` 分支）不触发任何工作流**，这也是"代码先上远端、CI 暂时不动"能成立的原因。
 
@@ -322,15 +323,15 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 两处 CI 专属适配（都不改本地开发用的文件）：`gradle-wrapper.properties` 已经写死官方 `services.gradle.org` 发行包，CI 上不再需要临时改写；APK 质量闸是"能编出来、签上名，且证书指纹等于 `android/release-cert.sha256` 里钉的基线"——换 key 会让老用户卸载重装、历史消息全丢，所以这一步直接判红而不是只打印。服务端测试**已经进 CI 了**——`ci.yml` 用 service container 起真 MySQL 8.4（带 `--ngram_token_size=2`）与真 RustFS，本地不需要 `deploy/env/local.env` 也能得到同一份判据；早先"因为依赖外部存储所以不放 CI"的说法已经作废。
 
-> **2026-10-20 深夜：门禁这条链第一次在 GitHub runner 上全绿**——`ci.yml` 对 `publish` 的 dispatch（`run 39377846888`，head `60c86ad`）四个 job 全 success，其中「等 RustFS 就绪并建桶」与「断言 DB 闸门用例真的执行了」（`skipped == 0` 且用例数 ≥ 261）都是第一次真跑到；`build-apk.yml` 同日 dispatch（`run 39376573834`，同一个 head）也全绿，`Verify release APK signature` 这一步第一次真签出并验了名。**当天最后一次 dispatch（`run 39381072797`，head `5293801`）又把签名步升级成"证书 SHA-256 必须等于 `android/release-cert.sha256` 里的基线"并且绿了**，所以"CI 出的包用的就是那把正式 key"是 CI 自己验过的事实，不再靠间接推断。**这一路是四次 dispatch 逐段红出来的，四个根因都不在本仓代码里**：建桶步原来拉的 `minio/mc` 镜像在 Docker Hub 已取不到（→ 404，`dl.min.io` 的 mc 二进制 → 410 Gone），改用 runner 预装的 AWS CLI v2；`android-actions/setup-android@v3` 要装同样已下架的 legacy `tools` 包，改用 runner 预装 SDK 加一步"现读 `compileSdk`、断言 platform 与 build-tools 在位"的入镜检查；KSP 插件 marker 报"六个仓库都找不到"的根因是 runner 打 `maven.aliyun.com` 的三个仓库**整片 502**（境外数据中心 IP 被拒，本机在墙内看不见，所以本地一直绿），现已改成默认只走官方源、开发机在 `android/local.properties` 加 `pb.maven.cnMirror=true` 才插回镜像（见 `docs/开发指南.md`）；最后一步红在 `ANDROID_KEYSTORE_BASE64` 不是标准 base64（`Illegal base64 character 2d`，`2d` 就是 `-`，`certutil -encode` 的 PEM 包头产物就是这个形状），重存后通过，判据写在 `build-apk.yml` 文件头与 `RELEASE-CHECKLIST.md`。
+> **2026-10-20 深夜：门禁这条链第一次在 GitHub runner 上全绿**——`ci.yml` 对 `publish` 的 dispatch（`run 39377846888`，head `60c86ad`）四个 job 全 success，其中「等 RustFS 就绪并建桶」与「断言 DB 闸门用例真的执行了」（`skipped == 0` 且用例数 ≥ 261）都是第一次真跑到；`build-apk.yml` 同日 dispatch（`run 39376573834`，同一个 head）也全绿，`Verify release APK signature` 这一步第一次真签出并验了名。**当天最后一次 dispatch（`run 39381072797`，head `5293801`）又把签名步升级成"证书 SHA-256 必须等于 `android/release-cert.sha256` 里的基线"并且绿了**，所以"CI 出的包用的就是那把正式 key"是 CI 自己验过的事实，不再靠间接推断。**这一路是四次 dispatch 逐段红出来的，四个根因都不在本仓代码里**：建桶步原来拉的 `minio/mc` 镜像在 Docker Hub 已取不到（→ 404，`dl.min.io` 的 mc 二进制 → 410 Gone），改用 runner 预装的 AWS CLI v2；`android-actions/setup-android@v3` 要装同样已下架的 legacy `tools` 包，改用 runner 预装 SDK 加一步"现读 `compileSdk`、断言 platform 与 build-tools 在位"的入镜检查；KSP 插件 marker 报"六个仓库都找不到"的根因是 runner 打 `maven.aliyun.com` 的三个仓库**整片 502**（境外数据中心 IP 被拒，本机在墙内看不见，所以本地一直绿），现已改成默认只走官方源、开发机在 `android/local.properties` 加 `pb.maven.cnMirror=true` 才插回镜像（见 `docs/开发指南.md`）；最后一步红在 `ANDROID_KEYSTORE_BASE64` 不是标准 base64（`Illegal base64 character 2d`，`2d` 就是 `-`，`certutil -encode` 的 PEM 包头产物就是这个形状），重存后通过，判据写在 `build-apk.yml` 文件头与 `发布检查清单.md`。
 >
-> **还没被证明的两件事，别拿这次绿顶账**：一是 `main` 上从没绿过——`main` 仍停在 `f6b9a53`（那次红过两条 job），在它上面重跑要先把 `publish` 推成 `main`，而那会连带 `docker-publish.yml` 真推 Docker Hub（push 事件不受 dry-run 输入影响，不可逆）；二是 `v*` 标签事件那条发布路径（`gh release`、版本号一致性闸门、`1.1.0`/`latest` 标签）至今没在 runner 上跑过，本机只能验到闸门脚本。2026-10-20 四个 job 的**本地等价命令**也各跑了一遍并全绿：服务端 270 条（跳过 0；当天早先是 261 那一版，`AdminControllerBodyTest` 那 4 条与 `DeviceControllerBodyTest` 那 5 条是当晚补的）、管理台 `npm ci && npm run build`、Windows 556/556、Android `assembleDebug` + `assembleRelease`。2026-10-21 那三轮（定时任务分类标签、尾部垃圾 JSON、管理台建频道的 Space 校验）之后，服务端这一条又带齐凭据重跑过：**292 条全执行、跳过 0**（补完 `PushboxWsSocketTest` 4 条真 socket 用例后的实跑；其中 114 条挂 `PB_S3_*` 门控）；Windows 与 Android 那两条没跟着重跑，别把这次的绿顶到它们账上。哪个 workflow 跑过几次、最新一次结论如何，用 `RELEASE-CHECKLIST.md` 里那段按 workflow 分别数的命令现查，不要抄条数。
+> **还没被证明的两件事，别拿这次绿顶账**：一是 `main` 上从没绿过——`main` 仍停在 `f6b9a53`（那次红过两条 job），在它上面重跑要先把 `publish` 推成 `main`，而那会连带 `docker-publish.yml` 真推 Docker Hub（push 事件不受 dry-run 输入影响，不可逆）；二是 `v*` 标签事件那条发布路径（`gh release`、版本号一致性闸门、`1.1.0`/`latest` 标签）至今没在 runner 上跑过，本机只能验到闸门脚本。2026-10-20 四个 job 的**本地等价命令**也各跑了一遍并全绿：服务端 270 条（跳过 0；当天早先是 261 那一版，`AdminControllerBodyTest` 那 4 条与 `DeviceControllerBodyTest` 那 5 条是当晚补的）、管理台 `npm ci && npm run build`、Windows 556/556、Android `assembleDebug` + `assembleRelease`。2026-10-21 那三轮（定时任务分类标签、尾部垃圾 JSON、管理台建频道的 Space 校验）之后，服务端这一条又带齐凭据重跑过：**292 条全执行、跳过 0**（补完 `PushboxWsSocketTest` 4 条真 socket 用例后的实跑；其中 114 条挂 `PB_S3_*` 门控）；Windows 与 Android 那两条没跟着重跑，别把这次的绿顶到它们账上。哪个 workflow 跑过几次、最新一次结论如何，用 `发布检查清单.md` 里那段按 workflow 分别数的命令现查，不要抄条数。
 
 ---
 
 ## 已知限制
 
-- **Web 管理台支持频道创建与密钥重置**：概览、消息搜索、频道/设备列表与详情可查（跨空间），并提供 `POST /api/v1/admin/channels` 创建新频道（返回明文 secret）、`POST /api/v1/admin/channels/{channelNo}/rotate-secret` 重置密钥；已有频道的 secret 不在列表中回显，只有创建/重置时返回一次。设备的创建与治理写操作仍走客户端 + CLI。
+- **Web 管理台是只读视图 + 定时任务，频道生命周期不在它界面上**：概览、消息搜索、频道/设备列表与详情可查（跨空间），能吊销设备、能建/改/启停/删定时任务。建频道与重置密钥**只有接口、没有按钮**（`POST /api/v1/admin/channels` 创建并返回一次明文 secret、`POST /api/v1/admin/channels/{channelNo}/rotate-secret` 换新钥），日常走这两件事请在 Android 或 Windows 的「频道」页做；已有频道的 secret 任何列表接口都不回显，只有创建/重置那一次给。设备的创建与治理写操作仍走客户端 + CLI。
 - **桶里已有对象默认是明文**：切到 `sse-c` 只影响新写入的对象，历史对象不迁移。
 - **端上数据库不加密**：Android 用 Room、PC 用 SQLite 明文存消息正文（可搜索的前提）；被包裹的只有身份私钥、token、恢复码与 PIN 散列，它们走 AndroidKeyStore 里那把不可导出的 AES-GCM 密钥。拿到 root/磁盘镜像仍能读出历史消息。
 - **明文 HTTP 是可选项而不是默认护栏**：客户端允许 `http://IP:端口`（内网/Tailscale 场景），是否上 TLS 由部署者决定；密文只保证「服务端 → 客户端」这一跳，端到端不在设计范围内。

@@ -8,7 +8,7 @@ body:
       value: |
         先确认两件事，能省掉一轮往返：
         1. `/healthz` 的 `storage` 只校验"配置项非空"，**既不探端点可达也不探桶是否存在**。
-           报"存储相关"问题请用 `mc ls` 或 `aws s3api head-bucket` 判桶（命令见 deploy/QUICK-START.md「桶要建一次」），别拿 `/healthz` 当证据。
+           报"存储相关"问题请用 `mc ls` 或 `aws s3api head-bucket` 判桶（命令见 deploy/部署快速参考.md「桶要建一次」），别拿 `/healthz` 当证据。
         2. 服务端库里是明文、端上正文不加密，这是设计取舍（见 SECURITY.md），不是缺陷。
   - type: dropdown
     id: surface
@@ -66,7 +66,7 @@ body:
     attributes:
       label: 已确认
       options:
-        - label: 已按 QUICK-START「桶要建一次」确认桶存在（`mc ls` 或 `aws s3api head-bucket`，不是 `/healthz`）
+        - label: 已按 部署快速参考「桶要建一次」确认桶存在（`mc ls` 或 `aws s3api head-bucket`，不是 `/healthz`）
           required: false
         - label: 已确认端口跟着拓扑走（RustFS 镜像听 9000/9001，远端实例可能挂在别的端口）
           required: false
