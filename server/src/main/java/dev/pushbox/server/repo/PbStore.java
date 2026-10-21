@@ -589,7 +589,7 @@ public class PbStore {
   /**
    * 本 Space 内已落库的最大 seq。seq 是全局单调的，所以补拉游标用全局值没问题，
    * 但<b>"这台设备落后多少条"只能跟自己组的行高比</b>：拿全局 MAX(seq) 比一个刚建好、
-   * 一条消息都没有的 Space，游标恒为 0，别的 Space 推得多就会把它顶过 GAP_THRESHOLD，
+   * 一条消息都没有的 Space，游标恒为 0，别的 Space 推得多就会把它顶过 pb.ws.gap-threshold，
    * 于是每次连接都回 resume_gap、永远等不到 resume_ok——客户端的顶栏就停在"连接中"，
    * 而这条连接其实活得好好的。REST 那一侧的 latest_seq 仍用全局值（那是 after_seq 游标要的）。
    */

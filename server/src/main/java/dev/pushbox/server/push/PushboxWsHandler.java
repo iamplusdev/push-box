@@ -36,11 +36,6 @@ public class PushboxWsHandler extends TextWebSocketHandler {
   private static final String ATTR_NONCE = "pb.nonce";
   private static final String ATTR_SESSION = "pb.session";
   private static final long AUTH_WINDOW_MILLIS = 300_000L;
-  /** 落后多少条就改走 REST 补拉。比的是<b>本组</b>的行高，见 {@link PbStore#latestSeq(String)}。 */
-  private static final int GAP_THRESHOLD = 2_000;
-  /** §5.3 "落后太多就别用 WS 重放，改走 REST 补拉"的阈值。联调用 {@code --pb.ws.gap-threshold=3} 调小。 */
-  private static final int GAP_THRESHOLD_DEFAULT = 2_000;
-
   private final PbStore store;
   private final DeviceService devices;
   private final ServerKeys keys;
@@ -159,14 +154,14 @@ public class PushboxWsHandler extends TextWebSocketHandler {
   private void replay(PushRegistry.Session session, long sinceSeq, Row device) {
     java.util.Set<String> scope = channels.readScope(device);
     // 只跟自己组的行高比：全局 MAX(seq) 会让一个还没发过消息的 Space 被别的 Space 的流量顶过
-    // GAP_THRESHOLD，于是每次连接只回 resume_gap、永远等不到 resume_ok（真服务体检 ② 抓到的）
+    // pb.ws.gap-threshold，于是每次连接只回 resume_gap、永远等不到 resume_ok（真服务体检 ② 抓到的）
     long latest = store.latestSeq(session.groupId);
-    if (latest - sinceSeq > GAP_THRESHOLD) {
+    if (latest - sinceSeq > props.getWs().getGapThreshold()) {
       registry.send(session, Frames.ResumeGap.of(sinceSeq + 1, latest));
       return;
     }
     long cursor = sinceSeq;
-    // 一批要循环到取空才回 resume_ok。原先只发一批：落后条数在"一批"与 GAP_THRESHOLD 之间的设备
+    // 一批要循环到取空才回 resume_ok。原先只发一批：落后条数在"一批"与 gap-threshold 之间的设备
     // 既收不满也收不到 resume_gap，客户端把"这一批发完"当成"已经追平"，
     // 剩下的消息要等下一次断线重连才有机会补上——不重连就永久静默
     int batch = props.getWs().getReplayBatch();

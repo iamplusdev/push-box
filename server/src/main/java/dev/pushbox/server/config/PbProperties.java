@@ -80,6 +80,11 @@ public class PbProperties {
      * 是个静默丢消息的 bug，正常配置下要攒够 501 条才看得见。
      */
     private int replayBatch = 500;
+    /**
+     * §5.3 "落后太多就别用 WS 重放，改走 REST 补拉"的阈值。联调用
+     * `--pb.ws.gap-threshold=3` 调小，好让 resume_gap 这条路被真正跑到。
+     */
+    private int gapThreshold = 2_000;
 
     public int getHeartbeatSec() { return heartbeatSec; }
     public void setHeartbeatSec(int v) { this.heartbeatSec = v; }
@@ -89,6 +94,8 @@ public class PbProperties {
     public void setRotateAfterFrames(long v) { this.rotateAfterFrames = v; }
     public int getReplayBatch() { return replayBatch; }
     public void setReplayBatch(int v) { this.replayBatch = Math.max(1, v); }
+    public int getGapThreshold() { return gapThreshold; }
+    public void setGapThreshold(int v) { this.gapThreshold = Math.max(1, v); }
   }
 
   public static class Notify {

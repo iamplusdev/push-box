@@ -831,7 +831,7 @@ async function main() {
 
   // ---- ㉑ 补拉循环：落后条数超过"一批"时必须逐批发到取空，再回 resume_ok
   // 服务端原先只发一批就 resume_ok，那是一个静默丢消息的 bug：落后条数落在"一批"与
-  // GAP_THRESHOLD(2000) 之间的设备既收不满、也收不到 resume_gap，本机把"这批发完"当成
+  // pb.ws.gap-threshold(2000) 之间的设备既收不满、也收不到 resume_gap，本机把"这批发完"当成
   // "已经追平"，剩下的要等下次断线重连才有机会补上。跑这条要把服务端起成
   // `--pb.ws.replay-batch=5`（与 ⑬ 的 rotate-after-frames 同一个套路）；
   // 默认 500 时 12 条一批就发完，这条只证明"补齐 + resume_ok"，证不到循环本身。

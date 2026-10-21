@@ -59,7 +59,7 @@
 |----|------|
 | Android `:app:assembleDebug` | BUILD SUCCESSFUL（仅遗留 deprecation 警告） |
 | Android `:app:assembleRelease` | BUILD SUCCESSFUL，12.7 MB（debug 26.7 MB），`apksigner verify` 出 V2 签名；无 keystore 时被 `requireReleaseSigning` 拦下。R8 的 `mapping/release/mapping.txt` **实测 205 MB** —— CI 把它归档成 workflow artifact（公开仓保留期上限 90 天），别按"几 MB"估配额 |
-| 服务端 `mvn -B -pl server -am test` | 2026-10-21 带齐凭据复跑：**282 条全执行（core 43 + server 239），0 失败 0 错误 0 跳过**，BUILD SUCCESSFUL。没 source `deploy/env/local.env` 时实测 168 执行 + 114 跳过（2026-10-21 现跑）、退出码照样 0，所以"跳过必须为 0"才是判据（`ci.yml` 末尾的断言与此同口径） |
+| 服务端 `mvn -B -pl server -am test` | 2026-10-21 带齐凭据复跑：**288 条全执行（core 43 + server 245），0 失败 0 错误 0 跳过**，BUILD SUCCESSFUL。没 source `deploy/env/local.env` 时实测 174 执行 + 114 跳过（2026-10-21 现跑）、退出码照样 0，所以"跳过必须为 0"才是判据（`ci.yml` 末尾的断言与此同口径） |
 | Windows `dotnet test PushBox.Crypto.Tests` | 556/556（Debug 与 Release 各一遍） |
 | Windows `dotnet build` | 0 警告 0 错误 |
 | `bash scripts/release-verify.sh` | 见下方"发布前动作"，跑通即零 FAIL |
