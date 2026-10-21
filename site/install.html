@@ -112,7 +112,7 @@ PB_BASE=http://127.0.0.1:8081 node p0-e2e.mjs</code></pre>
 
   <h3>⑥ 单元测试的跑法与两个坑</h3>
   <pre class="code" data-code="bash"><code>source deploy/env/local.env
-mvn -B -pl core,server test             # 288/288（core 43 + server 245）</code></pre>
+mvn -B -pl core,server test             # 292/292（core 43 + server 249）</code></pre>
   <ul>
     <li><b>必须 <code>-pl core,server</code> 同 reactor</b>：单跑 <code>server</code> 会用本地仓库里的旧 <code>core</code> jar，新加的类报 <code>NoClassDefFoundError</code>。</li>
     <li>碰库/碰桶的用例挂 <code>@EnabledIfEnvironmentVariable(named="PB_S3_ACCESS_KEY")</code>，忘了 source 就是<b>静默 skip</b>。看到用例总数变小先查环境变量，不要改测试。</li>
