@@ -120,6 +120,11 @@ class Notifier(private val context: Context) {
             .addAction(R.drawable.ic_stat_pushbox,
                 context.getText(R.string.notif_action_mark_all_read), readAllIntent)
             .setContentIntent(openConversationIntent(latest))
+            .apply {
+                // §7.3 D11：摘要通知也要走锁屏降级，否则安全锁屏+隐藏敏感内容时仍会泄露正文
+                setVisibility(Notification.VISIBILITY_PRIVATE)
+                    .setPublicVersion(lockScreenPlaceholder())
+            }
             .build()
         manager.notify(summaryId, summary)
     }

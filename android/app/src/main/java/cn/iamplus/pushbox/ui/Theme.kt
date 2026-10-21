@@ -18,11 +18,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
 
-/** §9.1 里那些没有 Material3 归属的 token：页面底、气泡、级别色条、离线态。 */
+/** §9.1 里那些没有 Material3 归属的 token：页面底、气泡、栏底、分割线、级别色条、离线态。 */
 @Immutable
 data class PushBoxColors(
     val pageBackground: Color,
-    val bubbleIn: Color,
+    val bubble: Color,
+    val rowBackground: Color,
+    val topBar: Color,
+    val bottomBar: Color,
+    val divider: Color,
+    val textPrimary: Color,
     val levelError: Color,
     val levelWarning: Color,
     val levelInfo: Color,
@@ -32,7 +37,12 @@ data class PushBoxColors(
 
 private val LightPushBoxColors = PushBoxColors(
     pageBackground = Color(0xFFF5F5F5),
-    bubbleIn = Color(0xFFE8F7F0),
+    bubble = Color(0xFFFFFFFF),
+    rowBackground = Color(0xFFFFFFFF),
+    topBar = Color(0xFFEDEDED),
+    bottomBar = Color(0xFFF7F7F7),
+    divider = Color(0xFFDEDEDE),
+    textPrimary = Color(0xFF161415),
     levelError = Color(0xFFF5222D),
     levelWarning = Color(0xFFFF8C00),
     levelInfo = Color(0xFF757575),
@@ -42,7 +52,12 @@ private val LightPushBoxColors = PushBoxColors(
 
 private val DarkPushBoxColors = PushBoxColors(
     pageBackground = Color(0xFF1A1A1A),
-    bubbleIn = Color(0xFF0D3D28),
+    bubble = Color(0xFF242424),
+    rowBackground = Color(0xFF1F1F1F),
+    topBar = Color(0xFF141414),
+    bottomBar = Color(0xFF141414),
+    divider = Color(0xFF333333),
+    textPrimary = Color(0xFFE0E0E0),
     levelError = Color(0xFFFF5252),
     levelWarning = Color(0xFFFFB74D),
     levelInfo = Color(0xFF9E9E9E),
@@ -51,28 +66,65 @@ private val DarkPushBoxColors = PushBoxColors(
 )
 
 // 微信式中性色：不做 dynamic color，否则一台手机一套配色，"像微信"这件事就没了。
+//
+// 必须把 surfaceContainer* / secondaryContainer / primaryContainer 这一整套一起写掉：
+// lightColorScheme() 只覆盖传进去的那几项，剩下的仍是 Material3 基线的**紫**
+// （#E6E0E9、#E8DEF8、#B69DF8 那一族）。而 `Card` 的默认底就是 `surfaceContainerHigh`、
+// 填充式 `TextField` 的容器是 `surfaceVariant` 叠 `onSurface`、提示条用 `secondaryContainer`——
+// 于是真机上频道页那几张卡是淡紫色的，而 §9.1 说的是"微信式中性"。少写一项就是一处漏色，
+// 且它只在真机上看得出来，编译期与预览都不报错。
 private val LightScheme = lightColorScheme(
     primary = Color(0xFF0ABF5E),
     onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFD6F1E1),
+    onPrimaryContainer = Color(0xFF053A1E),
     background = Color(0xFFF5F5F5),
-    onBackground = Color(0xFF212121),
-    surface = Color(0xFFEEEEEE),
-    onSurface = Color(0xFF212121),
+    onBackground = Color(0xFF161415),
+    surface = Color(0xFFFFFFFF),
+    onSurface = Color(0xFF161415),
     surfaceVariant = Color(0xFFEEEEEE),
     onSurfaceVariant = Color(0xFF757575),
-    outline = Color(0xFFE0E0E0),
-    outlineVariant = Color(0xFFE0E0E0),
+    surfaceDim = Color(0xFFE6E6E6),
+    surfaceBright = Color(0xFFFFFFFF),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFFAFAFA),
+    surfaceContainer = Color(0xFFF2F2F2),
+    surfaceContainerHigh = Color(0xFFEDEDED),
+    surfaceContainerHighest = Color(0xFFE6E6E6),
+    secondary = Color(0xFF0ABF5E),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFE4E4E4),
+    onSecondaryContainer = Color(0xFF333333),
+    // 抬升着色：基线是 primary（绿），叠在卡片上会让白卡泛绿；中性灰叠上去看不出来，
+    // 层次仍由上面那几档 container 负责。
+    surfaceTint = Color(0xFF9E9E9E),
+    outline = Color(0xFFDEDEDE),
+    outlineVariant = Color(0xFFDEDEDE),
 )
 
 private val DarkScheme = darkColorScheme(
     primary = Color(0xFF0A8F4A),
     onPrimary = Color(0xFF1A1A1A),
+    primaryContainer = Color(0xFF0A3D22),
+    onPrimaryContainer = Color(0xFFBCE8CD),
     background = Color(0xFF1A1A1A),
     onBackground = Color(0xFFE0E0E0),
     surface = Color(0xFF242424),
     onSurface = Color(0xFFE0E0E0),
     surfaceVariant = Color(0xFF242424),
     onSurfaceVariant = Color(0xFF9E9E9E),
+    surfaceDim = Color(0xFF151515),
+    surfaceBright = Color(0xFF333333),
+    surfaceContainerLowest = Color(0xFF121212),
+    surfaceContainerLow = Color(0xFF1D1D1D),
+    surfaceContainer = Color(0xFF212121),
+    surfaceContainerHigh = Color(0xFF262626),
+    surfaceContainerHighest = Color(0xFF2E2E2E),
+    secondary = Color(0xFF0A8F4A),
+    onSecondary = Color(0xFFE0E0E0),
+    secondaryContainer = Color(0xFF2E2E2E),
+    onSecondaryContainer = Color(0xFFDDDDDD),
+    surfaceTint = Color(0xFF6E6E6E),
     outline = Color(0xFF333333),
     outlineVariant = Color(0xFF333333),
 )

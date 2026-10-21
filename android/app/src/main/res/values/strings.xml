@@ -22,9 +22,7 @@
     <string name="empty_messages">还没有消息</string>
     <string name="tab_messages">消息</string>
     <string name="tab_channels">频道</string>
-    <string name="tab_me">我的</string>
-    <string name="mine_tab_access">接入</string>
-    <string name="mine_tab_settings">设置</string>
+    <string name="tab_settings">设置</string>
 
     <!-- 复制 -->
     <string name="copy">复制</string>
@@ -39,6 +37,12 @@
     <string name="enroll_server_hint">自建服务端地址，如 https://push.example.com 或 http://192.168.1.10:8080</string>
     <string name="enroll_server_required">请先填写服务器地址</string>
     <string name="enroll_server_invalid">地址要带 http:// 或 https:// 前缀，中间不要有空格</string>
+    <string name="enroll_use_https">使用 HTTPS（SSL/TLS）</string>
+    <string name="enroll_server_host">服务器主机/IP</string>
+    <string name="enroll_server_host_hint">例如 push.example.com 或 192.168.1.10</string>
+    <string name="enroll_server_port">端口</string>
+    <string name="enroll_server_port_hint">默认 7404，留空使用默认端口</string>
+    <string name="enroll_generated_url">将连接到：%s</string>
     <string name="enroll_device_name">设备名称</string>
     <string name="enroll_recovery_code">恢复码（可选）</string>
     <string name="enroll_create">创建我的空间</string>
@@ -52,6 +56,17 @@
     <string name="channel_created">接入信息（密钥只显示这一次）</string>
     <string name="channel_curl_hint">把下面这行填进第三方软件即可推送：</string>
     <string name="channel_list_title">我的频道</string>
+    <string name="channels_refresh">刷新</string>
+    <string name="channel_actions">频道操作</string>
+    <string name="channel_copy_no">复制频道号</string>
+    <!-- ⋮ 弹窗：四段分组标题 + 密钥那一段的两种状态。复制只上剪贴板、不把明文显示在屏上 -->
+    <string name="channel_grp_access">接入与命名</string>
+    <string name="channel_grp_secret">密钥</string>
+    <string name="channel_grp_govern">治理</string>
+    <string name="channel_grp_danger">改号与清理</string>
+    <string name="channel_copy_secret">复制密钥</string>
+    <string name="channel_secret_missing">本机没有这份密钥：服务端只存哈希，明文只在创建/重置那一次出现。要可用密钥只能「重置密钥」，旧密钥即刻作废。</string>
+    <string name="channel_flag_muted">静默</string>
     <string name="channel_loading">加载频道中…</string>
     <string name="channel_none">还没有频道，点上方「新建频道」创建，或用频道号+密钥「加入频道」</string>
     <string name="channel_unnamed">未命名频道</string>
@@ -123,16 +138,7 @@
     <string name="app_lock_biometric_desc">允许用指纹 / 面容解锁，PIN 仍作为兜底方式。</string>
     <string name="app_lock_biometric_unavailable">未检测到可用的指纹 / 面容，请先在系统设置中录入。</string>
     <string name="section_notification">通知</string>
-    <!-- §7.4 D17 对话页筛选 -->
-    <string name="conv_filter_title">筛选</string>
-    <string name="filter_all">全部</string>
-    <string name="filter_unread">未读</string>
-    <string name="filter_read">已读</string>
-    <string name="filter_hint_all">当前显示全部消息</string>
-    <string name="filter_hint_unread">当前只看未读 · 点此处显示全部</string>
-    <string name="filter_hint_read">当前只看已读 · 点此处显示全部</string>
-    <string name="filter_empty">该筛选下没有消息</string>
-    <!-- §7.4 会话内搜索（与未读/已读筛选正交） -->
+    <!-- §7.4 会话内搜索 -->
     <string name="conv_search_entry">在会话中搜索</string>
     <string name="conv_search_hint">搜索本会话消息</string>
     <string name="conv_search_close">关闭</string>
@@ -160,6 +166,9 @@
     <string name="recovery_qr_title">恢复码二维码</string>
     <string name="recovery_qr_hint">在新设备的"我有恢复码"页扫这枚码即可加入同一空间。</string>
     <string name="recovery_qr_failed">无法生成二维码，请改用文本复制。</string>
+    <string name="enroll_have_code_title">加入已有空间</string>
+    <string name="enroll_have_code_desc">已经在别的设备上建过空间？填那台设备上展示的恢复码，把这一台加进同一个空间。</string>
+    <string name="enroll_have_code_close">不填恢复码</string>
     <string name="enroll_scan">扫码填入</string>
     <string name="enroll_scan_prompt">对准另一台设备上的恢复码二维码</string>
     <string name="reveal">显示</string>
@@ -197,6 +206,8 @@
     <string name="update_auto_check_desc">开着才会在冷启动时安静地查一次 GitHub Releases；关掉就只能在这里手动点。</string>
     <string name="confirm_ok">确定</string>
     <string name="confirm_cancel">取消</string>
+    <!-- 纯浏览型弹窗（频道操作）的出口：那里没有"确定"这个动作，写"关闭"才是人话 -->
+    <string name="confirm_close">关闭</string>
 
     <!-- 后台常驻引导（§7.2 D18：保活靠系统白名单，不是我们自己硬拉 FGS） -->
     <string name="section_keepalive">后台常驻</string>
@@ -289,7 +300,7 @@
     <string name="channel_join_done">已接入，稍后该频道的消息会出现在会话列表</string>
     <string name="channel_join_needs_both">频道号和密钥都要填</string>
     <string name="channel_subscribed">已接入</string>
-    <string name="channel_not_subscribed">未接入（这台设备仍能收到，除非开启「只接收已接入的频道」）</string>
+    <string name="channel_not_subscribed">未接入</string>
     <string name="channel_subscribe">接入</string>
     <string name="channel_unsubscribe">取消接入</string>
     <string name="channel_unsubscribe_done">已取消接入</string>

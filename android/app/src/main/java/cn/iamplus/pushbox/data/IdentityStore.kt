@@ -175,6 +175,33 @@ class IdentityStore(context: Context) {
 
     suspend fun setAutoCheckUpdate(enabled: Boolean) = store.edit { it[AUTO_CHECK_UPDATE] = enabled }
 
+    /**
+     * 本机经手过的频道明文密钥（`channel_no -> secret`）。
+     *
+     * 服务端只存密钥的 sha256，明文**只在创建 / 重置 / 接入那一次**经过客户端，所以"复制密钥"
+     * 这个动作能给的只有本机记过的那份；在别的设备上建的频道这里就是查不到，只能提示去重置。
+     * 值与私钥同一口径过 [SecretVault]；格式沿用 [SERVER_HISTORY] 的行式存储，一行一条 `号码\t密文`。
+     */
+    suspend fun channelSecrets(): Map<String, String> {
+        val raw = store.data.first()[CHANNEL_SECRETS] ?: return emptyMap()
+        return secretLines(raw).mapNotNull { (no, sealed) ->
+            vault.open(sealed)?.let { no to it }
+        }.toMap()
+    }
+
+    /** 空 secret 表示"把这条忘掉"（换发频道号之后旧号码的记档该跟着走）。 */
+    suspend fun putChannelSecret(channelNo: String, secret: String) = store.edit { mut ->
+        val kept = secretLines(mut[CHANNEL_SECRETS].orEmpty()).filter { it.first != channelNo }
+        val next = if (secret.isEmpty()) kept else kept + (channelNo to vault.seal(secret))
+        if (next.isEmpty()) mut.remove(CHANNEL_SECRETS)
+        else mut[CHANNEL_SECRETS] = next.joinToString("\n") { (no, sealed) -> "$no\t$sealed" }
+    }
+
+    private fun secretLines(raw: String): List<Pair<String, String>> =
+        raw.lineSequence().mapNotNull { line ->
+            line.split('\t').takeIf { it.size == 2 && it[0].isNotEmpty() }?.let { it[0] to it[1] }
+        }.toList()
+
     /** §8.4 D30 App 锁：默认关闭；库里只存 PIN 的 PBKDF2 验证串，明文 PIN 与密钥都过 Keystore 密封。 */
     suspend fun appLockEnabled(): Boolean = store.data.first()[APP_LOCK_ENABLED] ?: false
 
@@ -217,6 +244,7 @@ class IdentityStore(context: Context) {
         private val AUTO_CHECK_UPDATE = booleanPreferencesKey("auto_check_update")
         private val FONT_SCALE = stringPreferencesKey("font_scale")
         private val SUMMARY_LINES = intPreferencesKey("summary_lines")
+        private val CHANNEL_SECRETS = stringPreferencesKey("channel_secrets")
 
         /** 只有这几串算凭据，需要密封；设备号/分组/指纹/地址要留 plaintext 才好排查问题。 */
         private val SECRET_KEYS = listOf(ENC_PRIV, SIGN_PRIV, TOKEN, RECOVERY_CODE, APP_LOCK_PIN)

@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -49,6 +50,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -56,8 +59,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -85,6 +86,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -94,6 +96,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -136,10 +139,9 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.DisposableEffect
@@ -197,11 +199,10 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 设置状态栏样式：浅色背景使用深色字体
+        // 边到边：顶栏自己垫状态栏内边距并把栏底画到状态栏后面，所以系统栏保持透明，
+        // 只有图标明暗要跟主题走——写死 true 会让深色主题在状态栏上留下一块发白的横条。
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            setAppearanceLightStatusBars(true) // 浅色背景，使用深色字体
-        }
+        val insets = WindowInsetsControllerCompat(window, window.decorView)
         consumeDeepLink(intent)
         App.get(this).checkUpdateSilently()
         setContent {
@@ -212,6 +213,10 @@ class MainActivity : FragmentActivity() {
                 "light" -> false
                 "dark" -> true
                 else -> isSystemInDarkTheme()
+            }
+            LaunchedEffect(dark) {
+                insets.isAppearanceLightStatusBars = !dark
+                insets.isAppearanceLightNavigationBars = !dark
             }
             // §7.4 字号：small/normal/large 只缩放文字 fontScale，dp 布局不动
             val fontScale by app.fontScale.collectAsState()
@@ -278,11 +283,12 @@ private fun AppLockScreen(app: App) {
         retryIn = 0
     }
     Column(
-        Modifier.fillMaxSize().padding(32.dp),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(stringResource(R.string.app_lock_unlock_title),
+            color = MaterialTheme.colorScheme.onBackground,
             style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(24.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -526,10 +532,14 @@ private fun NotifyPermissionRow() {
 @Composable
 private fun EnrollScreen(app: App, onDone: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var baseUrl by remember { mutableStateOf("") }
+    var serverHost by remember { mutableStateOf("") }
+    var serverPort by remember { mutableStateOf("7404") }
+    var useHttps by remember { mutableStateOf(false) }
+    // 地址由主机+端口+协议推导，而不是另存一份：存了就会出现"开关拨了、URL 没跟着变"的半更新状态
     var history by remember { mutableStateOf<List<String>>(emptyList()) }
     var deviceName by remember { mutableStateOf(Build.MODEL ?: "Android") }
     var recoveryCode by remember { mutableStateOf("") }
+    var showRecovery by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var issuedCode by remember { mutableStateOf<String?>(null) }
@@ -544,59 +554,146 @@ private fun EnrollScreen(app: App, onDone: () -> Unit) {
         if (!text.isNullOrBlank()) recoveryCode = text.trim()
     }
 
+    // 根据主机、端口和 HTTPS 开关自动生成完整 URL
+    fun buildBaseUrl(host: String, port: String, https: Boolean): String {
+        val trimmedHost = host.trim().trimEnd('/')
+        if (trimmedHost.isEmpty()) return ""
+        val scheme = if (https) "https" else "http"
+        val trimmedPort = port.trim()
+        return if (trimmedPort.isNotEmpty() && trimmedPort != "80" && trimmedPort != "443") {
+            "$scheme://$trimmedHost:$trimmedPort"
+        } else {
+            "$scheme://$trimmedHost"
+        }
+    }
+
+    val baseUrl = remember(serverHost, serverPort, useHttps) {
+        buildBaseUrl(serverHost, serverPort, useHttps)
+    }
+
+    // 历史记录里存的是整条 URL，回填时要拆回主机/端口/协议三个格子，否则用户看到还是上一次的组合
+    fun applyUrl(url: String) {
+        val secured = url.startsWith("https://")
+        val rest = url.substringAfter("://").substringBefore('/')
+        val colon = rest.lastIndexOf(':')
+        useHttps = secured
+        serverHost = if (colon > 0) rest.substring(0, colon) else rest
+        serverPort = if (colon > 0) rest.substring(colon + 1) else ""
+    }
+
     LaunchedEffect(Unit) {
         val recent = app.identity.serverHistory()
         history = recent
-        if (recent.isNotEmpty()) baseUrl = recent.first()
+        if (recent.isNotEmpty()) applyUrl(recent.first())
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.enroll_title)) }) }) { inset ->
+    Scaffold(topBar = {
+        PushBoxTopBar(centerTitle = true, title = {
+            Text(stringResource(R.string.enroll_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface)
+        })
+    }) { inset ->
         Column(
-            Modifier.fillMaxSize().padding(inset).padding(16.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            Modifier.fillMaxSize().padding(inset).padding(horizontal = 16.dp, vertical = 12.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            OutlinedTextField(
-                value = baseUrl, onValueChange = { baseUrl = it },
-                label = { Text(stringResource(R.string.enroll_server)) },
-                supportingText = { Text(stringResource(R.string.enroll_server_hint)) },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                modifier = Modifier.fillMaxWidth(), singleLine = true)
+            SettingsSection(stringResource(R.string.enroll_server)) {
+                // HTTPS 开关：拨一下就立刻反映到下面那条 URL 上（PC 的接入框同一口径）
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.enroll_use_https),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f))
+                    Switch(checked = useHttps, onCheckedChange = { useHttps = it })
+                }
+                OutlinedTextField(
+                    value = serverHost, onValueChange = { serverHost = it },
+                    label = { Text(stringResource(R.string.enroll_server_host)) },
+                    supportingText = { Text(stringResource(R.string.enroll_server_host_hint)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                    modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(
+                    value = serverPort, onValueChange = { serverPort = it },
+                    label = { Text(stringResource(R.string.enroll_server_port)) },
+                    supportingText = { Text(stringResource(R.string.enroll_server_port_hint)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(), singleLine = true)
+                if (baseUrl.isNotEmpty()) {
+                    Text(stringResource(R.string.enroll_generated_url, baseUrl),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.primary)
+                }
+            }
+
             if (history.isNotEmpty()) {
-                Text(stringResource(R.string.server_history_title),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    history.forEach { url ->
-                        OutlinedButton(enabled = !busy, onClick = { baseUrl = url }) {
-                            Text(url, maxLines = 1)
+                SettingsSection(stringResource(R.string.server_history_title)) {
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        history.forEach { url ->
+                            OutlinedButton(enabled = !busy, onClick = { applyUrl(url) }) {
+                                Text(url, maxLines = 1)
+                            }
                         }
                     }
                 }
             }
-            OutlinedTextField(
-                value = deviceName, onValueChange = { deviceName = it },
-                label = { Text(stringResource(R.string.enroll_device_name)) },
-                modifier = Modifier.fillMaxWidth(), singleLine = true)
-            OutlinedTextField(
-                value = recoveryCode, onValueChange = { recoveryCode = it },
-                label = { Text(stringResource(R.string.enroll_recovery_code)) },
-                modifier = Modifier.fillMaxWidth(), singleLine = true)
-            // 扫码填入恢复码：手输 base64 易错，扫一下即可
-            TextButton(onClick = {
-                scanLauncher.launch(
-                    com.journeyapps.barcodescanner.ScanOptions()
-                        .setDesiredBarcodeFormats(
-                            com.journeyapps.barcodescanner.ScanOptions.QR_CODE)
-                        .setPrompt(scanPrompt)
-                        .setBeepEnabled(false)
-                        .setOrientationLocked(false))
-            }) { Text(stringResource(R.string.enroll_scan)) }
-            if (busy) Text(stringResource(R.string.enroll_working))
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Button(enabled = !busy, onClick = {
+
+            SettingsSection(stringResource(R.string.enroll_device_name)) {
+                OutlinedTextField(
+                    value = deviceName, onValueChange = { deviceName = it },
+                    label = { Text(stringResource(R.string.enroll_device_name)) },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true)
+            }
+
+            // 恢复码这条路不是每个人都要走：默认收成一句说明，点开才给输入框与扫码入口，
+            // 否则首启这一屏要同时摆着"创建"和"加入"两套字段
+            SettingsSection(stringResource(R.string.enroll_have_code_title)) {
+                if (showRecovery) {
+                    OutlinedTextField(
+                        value = recoveryCode, onValueChange = { recoveryCode = it },
+                        label = { Text(stringResource(R.string.enroll_recovery_code)) },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        // 扫码填入恢复码：手输 base64 易错，扫一下即可
+                        TextButton(onClick = {
+                            scanLauncher.launch(
+                                com.journeyapps.barcodescanner.ScanOptions()
+                                    .setDesiredBarcodeFormats(
+                                        com.journeyapps.barcodescanner.ScanOptions.QR_CODE)
+                                    .setPrompt(scanPrompt)
+                                    .setBeepEnabled(false)
+                                    .setOrientationLocked(false))
+                        }) { Text(stringResource(R.string.enroll_scan)) }
+                        TextButton(enabled = !busy, onClick = {
+                            showRecovery = false; recoveryCode = ""
+                        }) { Text(stringResource(R.string.enroll_have_code_close)) }
+                    }
+                } else {
+                    Text(stringResource(R.string.enroll_have_code_desc),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedButton(enabled = !busy, onClick = { showRecovery = true }) {
+                        Text(stringResource(R.string.enroll_join))
+                    }
+                }
+            }
+
+            error?.let { EnrollErrorCard(it) }
+            if (busy) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Text(stringResource(R.string.enroll_working),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
                 val url = baseUrl.trim().trimEnd('/')
                 if (url.isEmpty()) {
                     error = serverRequired
@@ -622,12 +719,26 @@ private fun EnrollScreen(app: App, onDone: () -> Unit) {
                 }
             }) {
                 Text(stringResource(
-                    if (recoveryCode.isBlank()) R.string.enroll_create else R.string.enroll_join))
+                    if (showRecovery) R.string.enroll_join else R.string.enroll_create))
             }
             issuedCode?.let { code ->
                 RecoveryCodeCard(code = code, onConfirm = onDone)
             }
         }
+    }
+}
+
+/** 首启的报错：一张带红色左轨的卡片，而不是贴在表单尾巴上的一行红字。 */
+@Composable
+private fun EnrollErrorCard(text: String) {
+    val colors = LocalPushBoxColors.current
+    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)
+        .clip(RoundedCornerShape(8.dp))
+        .background(MaterialTheme.colorScheme.surfaceVariant)) {
+        Box(Modifier.width(3.dp).fillMaxHeight().background(colors.levelError))
+        Text(text, style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
     }
 }
 
@@ -698,27 +809,23 @@ private fun MainShell(identity: Identity,
     }
 
     Scaffold(topBar = {
-        TopAppBar(title = {
+        PushBoxTopBar(title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.app_name))
+                Text(stringResource(R.string.app_name),
+                    color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.width(10.dp))
                 // 顶栏读的是 SyncEngine 镜像进来的真实状态，不再写死"连接中"
                 Text(connLabel, style = MaterialTheme.typography.labelSmall, color = connColor)
             }
         })
     }, bottomBar = {
-        // §7.4 D17：底栏收成 2 tab（消息 / 我的）。原"频道"整段并入"我的 → 接入"，
-        // 频道 CRUD 仍走同一套签名接口，只是不再有第三个顶级入口。
-        NavigationBar {
-            NavigationBarItem(
-                selected = tab == 0, onClick = { tab = 0 },
-                icon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
-                label = { Text(stringResource(R.string.tab_messages)) })
-            NavigationBarItem(
-                selected = tab == 1, onClick = { tab = 1 },
-                icon = { Icon(Icons.Filled.Person, contentDescription = null) },
-                label = { Text(stringResource(R.string.tab_me)) })
-        }
+        // 接入是日常操作，§7.4 D17 把它收进「我的 → 接入」等于每次点两层。
+        // 现在拆成 消息 / 频道 / 设置：频道页只管接入这件事，设置页不再夹频道 CRUD。
+        PushBoxBottomBar(listOf(
+            BottomTab(stringResource(R.string.tab_messages), Icons.AutoMirrored.Filled.Chat),
+            BottomTab(stringResource(R.string.tab_channels), Icons.Filled.Hub),
+            BottomTab(stringResource(R.string.tab_settings), Icons.Filled.Settings)),
+            selected = tab, onSelect = { tab = it })
     }) { inset ->
         Column(Modifier.fillMaxSize().padding(inset)) {
             if (polling) {
@@ -730,8 +837,68 @@ private fun MainShell(identity: Identity,
             when (tab) {
                 0 -> MessagesTab(identity, conversations, content,
                     onOpen = { row, focus -> open = ConversationTarget(row, focus) },
-                    onNavigateToMine = { tab = 1 })
-                else -> MineTab(identity, content, onLogout)
+                    onNavigateToChannels = { tab = 1 })
+                1 -> ChannelsTab(identity, content)
+                else -> SettingsTab(identity, content, onLogout)
+            }
+        }
+    }
+}
+
+/**
+ * 顶栏：48dp 内容高（Material3 的 TopAppBar 是 64dp，压到微信那一档），底色一直画到状态栏后面，
+ * 所以状态栏看起来就是顶栏的延续；底部一条分割线把它和列表分开。
+ */
+@Composable
+private fun PushBoxTopBar(title: @Composable () -> Unit,
+    navigationIcon: @Composable (() -> Unit)? = null,
+    actions: @Composable RowScope.() -> Unit = {},
+    centerTitle: Boolean = false) {
+    val colors = LocalPushBoxColors.current
+    Column(Modifier.fillMaxWidth().background(colors.topBar)) {
+        Row(Modifier.fillMaxWidth().statusBarsPadding().height(48.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            if (navigationIcon != null) navigationIcon()
+            Box(
+                Modifier.weight(1f).padding(horizontal = 8.dp),
+                contentAlignment = if (centerTitle) Alignment.Center else Alignment.CenterStart) {
+                title()
+            }
+            Row(Modifier.padding(end = 4.dp), horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically, content = actions)
+        }
+        Box(Modifier.fillMaxWidth().height(0.5.dp).background(colors.divider))
+    }
+}
+
+/** 底栏的一格：文字 + 图标，选中态只换色，不给它加 Material3 那块绿色的胶囊底。 */
+private data class BottomTab(val label: String, val icon: ImageVector)
+
+/** 底栏：52dp（Material3 NavigationBar 连内边距要 80dp），底色 #F7F7F7，顶部一条分割线。 */
+@Composable
+private fun PushBoxBottomBar(tabs: List<BottomTab>, selected: Int, onSelect: (Int) -> Unit) {
+    val colors = LocalPushBoxColors.current
+    Column(Modifier.fillMaxWidth().background(colors.bottomBar).navigationBarsPadding()) {
+        Box(Modifier.fillMaxWidth().height(0.5.dp).background(colors.divider))
+        Row(Modifier.fillMaxWidth().height(52.dp)) {
+            tabs.forEachIndexed { index, tab ->
+                val active = index == selected
+                Column(
+                    Modifier.weight(1f)
+                        .clickable { onSelect(index) }
+                        .padding(vertical = 7.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Icon(tab.icon, contentDescription = null,
+                        tint = if (active) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(21.dp))
+                    Spacer(Modifier.height(3.dp))
+                    Text(tab.label, style = MaterialTheme.typography.labelSmall,
+                        color = if (active) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }
@@ -777,7 +944,7 @@ private fun DelayBanner(text: String) {
 @Composable
 private fun MessagesTab(identity: Identity, conversations: List<ConversationRow>,
     modifier: Modifier, onOpen: (ConversationRow, String?) -> Unit,
-    onNavigateToMine: (() -> Unit)? = null) {
+    onNavigateToChannels: (() -> Unit)? = null) {
     val app = App.get(LocalContext.current)
     val scope = rememberCoroutineScope()
     var menuFor by remember { mutableStateOf<ConversationRow?>(null) }
@@ -807,20 +974,24 @@ private fun MessagesTab(identity: Identity, conversations: List<ConversationRow>
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.height(8.dp))
-                Text("前往「我的 → 接入」创建或加入频道以接收消息",
+                Text("前往「频道」创建或加入频道以接收消息",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center)
                 Spacer(Modifier.height(16.dp))
-                OutlinedButton(onClick = { onNavigateToMine?.invoke() }) {
+                OutlinedButton(onClick = { onNavigateToChannels?.invoke() }) {
                     Text("创建第一个频道")
                 }
             }
         } else {
-            LazyColumn(Modifier.fillMaxWidth()) {
+            // §9.1 列表：整页铺白，行间一条 #DEDEDE 分割线，且分割线起于文本起点（缩过头像那一格）
+            val pbc = LocalPushBoxColors.current
+            LazyColumn(Modifier.fillMaxWidth().background(pbc.rowBackground)) {
                 items(conversations, key = { "${it.channelNo}:${it.senderId}" }) { row ->
                     ConversationRowView(row, onOpen = { onOpen(row, null) },
                         onLong = { menuFor = row })
+                    HorizontalDivider(Modifier.padding(start = 66.dp),
+                        thickness = 0.5.dp, color = pbc.divider)
                 }
             }
         }
@@ -933,13 +1104,26 @@ private fun ConversationMenu(row: ConversationRow, onDismiss: () -> Unit,
 }
 
 @Composable
-private fun MenuOption(label: String, onClick: () -> Unit, checked: Boolean = false) {
-    TextButton(modifier = Modifier.fillMaxWidth(), onClick = onClick) {
+private fun MenuOption(label: String, onClick: () -> Unit, checked: Boolean = false,
+    danger: Boolean = false) {
+    TextButton(modifier = Modifier.fillMaxWidth(), onClick = onClick,
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = if (danger) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onSurface)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, modifier = Modifier.weight(1f))
             if (checked) Text("✓", color = MaterialTheme.colorScheme.primary)
         }
     }
+}
+
+/** 弹窗里的一组：一个小标题压着几条 [MenuOption]。频道操作有十项，不分段就是一片同质的按钮。 */
+@Composable
+private fun DialogGroup(title: String, content: @Composable () -> Unit) {
+    Text(title, style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
+    content()
 }
 
 /** 会话改名弹窗：留空即清除本地名、回落到服务端下发的发送者名。 */
@@ -975,9 +1159,9 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
     // 详情页覆盖在 shell 之上：系统返回键要收起详情，而不是退出 App
     BackHandler(onBack = onBack)
     val scope = rememberCoroutineScope()
-    // §7.4 D17：全部 / 未读 / 已读 只在右上 ⋮ 里切，页面不常驻 Tab
-    var filter by remember(conversation) { mutableStateOf(ConversationFilter.ALL) }
-    // §7.4 会话内搜索：与"未读/已读"是两条正交的轴，同时生效。输入先防抖再进 Room 的查询参数，
+    // §7.4：对话页不做"全部/未读/已读"筛选（与 PC 同步删掉）。进这一屏本来就会整条标已读，
+    // 筛选按钮点下去只会把刚刚还看得见的内容变没，没有读者。
+    // §7.4 会话内搜索：输入先防抖再进 Room 的查询参数，
     // 每敲一个字就重查一次全表在慢机上会把列表打字卡住。
     var searchOpen by remember(conversation) { mutableStateOf(false) }
     var rawQuery by remember(conversation) { mutableStateOf("") }
@@ -990,8 +1174,8 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
             query = rawQuery.trim()
         }
     }
-    val rows by remember(conversation, filter, query) {
-        app.dao.messagesFlow(conversation.channelNo, conversation.senderId, filter.readState, query)
+    val rows by remember(conversation, query) {
+        app.dao.messagesFlow(conversation.channelNo, conversation.senderId, query)
     }.collectAsState(initial = emptyList())
 
     LaunchedEffect(conversation) {
@@ -1011,7 +1195,6 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
 
     val listState = rememberLazyListState()
     var selected by remember { mutableStateOf<MessageRow?>(null) }
-    var showFilter by remember { mutableStateOf(false) }
     var highlightId by remember { mutableStateOf<String?>(null) }
     // 从搜索结果点进来要落在命中那条上：定位完成前先把"滚到最新"按住，否则两个效果互相拽。
     // 命中项只存在于服务端（本机没缓存正文）时这里找不到，退回页尾——那一条点开仍能看摘要。
@@ -1035,12 +1218,15 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
     }
 
     Scaffold(topBar = {
-        TopAppBar(
+        // §9.1 详情页顶栏：标题居中（微信口径），底色与主列表顶栏同一条 #EDEDED。
+        PushBoxTopBar(centerTitle = true,
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Avatar(conversation.displayName, conversation.avatarPath, conversation.senderId, sizeDp = 30)
                     Spacer(Modifier.width(8.dp))
-                    Text(conversation.displayName, maxLines = 1)
+                    Text(conversation.displayName, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurface)
                 }
             },
             navigationIcon = {
@@ -1049,9 +1235,10 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
                 }
             },
             actions = {
-                IconButton(onClick = { showFilter = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription =
-                    stringResource(R.string.conv_filter_title))
+                // 只有一个动作就不套一层菜单：放大镜直接开搜索条，少一次点击也少一个"点开发现只有一项"。
+                IconButton(onClick = { searchOpen = true }) {
+                    Icon(Icons.Filled.Search, contentDescription =
+                    stringResource(R.string.conv_search_entry))
                 }
             })
     }) { inset ->
@@ -1069,23 +1256,12 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
                 }
             }
             if (query != null) {
-                // 会话内搜索态：与筛选条同一手法，点一条就退出，免得用户找不到出口
+                // 会话内搜索态：点一条就退出，免得用户找不到出口
                 Row(Modifier.fillMaxWidth().height(24.dp)
                     .background(MaterialTheme.colorScheme.surfaceVariant)
                     .clickable { rawQuery = "" }
                     .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.conv_search_hits, rows.size),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            if (filter != ConversationFilter.ALL) {
-                // §9.3 筛选态提示条：浅灰一条，点它回到"全部"
-                Row(Modifier.fillMaxWidth().height(24.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .clickable { filter = ConversationFilter.ALL }
-                    .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(filter.hintRes),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -1108,8 +1284,7 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
                     
                     Text(
                         stringResource(if (query != null) R.string.conv_search_none
-                            else if (filter == ConversationFilter.ALL) R.string.empty_messages
-                            else R.string.filter_empty),
+                            else R.string.empty_messages),
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         textAlign = TextAlign.Center
@@ -1148,27 +1323,6 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
         }
     }
 
-    if (showFilter) {
-        AlertDialog(
-            onDismissRequest = { showFilter = false },
-            title = { Text(stringResource(R.string.conv_filter_title)) },
-            text = {
-                Column {
-                    MenuOption(stringResource(R.string.conv_search_entry),
-                        onClick = { searchOpen = true; showFilter = false })
-                    ConversationFilter.entries.forEach { f ->
-                        MenuOption(stringResource(f.labelRes), checked = f == filter,
-                            onClick = { filter = f; showFilter = false })
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showFilter = false }) {
-                    Text(stringResource(R.string.confirm_cancel))
-                }
-            })
-    }
-
     val target = selected
     if (target != null) {
         MessageActionSheet(target, onDismiss = { selected = null },
@@ -1184,13 +1338,6 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
                 }
             })
     }
-}
-
-/** §7.4 D17 对话页筛选：read_state 直接对应"未读/已读"，与游标语义一致。 */
-private enum class ConversationFilter(val readState: Int?, val labelRes: Int, val hintRes: Int) {
-    ALL(null, R.string.filter_all, R.string.filter_hint_all),
-    UNREAD(0, R.string.filter_unread, R.string.filter_hint_unread),
-    READ(1, R.string.filter_read, R.string.filter_hint_read),
 }
 
 /** 定位到命中那条后高亮停留多久。再久一点就会被读成"这条消息有什么特别"。 */
@@ -1335,7 +1482,7 @@ private fun MessageBubble(row: MessageRow, senderName: String, showTime: Boolean
                     Modifier
                         .widthIn(max = 320.dp)
                         .background(if (highlighted) MaterialTheme.colorScheme.tertiaryContainer
-                            else colors.bubbleIn, RoundedCornerShape(8.dp))
+                            else colors.bubble, RoundedCornerShape(8.dp))
                         // §7.3 非 info 级别在气泡左侧加一条竖向色条（warning 琥珀 / error 红）。
                         // 画在自身背景之上而不是另起一个 3dp Box：外层不再需要 IntrinsicSize.Min，
                         // 九宫格里的图片单元是不定高度的，内在测量会在 intrinsic 查询上直接崩。
@@ -1635,6 +1782,9 @@ private fun ChannelsTab(identity: Identity, modifier: Modifier) {
     var issued by remember { mutableStateOf<PushBoxApi.Channel?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // 本机记过的明文密钥（创建/重置/接入那三个时刻留下的）。服务端只存哈希，
+    // 所以"复制密钥"能给的只有这一份；没记过的频道在弹窗里直接说明原因。
+    val secrets by app.channelSecrets.collectAsState()
     var archiveTarget by remember { mutableStateOf<PushBoxApi.ChannelInfo?>(null) }
     var renameTarget by remember { mutableStateOf<PushBoxApi.ChannelInfo?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -1669,141 +1819,154 @@ private fun ChannelsTab(identity: Identity, modifier: Modifier) {
         modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        OutlinedTextField(
-            value = name, onValueChange = { name = it },
-            label = { Text(stringResource(R.string.channel_name_optional)) },
-            modifier = Modifier.fillMaxWidth(), singleLine = true)
-        Button(enabled = !busy, onClick = {
-            scope.launch {
-                busy = true; error = null
-                val created = name.trim().ifEmpty { Build.MODEL ?: "channel" }.take(24)
-                val outcome = runCatching {
-                    PushBoxApi(identity.baseUrl, app.http).createChannel(identity, created)
+        // 对齐 PC 频道面板（§8.4 W16）的五块：新建 / 接入信息 / 加入 / 接收范围 / 我的频道。
+        // 每块一张卡，操作收进每行的 ⋮ 里——以前 12 个按钮摊在一行上，一条频道能占满两屏。
+        SettingsSection(stringResource(R.string.channel_create)) {
+            OutlinedTextField(
+                value = name, onValueChange = { name = it },
+                label = { Text(stringResource(R.string.channel_name_optional)) },
+                modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Button(enabled = !busy, modifier = Modifier.weight(1f), onClick = {
+                    scope.launch {
+                        busy = true; error = null
+                        val created = name.trim().ifEmpty { Build.MODEL ?: "channel" }.take(24)
+                        val outcome = runCatching {
+                            PushBoxApi(identity.baseUrl, app.http).createChannel(identity, created)
+                        }
+                        busy = false
+                        outcome.fold(
+                            onSuccess = { issued = it; app.saveChannelSecret(it.channelNo, it.secret)
+                                name = ""; reload() },
+                            onFailure = { error = it.message ?: it::class.java.simpleName })
+                    }
+                }) { Text(stringResource(R.string.channel_create)) }
+                OutlinedButton(enabled = !busy, onClick = { scope.launch { reload() } }) {
+                    Text(stringResource(R.string.channels_refresh))
                 }
-                busy = false
-                outcome.fold(
-                    onSuccess = { issued = it; name = ""; reload() },
-                    onFailure = { error = it.message ?: it::class.java.simpleName })
             }
-        }) { Text(stringResource(R.string.channel_create)) }
+        }
+
+        issued?.let { IssuedChannelCard(identity, it) }
 
         // §5.2 加入频道：把这台设备登记进某个频道的接收集。号码与密钥都手输，
         // 因为服务端只在同 Space 内校验它们成对（跨 Space 一律 404），本机不猜归属
-        Text(stringResource(R.string.channel_join_title),
-            style = MaterialTheme.typography.titleMedium)
-        Text(stringResource(R.string.channel_join_desc),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedTextField(
-            value = joinNo, onValueChange = { joinNo = it },
-            label = { Text(stringResource(R.string.channel_join_no_hint)) },
-            modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(
-            value = joinSecret, onValueChange = { joinSecret = it },
-            label = { Text(stringResource(R.string.channel_join_secret_hint)) },
-            modifier = Modifier.fillMaxWidth(), singleLine = true)
-        Button(enabled = !busy, onClick = {
-            if (joinNo.isBlank() || joinSecret.isBlank()) {
-                error = needBoth
-                return@Button
-            }
-            scope.launch {
-                busy = true; error = null; joinedTip = null
-                val outcome = runCatching {
-                    PushBoxApi(identity.baseUrl, app.http).joinChannel(identity, joinNo, joinSecret)
+        SettingsSection(stringResource(R.string.channel_join_title)) {
+            Text(stringResource(R.string.channel_join_desc),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedTextField(
+                value = joinNo, onValueChange = { joinNo = it },
+                label = { Text(stringResource(R.string.channel_join_no_hint)) },
+                modifier = Modifier.fillMaxWidth(), singleLine = true)
+            OutlinedTextField(
+                value = joinSecret, onValueChange = { joinSecret = it },
+                label = { Text(stringResource(R.string.channel_join_secret_hint)) },
+                modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
+                if (joinNo.isBlank() || joinSecret.isBlank()) {
+                    error = needBoth
+                    return@Button
                 }
-                busy = false
-                outcome.fold(
-                    onSuccess = { joinNo = ""; joinSecret = ""; joinedTip = doneTip; reload() },
-                    onFailure = { error = it.message ?: it::class.java.simpleName })
-            }
-        }) { Text(stringResource(R.string.channel_join_title)) }
-
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.channel_filter_only),
-                    style = MaterialTheme.typography.titleMedium)
-                Text(stringResource(R.string.channel_filter_only_desc),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Switch(checked = subscribedOnly, enabled = !busy, onCheckedChange = { want ->
                 scope.launch {
-                    busy = true; error = null
+                    busy = true; error = null; joinedTip = null
+                    // 先把这两串抓住：成功后要清输入框，而记档用的正是用户刚敲的这份明文
+                    // （joinChannel 是 void，服务端不回显密钥）
+                    val no = joinNo.trim()
+                    val plain = joinSecret.trim()
                     val outcome = runCatching {
-                        PushBoxApi(identity.baseUrl, app.http).setSubscriptionMode(identity, want)
+                        PushBoxApi(identity.baseUrl, app.http).joinChannel(identity, no, plain)
                     }
                     busy = false
                     outcome.fold(
-                        onSuccess = { subscribedOnly = it },
+                        onSuccess = {
+                            app.saveChannelSecret(no, plain)
+                            joinNo = ""; joinSecret = ""; joinedTip = doneTip; reload()
+                        },
                         onFailure = { error = it.message ?: it::class.java.simpleName })
                 }
-            })
+            }) { Text(stringResource(R.string.channel_join_title)) }
         }
-        // 开着过滤却一个都没接入＝这台设备从此静默，这必须是用户自己选的结论，但要提前说出来
-        if (subscribedOnly && channels?.any { it.subscribed } != true) {
-            Text(stringResource(R.string.channel_filter_only_empty),
-                color = MaterialTheme.colorScheme.error)
+
+        SettingsSection(stringResource(R.string.channel_filter_only)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.channel_filter_only_desc),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f))
+                Spacer(Modifier.width(12.dp))
+                Switch(checked = subscribedOnly, enabled = !busy, onCheckedChange = { want ->
+                    scope.launch {
+                        busy = true; error = null
+                        val outcome = runCatching {
+                            PushBoxApi(identity.baseUrl, app.http).setSubscriptionMode(identity, want)
+                        }
+                        busy = false
+                        outcome.fold(
+                            onSuccess = { subscribedOnly = it },
+                            onFailure = { error = it.message ?: it::class.java.simpleName })
+                    }
+                })
+            }
+            // 开着过滤却一个都没接入＝这台设备从此静默，这必须是用户自己选的结论，但要提前说出来
+            if (subscribedOnly && channels?.any { it.subscribed } != true) {
+                Text(stringResource(R.string.channel_filter_only_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error)
+            }
         }
 
         if (busy) Text(stringResource(R.string.channel_rotate_working))
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         joinedTip?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
 
-        issued?.let { IssuedChannelCard(identity, it) }
-
-        Text(stringResource(R.string.channel_list_title),
-            style = MaterialTheme.typography.titleMedium)
-        val list = channels
-        when {
-            list == null -> Text(stringResource(R.string.channel_loading))
-            list.isEmpty() -> Text(stringResource(R.string.channel_none))
-            else -> list.forEach { ch ->
-                ChannelListRow(ch, busy = busy,
-                    onRotate = {
-                        scope.launch {
-                            busy = true; error = null
-                            val outcome = runCatching {
-                                PushBoxApi(identity.baseUrl, app.http)
-                                    .rotateSecret(identity, ch.channelNo)
+        SettingsSection(stringResource(R.string.channel_list_title)) {
+            val list = channels
+            when {
+                list == null -> Text(stringResource(R.string.channel_loading))
+                list.isEmpty() -> Text(stringResource(R.string.channel_none))
+                else -> list.forEachIndexed { index, ch ->
+                    ChannelListRow(ch, busy = busy, secret = secrets[ch.channelNo],
+                        onRotate = {
+                            scope.launch {
+                                busy = true; error = null
+                                val outcome = runCatching {
+                                    PushBoxApi(identity.baseUrl, app.http)
+                                        .rotateSecret(identity, ch.channelNo)
+                                }
+                                busy = false
+                                outcome.fold(
+                                    onSuccess = { issued = it
+                                        app.saveChannelSecret(it.channelNo, it.secret) },
+                                    onFailure = { error = it.message ?: it::class.java.simpleName })
                             }
-                            busy = false
-                            outcome.fold(
-                                onSuccess = { issued = it },
-                                onFailure = { error = it.message ?: it::class.java.simpleName })
-                        }
-                    },
-                    onSetLevel = { lvl ->
-                        scope.launch {
-                            busy = true; error = null
-                            runCatching {
-                                PushBoxApi(identity.baseUrl, app.http)
-                                    .setChannelMaxLevel(identity, ch.channelNo, lvl)
-                            }.onFailure { error = it.message ?: it::class.java.simpleName }
-                            busy = false
-                            reload()
-                        }
-                    },
-                    onArchive = { archiveTarget = ch },
-                    onRename = { renameTarget = ch; renameText = ch.name },
-                    onClear = { clearTarget = ch },
-                    onGovernance = { governanceTarget = ch },
-                    onCapacity = { capacityTarget = ch },
-                    onSenders = { sendersTarget = ch },
-                    onResetNo = { resetNoTarget = ch },
-                    onSubscribe = { subscribeTarget = ch; subscribeSecret = "" },
-                    onUnsubscribe = {
-                        scope.launch {
-                            busy = true; error = null
-                            val outcome = runCatching {
-                                PushBoxApi(identity.baseUrl, app.http).leaveChannel(identity, ch.channelNo)
+                        },
+                        onArchive = { archiveTarget = ch },
+                        onRename = { renameTarget = ch; renameText = ch.name },
+                        onClear = { clearTarget = ch },
+                        onGovernance = { governanceTarget = ch },
+                        onCapacity = { capacityTarget = ch },
+                        onSenders = { sendersTarget = ch },
+                        onResetNo = { resetNoTarget = ch },
+                        onSubscribe = { subscribeTarget = ch; subscribeSecret = "" },
+                        onUnsubscribe = {
+                            scope.launch {
+                                busy = true; error = null
+                                val outcome = runCatching {
+                                    PushBoxApi(identity.baseUrl, app.http).leaveChannel(identity, ch.channelNo)
+                                }
+                                busy = false
+                                outcome.fold(
+                                    onSuccess = { joinedTip = doneTip; reload() },
+                                    onFailure = { error = it.message ?: it::class.java.simpleName })
                             }
-                            busy = false
-                            outcome.fold(
-                                onSuccess = { joinedTip = doneTip; reload() },
-                                onFailure = { error = it.message ?: it::class.java.simpleName })
-                        }
-                    })
+                        })
+                    if (index < list.lastIndex) {
+                        HorizontalDivider(thickness = 0.5.dp,
+                            color = LocalPushBoxColors.current.divider)
+                    }
+                }
             }
         }
     }
@@ -1919,7 +2082,12 @@ private fun ChannelsTab(identity: Identity, modifier: Modifier) {
                         busy = false
                         // 服务端换了对外号码：明文密钥没变，但接入地址要按新号重抄一份
                         outcome.fold(
-                            onSuccess = { issued = PushBoxApi.Channel(it, "", "") },
+                            onSuccess = { issued = PushBoxApi.Channel(it, "", "")
+                                // 记档跟着号码走，否则新号码的「复制密钥」会查不到（密钥其实没变）
+                                secrets[t.channelNo]?.let { old ->
+                                    app.saveChannelSecret(t.channelNo, "")
+                                    app.saveChannelSecret(it, old)
+                                } },
                             onFailure = { error = it.message ?: it::class.java.simpleName })
                         reload()
                     }
@@ -1957,7 +2125,10 @@ private fun ChannelsTab(identity: Identity, modifier: Modifier) {
                         }
                         busy = false
                         outcome.fold(
-                            onSuccess = { joinedTip = doneTip; reload() },
+                            onSuccess = {
+                                app.saveChannelSecret(target.channelNo, subscribeSecret.trim())
+                                joinedTip = doneTip; reload()
+                            },
                             onFailure = { error = it.message ?: it::class.java.simpleName })
                     }
                 }) { Text(stringResource(R.string.confirm_ok)) }
@@ -1988,6 +2159,9 @@ private fun ChannelGovernanceDialog(identity: Identity, channel: PushBoxApi.Chan
     var strictAuth by remember { mutableStateOf(channel.strictAuth) }
     var muted by remember { mutableStateOf(channel.muted) }
     var whitelist by remember { mutableStateOf(channel.senderWhitelistMode) }
+    // D25 提醒强度上限：info < warning < error，第三方自报的 level 会被截断到这里。
+    // 它以前是列表行上的三个按钮，现在跟其余治理位一起收在这张卡里。
+    var maxLevel by remember { mutableStateOf(channel.maxLevel) }
     var busy by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
@@ -1995,6 +2169,13 @@ private fun ChannelGovernanceDialog(identity: Identity, channel: PushBoxApi.Chan
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(stringResource(R.string.channel_max_level),
+                    style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("info", "warning", "error").forEach { lvl ->
+                        ChoiceChip(lvl, selected = maxLevel == lvl) { maxLevel = lvl }
+                    }
+                }
                 NumberField(stringResource(R.string.channel_g_max_images), maxImages) { maxImages = it }
                 NumberField(stringResource(R.string.channel_g_rate_limit), rateLimit) { rateLimit = it }
                 NumberField(stringResource(R.string.channel_g_body_bytes), bodyBytes) { bodyBytes = it }
@@ -2019,6 +2200,7 @@ private fun ChannelGovernanceDialog(identity: Identity, channel: PushBoxApi.Chan
                     // 与当前值相同的字段发 null＝不提交：既少写一遍库，也避免把
                     // 服务端 clamp 过的值（如 max_images 上限 16）原样回写成越界值
                     val patch = PushBoxApi.ChannelPatch(
+                        maxLevel = maxLevel.takeIf { it != channel.maxLevel },
                         maxImages = changedInt(maxImages, channel.maxImages),
                         rateLimit = changedInt(rateLimit, channel.rateLimit),
                         maxBodyBytes = changedInt(bodyBytes, channel.maxBodyBytes),
@@ -2189,90 +2371,129 @@ private fun IssuedChannelCard(identity: Identity, channel: PushBoxApi.Channel) {
     }
 }
 
+/**
+ * 频道列表的一行：一行放得下（名称 + 频道号 + 接入状态），操作全收进 ⋮。
+ * 之前这张卡把每个动作都摊成一个按钮，一条频道占两屏高，频道一多整页就没法看了。
+ */
 @Composable
-private fun ChannelListRow(channel: PushBoxApi.ChannelInfo, busy: Boolean,
-    onRotate: () -> Unit, onSetLevel: (String) -> Unit, onArchive: () -> Unit,
+private fun ChannelListRow(channel: PushBoxApi.ChannelInfo, busy: Boolean, secret: String?,
+    onRotate: () -> Unit, onArchive: () -> Unit,
     onRename: () -> Unit, onClear: () -> Unit, onGovernance: () -> Unit,
     onCapacity: () -> Unit, onSenders: () -> Unit, onResetNo: () -> Unit,
     onSubscribe: () -> Unit, onUnsubscribe: () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(channel.name.ifBlank { stringResource(R.string.channel_unnamed) },
-                style = MaterialTheme.typography.titleMedium)
-            CopyableField(stringResource(R.string.field_channel_no), channel.channelNo)
-            // §5.2 接入标记是设备级的：同一张列表在另一台设备上可以全是"未接入"
-            Text(
-                if (channel.subscribed) stringResource(R.string.channel_subscribed)
-                else stringResource(R.string.channel_not_subscribed),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (channel.subscribed) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (channel.subscribed) {
-                    OutlinedButton(enabled = !busy, onClick = onUnsubscribe) {
-                        Text(stringResource(R.string.channel_unsubscribe))
-                    }
-                } else {
-                    OutlinedButton(enabled = !busy, onClick = onSubscribe) {
-                        Text(stringResource(R.string.channel_subscribe))
-                    }
+    var menu by remember { mutableStateOf(false) }
+    val copyNo = rememberCopyAction(channel.channelNo)
+    // 本机没记档时这个闭包不会被触发（弹窗里那一项直接不出现），给个空串只为满足 remember 的位置
+    val copySecret = rememberCopyAction(secret.orEmpty())
+    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(channel.name.ifBlank { stringResource(R.string.channel_unnamed) },
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false))
+                // §5.2 接入标记是设备级的：同一张列表在另一台设备上可以全是"未接入"
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(if (channel.subscribed) R.string.channel_subscribed
+                    else R.string.channel_not_subscribed),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (channel.subscribed) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant)
+                if (channel.muted) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.channel_flag_muted),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            // D25 提醒强度上限：info < warning < error，第三方自报的 level 会被截断到这里
-            Text(stringResource(R.string.channel_max_level),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("info", "warning", "error").forEach { lvl ->
-                    val selected = channel.maxLevel == lvl
-                    if (selected) {
-                        Button(enabled = !busy, onClick = { }) { Text(lvl) }
-                    } else {
-                        OutlinedButton(enabled = !busy, onClick = { onSetLevel(lvl) }) { Text(lvl) }
-                    }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(enabled = !busy, onClick = onRename) {
-                    Text(stringResource(R.string.channel_rename))
-                }
-                OutlinedButton(enabled = !busy, onClick = onClear,
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )) {
-                    Text(stringResource(R.string.channel_clear))
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(enabled = !busy, onClick = onRotate) {
-                    Text(stringResource(R.string.channel_rotate))
-                }
-                OutlinedButton(enabled = !busy, onClick = onArchive,
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )) {
-                    Text(stringResource(R.string.channel_archive))
-                }
-            }
-            // §14 治理：阈值/配额、容量报表、发送者白名单、换发频道号
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(enabled = !busy, onClick = onGovernance) {
-                    Text(stringResource(R.string.channel_governance))
-                }
-                OutlinedButton(enabled = !busy, onClick = onSenders) {
-                    Text(stringResource(R.string.channel_senders))
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(enabled = !busy, onClick = onCapacity) {
-                    Text(stringResource(R.string.channel_capacity))
-                }
-                OutlinedButton(enabled = !busy, onClick = onResetNo) {
-                    Text(stringResource(R.string.channel_reset_no))
-                }
+            Row {
+                Text(channel.channelNo, style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = FontFamily.Monospace, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f, fill = false))
+                Text(" · ${channel.maxLevel}", style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        Spacer(Modifier.width(8.dp))
+        IconButton(enabled = !busy, onClick = { menu = true }) {
+            Icon(Icons.Filled.MoreVert,
+                contentDescription = stringResource(R.string.channel_actions))
+        }
     }
+    if (menu) {
+        val dismiss: () -> Unit = { menu = false }
+        ChannelActionsDialog(channel, secret, dismiss, copyNo, copySecret,
+            onSubscribe = onSubscribe, onUnsubscribe = onUnsubscribe, onRename = onRename,
+            onGovernance = { dismiss(); onGovernance() },
+            onSenders = { dismiss(); onSenders() },
+            onCapacity = { dismiss(); onCapacity() },
+            onRotate = { dismiss(); onRotate() },
+            onResetNo = { dismiss(); onResetNo() },
+            onClear = { dismiss(); onClear() },
+            onArchive = { dismiss(); onArchive() })
+    }
+}
+
+/**
+ * ⋮ 的内容。原先是 10 项 `DropdownMenu`：拉到屏幕底、危险项夹在中间，而且"密钥"这件事
+ * 根本没地方交代——服务端只存 sha256，本机没记档时用户点了复制只会拿到一个空。
+ * 弹窗能分组、能放说明文字，项再多也滚得动。
+ */
+@Composable
+private fun ChannelActionsDialog(channel: PushBoxApi.ChannelInfo, secret: String?,
+    onDismiss: () -> Unit, copyNo: () -> Unit, copySecret: () -> Unit,
+    onSubscribe: () -> Unit, onUnsubscribe: () -> Unit, onRename: () -> Unit,
+    onGovernance: () -> Unit, onSenders: () -> Unit, onCapacity: () -> Unit,
+    onRotate: () -> Unit, onResetNo: () -> Unit, onClear: () -> Unit, onArchive: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(channel.name.ifBlank { stringResource(R.string.channel_unnamed) },
+            maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(channel.channelNo, style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                DialogGroup(stringResource(R.string.channel_grp_access)) {
+                    MenuOption(stringResource(if (channel.subscribed) R.string.channel_unsubscribe
+                        else R.string.channel_subscribe),
+                        onClick = if (channel.subscribed) onUnsubscribe else onSubscribe)
+                    MenuOption(stringResource(R.string.channel_rename), onClick = onRename)
+                    MenuOption(stringResource(R.string.channel_copy_no), onClick = copyNo)
+                }
+                DialogGroup(stringResource(R.string.channel_grp_secret)) {
+                    if (secret != null) {
+                        // 只给复制、不把明文显示出来：这一屏随时可能被人从肩膀后面看见
+                        MenuOption(stringResource(R.string.channel_copy_secret),
+                            onClick = copySecret)
+                    } else {
+                        Text(stringResource(R.string.channel_secret_missing),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                DialogGroup(stringResource(R.string.channel_grp_govern)) {
+                    MenuOption(stringResource(R.string.channel_governance), onClick = onGovernance)
+                    MenuOption(stringResource(R.string.channel_senders), onClick = onSenders)
+                    MenuOption(stringResource(R.string.channel_capacity), onClick = onCapacity)
+                }
+                DialogGroup(stringResource(R.string.channel_grp_danger)) {
+                    MenuOption(stringResource(R.string.channel_rotate), onClick = onRotate)
+                    MenuOption(stringResource(R.string.channel_reset_no), onClick = onResetNo)
+                    MenuOption(stringResource(R.string.channel_clear),
+                        danger = true, onClick = onClear)
+                    MenuOption(stringResource(R.string.channel_archive),
+                        danger = true, onClick = onArchive)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.confirm_close)) }
+        })
 }
 
 /** §5.2 设备行：名称 + 平台 + 最近在线；本机标「当前」，他端给吊销入口，已吊销只读。 */
@@ -2300,44 +2521,6 @@ private fun DeviceRow(dev: PushBoxApi.DeviceInfo, busy: Boolean, onRevoke: () ->
             else -> OutlinedButton(enabled = !busy, onClick = onRevoke) {
                 Text(stringResource(R.string.device_revoke))
             }
-        }
-    }
-}
-
-/** §7.4 D17：底栏收成 2 tab 后，"我的"内部再分「接入」（频道 CRUD，原第三个顶级 tab）与「设置」两栏。
- * 两段各自带 verticalScroll，用 toggle 切换、绝不把两个滚动容器叠进同一个 scroll（那样会直接崩布局）。 */
-@Composable
-private fun MineTab(identity: Identity, modifier: Modifier, onLogout: () -> Unit) {
-    var sub by remember { mutableStateOf(0) }
-    Column(modifier) {
-        // Tab 切换按钮：增加间距，改善布局
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            if (sub == 0) {
-                Button(onClick = { /* 已在选中状态 */ }, modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.mine_tab_access))
-                }
-            } else {
-                OutlinedButton(onClick = { sub = 0 }, modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.mine_tab_access))
-                }
-            }
-            if (sub == 1) {
-                Button(onClick = { /* 已在选中状态 */ }, modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.mine_tab_settings))
-                }
-            } else {
-                OutlinedButton(onClick = { sub = 1 }, modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.mine_tab_settings))
-                }
-            }
-        }
-        val content = Modifier.fillMaxWidth().weight(1f)
-        when (sub) {
-            0 -> ChannelsTab(identity, content)
-            else -> SettingsTab(identity, content, onLogout)
         }
     }
 }
@@ -3384,6 +3567,7 @@ private fun InfoRow(label: String, value: String, valueColor: Color? = null) {
             modifier = Modifier.width(96.dp))
         Text(value, style = MaterialTheme.typography.bodyMedium,
             color = valueColor ?: MaterialTheme.colorScheme.onSurface,
+            maxLines = 2, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f))
     }
 }
@@ -3394,8 +3578,12 @@ private fun CopyableField(label: String, value: String) {
     val copy = rememberCopyAction(value)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.labelSmall)
-            Text(value, style = MaterialTheme.typography.bodyMedium)
+            Text(label, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // 值可能是整行 curl（一百多字符）：最多占两行，其余省略，完整内容交给右边那个"复制"
+            Text(value, style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         TextButton(onClick = copy) { Text(stringResource(R.string.copy)) }
     }
@@ -3502,22 +3690,27 @@ private fun Avatar(name: String, avatarPath: String? = null, senderId: String? =
         }
     }
     val bmp = bitmap
+    // §9.2 微信式方圆形头像：圆角随边长等比走（44dp 那一档正好 6dp），与 PC 的 AvatarBox 同一比例。
+    // 之前是正圆，同一台机器换到 PC 上就成了两套头像形状。
+    val shape = RoundedCornerShape((sizeDp * 6 / 44f).dp)
     if (bmp != null) {
         Image(bitmap = bmp.asImageBitmap(), contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = Modifier.size(sizeDp.dp).clip(CircleShape))
+            modifier = Modifier.size(sizeDp.dp).clip(shape))
     } else {
         val initial = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
         Box(contentAlignment = Alignment.Center,
-            modifier = Modifier.size(sizeDp.dp).background(avatarColor(name), CircleShape)) {
-            Text(initial, color = Color.White, style = MaterialTheme.typography.titleMedium)
+            modifier = Modifier.size(sizeDp.dp).clip(shape).background(avatarColor(name), shape)) {
+            Text(initial, color = Color.White, fontSize = (sizeDp * 16 / 44).sp,
+                fontWeight = FontWeight.Medium)
         }
     }
 }
 
+/** 与 PC 的 AvatarVisual.Palette 逐值对齐：同名会话在两个屏上必须同色。 */
 private val AVATAR_PALETTE = listOf(
-    Color(0xFF0ABF5E), Color(0xFF198CFF), Color(0xFFF5222D),
-    Color(0xFFFF8C00), Color(0xFF7B61FF), Color(0xFF00B3A7),
+    Color(0xFF07C160), Color(0xFF198CFF), Color(0xFFFA5151),
+    Color(0xFFB06900), Color(0xFF7B61FF), Color(0xFF00B3A7),
 )
 
 private fun avatarColor(name: String): Color {

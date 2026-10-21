@@ -118,6 +118,17 @@ class App : android.app.Application() {
         scope.launch { identity.setThemeMode(mode) }
     }
 
+    /**
+     * 本机记过的频道明文密钥，供频道页「复制密钥」读。
+     * 只有创建 / 重置 / 接入这三个时刻写进来——服务端从不回显明文，别处建的频道号在这里就是空的。
+     */
+    val channelSecrets = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    fun saveChannelSecret(channelNo: String, secret: String) {
+        channelSecrets.value = channelSecrets.value + (channelNo to secret)
+        scope.launch { identity.putChannelSecret(channelNo, secret) }
+    }
+
     /** §7.4 通知静默时段：默认关；起止为"距 0 点分钟数"，跨零点时 start>end。 */
     val quietEnabled = MutableStateFlow(false)
     val quietStart = MutableStateFlow(22 * 60)
@@ -255,6 +266,7 @@ class App : android.app.Application() {
         scope.launch { notifyRecoveryShown.value = identity.notifyRecoveryShown() }
         scope.launch { pollingMode.value = identity.pollingMode() }
         scope.launch { autoCheckUpdate.value = identity.autoCheckUpdate() }
+        scope.launch { channelSecrets.value = identity.channelSecrets() }
         scope.launch {
             quietEnabled.value = identity.quietEnabled()
             quietStart.value = identity.quietStartMin()

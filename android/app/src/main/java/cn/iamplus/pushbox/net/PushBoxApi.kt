@@ -135,11 +135,6 @@ class PushBoxApi(private val baseUrl: String, private val client: OkHttpClient) 
         return ChannelInfo.from(node)
     }
 
-    /** §5.2/D25 改频道提醒强度上限：一个只带 max_level 的补丁。 */
-    suspend fun setChannelMaxLevel(identity: Identity, channelNo: String, maxLevel: String) {
-        updateChannel(identity, channelNo, ChannelPatch(maxLevel = maxLevel))
-    }
-
     /** §5.2 归档频道：DELETE /api/v1/channels/{no}，归档后该频道拒绝新投递（403 channel_locked）。 */
     suspend fun archiveChannel(identity: Identity, channelNo: String) {
         exchange("/api/v1/channels/$channelNo", "", identity, identity.encPrivate,
@@ -448,7 +443,22 @@ class PushBoxApi(private val baseUrl: String, private val client: OkHttpClient) 
         }
     }
 
-    class ApiError(val code: Int, val body: String) : Exception("HTTP $code: $body")
+    class ApiError(val code: Int, val body: String) : Exception(formatErrorMessage(code, body)) {
+        companion object {
+            /** 从服务端响应的 JSON 中提取 hint 字段，如果没有则返回通用错误信息 */
+            private fun formatErrorMessage(code: Int, body: String): String {
+                return try {
+                    val node = Json.MAPPER.readTree(body)
+                    val hint = node.path("hint").asText(null)
+                    if (!hint.isNullOrBlank()) hint
+                    else "请求失败（HTTP $code）"
+                } catch (_: Exception) {
+                    // 如果不是 JSON 或解析失败，返回原始 body
+                    if (body.isNotBlank()) body.take(200) else "网络请求失败"
+                }
+            }
+        }
+    }
 
     data class Enrolled(
         val deviceId: String,

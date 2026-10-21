@@ -114,18 +114,18 @@ interface PushBoxDao {
 
     /**
      * 会话详情页：按时间正序流式读取，新消息实时上屏。
-     * §7.4 D17：readState 为 null 看全部、0 只看未读、1 只看已读，切换不改动底层数据。
-     * [q] 非空即"在会话中搜索"：只留正文/摘要/标题命中关键词的那几条，与 readState 是两条正交的轴。
-     * 
+     * 这里**没有**"未读/已读"那一维：进这一屏就会把整条会话标已读，再留一个筛选只会把
+     * 刚刚还看得见的内容变没（PC 侧同一条已删，Android 跟着删）。
+     * [q] 非空即"在会话中搜索"：只留正文/摘要/标题命中关键词的那几条。
+     *
      * 复合排序：先按 created_at 再按 seq，确保相同时间戳的消息严格按 seq 升序显示。
      * 断网重连后补拉的消息虽然时间戳相同，但 seq 单调递增，此排序可保证正确顺序。
      */
     @Query("SELECT * FROM messages WHERE channel_no = :channelNo AND sender_id = :senderId " +
-        "AND (:readState IS NULL OR read_state = :readState) " +
         "AND (:q IS NULL OR (body LIKE '%'||:q||'%' OR summary LIKE '%'||:q||'%' " +
         "OR title LIKE '%'||:q||'%')) ORDER BY created_at ASC, seq ASC")
     fun messagesFlow(channelNo: String, senderId: String,
-        readState: Int?, q: String?): Flow<List<MessageRow>>
+        q: String?): Flow<List<MessageRow>>
 
     @Query("SELECT last_applied_seq FROM sync_state WHERE id = 1")
     suspend fun lastAppliedSeq(): Long?
