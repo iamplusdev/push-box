@@ -4,11 +4,20 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-/** 全项目唯一的 ObjectMapper 配置：只写非 null、忽略未知字段（协议向前兼容的关键）。 */
+/**
+ * 全项目唯一的 ObjectMapper 配置：只写非 null、忽略未知字段（协议向前兼容的关键）、
+ * 但尾部残留 token 一律判失败。
+ *
+ * <p>{@code FAIL_ON_TRAILING_TOKENS} 是刻意加的，不是随手收紧：Jackson 默认看完第一个完整对象就返回，
+ * 后面的垃圾不检查。于是 {@code {"enabled":1}垃圾} 在服务端是"解析成功 + 请求真执行 + 200"，
+ * 而落进库里的那份内容只来自前半段，提交者以为整段被接受了。
+ * 口径是"一个 HTTP body / 一个 WS 文本帧就是一个对象"，由 {@code JsonTrailingTokenTest} 钉住。
+ */
 public final class Json {
   public static final ObjectMapper MAPPER = new ObjectMapper()
       .setSerializationInclusion(JsonInclude.Include.NON_NULL)
-      .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+      .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+      .configure(DeserializationFeature.FAIL_ON_TRAILING_TOKENS, true);
 
   private Json() {}
 

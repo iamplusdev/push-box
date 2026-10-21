@@ -116,6 +116,26 @@ class AdminControllerBodyTest {
     verify(scheduledTasks).setEnabled("t-1", false);
   }
 
+  @Test
+  @DisplayName("⑤ 合法对象后面拖一段垃圾：以前 200 且真执行，现在和坏体同一条 400")
+  void trailingGarbageAfterAValidObjectIsRejected() {
+    // 收口在 core 的 Json.MAPPER（FAIL_ON_TRAILING_TOKENS），这一层只确认它被收成 400 信封
+    for (byte[] bad : new byte[][] {
+        "{\"name\":\"运维播报\"}x".getBytes(StandardCharsets.UTF_8),
+        "{\"enabled\":1}{\"enabled\":0}".getBytes(StandardCharsets.UTF_8)}) {
+      assertThatThrownBy(() -> controller.createChannel(bad, request()))
+          .isInstanceOfSatisfying(ApiException.class, e -> {
+            assertThat(e.status()).isEqualTo(400);
+            assertThat(e.toError().hint()).isEqualTo("请求体必须是合法 JSON");
+          });
+      assertThatThrownBy(() -> controller.setScheduledTaskEnabled("t-1", bad, request()))
+          .isInstanceOfSatisfying(ApiException.class, e -> {
+            assertThat(e.status()).isEqualTo(400);
+            assertThat(e.toError().hint()).isEqualTo("请求体必须是合法 JSON");
+          });
+    }
+  }
+
   private static String repeat(String unit, int times) {
     return unit.repeat(times);
   }

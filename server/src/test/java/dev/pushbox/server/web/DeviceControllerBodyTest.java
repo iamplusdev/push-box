@@ -35,6 +35,9 @@ class DeviceControllerBodyTest {
   private static final byte[] NOT_JSON = "这不是 JSON".getBytes(StandardCharsets.UTF_8);
   private static final byte[] WHITESPACE = "   ".getBytes(StandardCharsets.UTF_8);
   private static final byte[] ROOT_ARRAY = "[1,2,3]".getBytes(StandardCharsets.UTF_8);
+  /** 前半段完全合法、后面拖垃圾：这条以前是 200 且请求真执行，收口在 core 的 Json.MAPPER。 */
+  private static final byte[] TRAILING = "{\"channel_no\":\"12345678\"}x"
+      .getBytes(StandardCharsets.UTF_8);
 
   private final ChannelService channels = mock(ChannelService.class);
   private final DeviceService devices = mock(DeviceService.class);
@@ -131,6 +134,18 @@ class DeviceControllerBodyTest {
         request());
     verify(devices).register(argThat(request -> "enc-a".equals(request.encPubkey())
         && "sign-a".equals(request.signPubkey())));
+  }
+
+  @Test
+  @DisplayName("⑥ 尾部垃圾与坏 JSON 走同一条门：readBytes 与 readTree 两条路都要拒")
+  void trailingGarbageRejectedOnBothParsePaths() {
+    when(guard.require(any(), any())).thenReturn(
+        new DeviceGuard.Authenticated(null, "ops-space", "d-1"));
+    assertHint(() -> channelController.join(request(), TRAILING), "请求体必须是合法 JSON");
+    assertHint(() -> channelController.update("12345678", request(), TRAILING),
+        "请求体必须是合法 JSON");
+    when(guard.ipAllowed(any())).thenReturn(true);
+    assertHint(() -> deviceController.register(TRAILING, request()), "请求体必须是合法 JSON");
   }
 
   private void assertEnvelope(org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {

@@ -111,12 +111,15 @@ jobs:
 
       # 闸门用例的存在性证明：skipped 必须为 0，且执行总数不低于实测基线。
       # 只判"mvn 退出码 0"是不够的 —— 凭据没传进去时它同样退 0。
-      # 基线是 2026-10-21 用 JDK 21 实跑出来的 surefire 汇总：server 235（其中 114 条是闸门类）+ core 38 = 273。
+      # 基线是 2026-10-21 用 JDK 21 实跑出来的 surefire 汇总：server 237（其中 114 条是闸门类）+ core 43 = 280。
       # 这个数字只许涨不许跌；跌了说明有人删了测试或改了 include 规则，而不是"环境不一样"。
       # 223 → 227 是 AdminControllerBodyTest 那 4 条（管理台坏请求体返 400 的收口用例）；
       # 227 → 232 是 DeviceControllerBodyTest 那 5 条（设备侧同一收口），两次都是同版本 JDK 实跑抬的。
       # 232 → 235 是定时任务分类标签：1 条归一与回显（Mockito）+ 2 条真库往返（ScheduledTaskStoreTest，
       # 它同时是 Flyway V9 与 insertScheduledTask 那份列清单/占位符的往返证明）。
+      # 235 → 237 与 core 38 → 43 是"尾部垃圾 JSON"这一条：core 那 5 条（JsonTrailingTokenTest）把三条入站
+      # 解析路子的宽松度钉死，server 这 2 条确认同一份严格度落到 HTTP 上是 400 信封而不是 500。
+      # 这条 trail 到此是 server 数；总基线跟着从 273 抬到 280（core 也在动，往后别再只记 server 那一半）。
       - name: 断言 DB 闸门用例真的执行了
         run: |
           set -euo pipefail
@@ -134,8 +137,8 @@ jobs:
           if skipped != 0:
               print("::error::有 %d 条用例被跳过：DB/S3 凭据没传到位（见本 job 顶部说明），全绿不代表测过" % skipped)
               sys.exit(1)
-          if tests < 273:
-              print("::error::用例总数 %d 低于基线 273，测试被静默裁剪了" % tests); sys.exit(1)
+          if tests < 280:
+              print("::error::用例总数 %d 低于基线 280，测试被静默裁剪了" % tests); sys.exit(1)
           print("✅ 闸门用例全部执行")
           PY
 
