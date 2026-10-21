@@ -153,17 +153,18 @@ versionName = "1.26.0"
 
 ---
 
-### 9. GitHub Actions CI/CD ✅ 通过
+### 9. GitHub Actions CI/CD ⚠️ 配置在，运行记录不齐（2026-10-21 复验后改的口径）
 
 **验证项**: 工作流配置与文档描述一致
 
-**检查结果**:
-- ✅ build-apk.yml: Gradle wrapper 覆盖 + 可选签名 + 产物上传
-- ✅ build-msi.yml: dotnet publish self-contained + Inno Setup
-- ✅ docker-publish.yml: buildx 多阶段构建 + Docker Hub 推送
-- ✅ update-dockerhub-description.yml: README 同步
+**检查结果**（每条后面是"在 runner 上真跑过没有"，跑没跑用 `RELEASE-CHECKLIST.md` 里那段按 workflow 分别数的命令现查）:
+- ✅ build-apk.yml: Gradle wrapper 覆盖 + 可选签名 + 产物上传 —— 2026-10-20 起对 `publish` dispatch 绿过，签名与证书指纹闸门那几步第一次真跑到
+- ✅ build-msi.yml: dotnet publish self-contained + Inno Setup —— 绿过一次，但 `Sign installer` 是 skipped，**产物未签名**（`CODESIGN_*` 那对 secrets 仍未配）
+- ✅ docker-publish.yml: buildx 多阶段构建 + Docker Hub 推送 —— dry-run dispatch 绿过；`main` 那次 push 真推过，Hub 上现在有 `main`/`sha-*`，没有版本标签与 `latest`
+- ⚠️ update-dockerhub-description.yml: README 同步 —— **这句原先打的是 ✅，它只表示"配置存在"，从未跑过一次**。查清的结论写在 `RELEASE-CHECKLIST.md`「Hub 仓库说明」那一节：唯一那次 `main` 推送是"新建分支"（`before` 全零），GitHub 算不出改动文件集，带 `paths:` 的它被跳过；GitHub 从没为它建 workflow 资源（`.yml` 的 REST 与网页都是 404），所以它虽然写了 `workflow_dispatch`，手动补跑这个入口实际上不存在，补跑只能等下一次改到 `README.md` 的 `main` 常规推送
+- ➕ ci.yml: 这一节写的时候它还不存在。现在是 PR 门禁（真 MySQL + 真 RustFS + 末尾断言"闸门用例一条都没被跳过"），2026-10-20 对 `publish` dispatch 过一次、四个 job 全 success
 
-**结论**: CI/CD 配置完整且与安全要求一致
+**结论**: CI/CD 配置完整且与安全要求一致；但"配置完整"不等于"四条链都在 runner 上绿过"，逐条状态看上面那份
 
 ---
 

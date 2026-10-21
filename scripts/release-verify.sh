@@ -96,14 +96,20 @@ CI_BASELINE=$(grep -oE 'if tests < [0-9]+' "$ROOT_DIR/.github/workflows/ci.yml" 
 TEST_COUNT_PATTERN='(core [0-9]+ \+ server [0-9]+|server [0-9]+ \+ core [0-9]+)'
 DOC_PATHS=(README.md docs/开发指南.md docs/测试指南.md RELEASE-CHECKLIST.md RELEASE-SUMMARY.md CHANGELOG.md site)
 COUNT_HITS=$(git -C "$ROOT_DIR" grep -hhoE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | wc -l)
+COUNT_FILES=$(git -C "$ROOT_DIR" grep -lE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | wc -l)
 DOC_TOTALS=$(git -C "$ROOT_DIR" grep -hhoE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | awk '{print $2 + $5}' | sort -un | tr '\n' ' ')
 DOC_TOTALS=${DOC_TOTALS% }
+# 覆盖度这道门原来判的是"命中处数 ≥ 10"，而 2026-10-21 那轮实跑正好 10 处、余量 0：
+# 任何人把其中一句改成叙述式写法（"这一版实测 273 条"这种，意思完全一样）都会把闸门判红，
+# 而红的原因跟"数字腐烂"这件它本来要防的事毫无关系。改成数**带这份计数的文档个数**：
+# 一处改写不会掉文件，整种写法被换掉才会——那正是这条判据想抓的东西。
+# 2026-10-21 实测：8 个文件带计数（README、两份指南、清单、SUMMARY、CHANGELOG、site/install.html、site/overview.html）。
 if [ -z "$CI_BASELINE" ]; then
     fail "没从 .github/workflows/ci.yml 读到用例基线（这条判据跟着 ci.yml 的「if tests < N」走，改了那边要改这里）"
-elif [ "$COUNT_HITS" -lt 10 ]; then
-    fail "只认出 $COUNT_HITS 处「core N + server N」写法的测试计数（预期至少 10 处）：写法变了，这条判据得跟着改，别删"
+elif [ "$COUNT_FILES" -lt 6 ]; then
+    fail "只有 $COUNT_FILES 个文档还带着「core N + server N」这份用例数（预期至少 6 个）：写法变了或文档被清空了，这条判据得跟着改，别删"
 elif [ "$DOC_TOTALS" = "$CI_BASELINE" ]; then
-    pass "文档里的 Java 用例总数与 ci.yml 基线一致：$DOC_TOTALS（$COUNT_HITS 处）"
+    pass "文档里的 Java 用例总数与 ci.yml 基线一致：$DOC_TOTALS（$COUNT_HITS 处、$COUNT_FILES 个文档）"
 else
     fail "文档里的 Java 用例总数是 $DOC_TOTALS，ci.yml 基线是 $CI_BASELINE；不一致的行：$(git -C "$ROOT_DIR" grep -hoE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | sort -u | tr '\n' ' ')"
 fi
