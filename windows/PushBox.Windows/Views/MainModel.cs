@@ -12,14 +12,6 @@ using PushBox.Windows.Sync;
 
 namespace PushBox.Windows.Views;
 
-/// <summary>§8.1 对话页 <c>⋮</c> 里的三档（D17：不做常驻 Tab）。判定用会话的 last_read_seq，与 Android 的 read_state 同效。</summary>
-public enum ConversationFilter
-{
-    All,
-    Unread,
-    Read
-}
-
 public sealed record ConversationItem(string ChannelNo, string SenderId, string DisplayName,
     string? Summary, long LastMsgAt, int UnreadCount, bool Pinned, bool Muted, string? LastLevel,
     long LastReadSeq, string? AvatarPath = null)
@@ -162,7 +154,6 @@ public sealed class MainModel
     private readonly FulltextService? _fulltexts;
 
     private ConversationItem? _selected;
-    private ConversationFilter _filter = ConversationFilter.All;
 
     /// <summary>正在等全文回捞的那几条（只影响这一行的文案，不改库里的任何状态）。</summary>
     private readonly HashSet<string> _expanding = new(StringComparer.Ordinal);
@@ -191,7 +182,6 @@ public sealed class MainModel
     public event Action? Changed;
 
     public ConversationItem? Selected => _selected;
-    public ConversationFilter Filter => _filter;
 
     /// <summary>搜索框里的词，只为回显高亮范围；真正的查询参数在 <see cref="SearchAsync"/> 那次调用里。</summary>
     public string SearchTerm { get; private set; } = string.Empty;
@@ -209,17 +199,9 @@ public sealed class MainModel
     public int TotalUnread() => Conversations().Sum(c => c.UnreadCount);
 
     public IReadOnlyList<TimelineItem> Timeline() =>
-        BuildTimeline(_window, _selected?.LastReadSeq ?? 0L, _filter);
+        BuildTimeline(_window);
 
-    /// <summary>筛选提示条那句人话（Android 的 filter_hint_*，点击回"全部"）。</summary>
-    public string? FilterHint => _filter switch
-    {
-        ConversationFilter.Unread => "当前只看未读 · 点此处显示全部",
-        ConversationFilter.Read => "当前只看已读 · 点此处显示全部",
-        _ => null
-    };
-
-    public string EmptyText => _filter == ConversationFilter.All ? "还没有消息" : "该筛选下没有消息";
+    public string EmptyText => "还没有消息";
 
     public bool IsNarrow(double width) => width < NarrowPaneBelow;
 
@@ -230,13 +212,6 @@ public sealed class MainModel
     public static double BubbleMaxWidth(double rightPaneWidth, bool narrow) =>
         Math.Round(Math.Min(900, Math.Max(0, rightPaneWidth)
             * (narrow ? NarrowBubbleFraction : WideBubbleFraction)));
-
-    public void SetFilter(ConversationFilter filter)
-    {
-        if (_filter == filter) return;
-        _filter = filter;
-        Raise();
-    }
 
     /// <summary>
     /// 打开一条会话：先出内容、再把红点清掉。已读上报是"本地立刻清 + 攒批上报"两件事（W9 的口径），
@@ -407,7 +382,7 @@ public sealed class MainModel
     }
 
     /// <summary>
-    /// §9.3 的二次确认文案放在模型里（和 <see cref="NewBelowLabel"/>、<see cref="FilterHint"/> 同一个理由：
+    /// §9.3 的二次确认文案放在模型里（和 <see cref="NewBelowLabel"/> 同一个理由：
     /// 人话要能被用例钉住）。删一条那两行沿用 Android 的 delete_dialog_*；清空那两行必须改 Android 的措辞——
     /// 它写的是"服务端仍保留历史"，那是 Android 还没接 §5.2 清空接口的现状，PC 这一版是真会通知服务端的。
     /// </summary>
@@ -518,21 +493,42 @@ public sealed class MainModel
         Raise();
     }
 
-    /// <summary>同步引擎的状态翻译成顶栏那一行话（§8.1"离线，正在重连"）。</summary>
+    /// <summary>同步引擎的状态翻译成顶栏那一行话。菜单只有 60px 宽，一行字就够——
+    /// 原来那句"离线，正在重连（socket 断了）"会把这一栏撑成一堵字墙，
+    /// 所以正文只留两字的判断，原因挪到 <see cref="StateDetail"/> 的悬停提示里。</summary>
     public static string DescribeState(SyncState state) => state switch
     {
         SyncState.Online => "在线",
         SyncState.Connecting => "连接中",
         SyncState.Idle => "未连接",
-        SyncState.Offline off => $"离线，正在重连（{off.Reason}）",
-        SyncState.Blocked blocked => blocked.Reason,
+        SyncState.Offline => "离线",
+        SyncState.Blocked => "异常",
         _ => "未连接"
+    };
+
+    /// <summary>悬停才看见的那半句：断开的原因原文照出（"socket 断了"、"服务端身份对不上"），
+    /// 网络断开还带上下一次要等多久——<see cref="SyncState.Offline.RetryIn"/> 除了这里没人读，
+    /// 不给它一个出口就等于把"还要等多久"这条诊断整个丢掉。其余状态没有额外可说的，就退回正文。</summary>
+    public static string StateDetail(SyncState state) => state switch
+    {
+        SyncState.Offline { Reason.Length: > 0 } o =>
+            $"离线（{o.Reason}，{(int)Math.Ceiling(o.RetryIn.TotalSeconds)} 秒后重连）",
+        SyncState.Blocked { Reason.Length: > 0 } b => $"异常（{b.Reason}）",
+        _ => DescribeState(state)
     };
 
     public DeviceIdentity Identity() => _identities.Load();
 
-    /// <summary>顶栏那个点的颜色：只有非在线才上色，在线时点本身不出现（§9.1 的克制）。</summary>
-    public static bool NeedsAttention(SyncState state) => state is not SyncState.Online;
+    /// <summary>顶栏那颗点与那两个字用的颜色 token：在线绿、断链橙、要人处理的红、还没启动灰。
+    /// 三种状态靠颜色一眼分开，比靠读字快——用户扫一眼左下角就知道该不该管。</summary>
+    public static string StateToken(SyncState state) => state switch
+    {
+        SyncState.Online => "Accent",
+        SyncState.Connecting => "State.Offline",
+        SyncState.Offline => "State.Offline",
+        SyncState.Blocked => "Level.Error",
+        _ => "Fg.Secondary"
+    };
 
     private string? ScopeChannel() => SearchInsideConversation ? _selected?.ChannelNo : null;
     private string? ScopeSender() => SearchInsideConversation ? _selected?.SenderId : null;
@@ -547,23 +543,14 @@ public sealed class MainModel
             hit.CreatedAt, fromServer);
 
     /// <summary>
-    /// 时间线 = 筛选后的消息 + 日期分节头。分节触发只看"与上一条是否同一天"，与 Android 一致；
-    /// 筛选把整段滤空时返回空表，由 UI 落 <see cref="EmptyText"/>。
+    /// 时间线 = 消息 + 日期分节头。分节触发只看"与上一条是否同一天"，与 Android 一致。
     /// </summary>
-    public IReadOnlyList<TimelineItem> BuildTimeline(IReadOnlyList<MessageRow> rows,
-        long lastReadSeq, ConversationFilter filter)
+    public IReadOnlyList<TimelineItem> BuildTimeline(IReadOnlyList<MessageRow> rows)
     {
-        var kept = rows.Where(m => filter switch
-        {
-            ConversationFilter.Unread => m.Seq > lastReadSeq,
-            ConversationFilter.Read => m.Seq <= lastReadSeq,
-            _ => true
-        }).ToList();
-
-        var items = new List<TimelineItem>(kept.Count * 2);
+        var items = new List<TimelineItem>(rows.Count * 2);
         string? previousDay = null;
         long? previousTime = null;
-        foreach (var m in kept)
+        foreach (var m in rows)
         {
             var day = TimeFormat.DayKey(m.CreatedAt);
             if (day != previousDay) items.Add(new DateDivider(TimeFormat.DateLabel(m.CreatedAt)));

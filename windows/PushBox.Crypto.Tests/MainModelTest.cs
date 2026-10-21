@@ -164,35 +164,6 @@ public sealed class MainModelTest : IDisposable
     }
 
     [Fact]
-    public void TheUnreadFilterKeepsOnlyWhatIsPastTheReadCursor()
-    {
-        Seed(1, "m1");
-        Seed(2, "m2");
-        var model = Model();
-        model.Open(Channel, Grafana);
-        // 打开之后又落了一条：模型手里那一批是打开时取的，得先按引擎的"有新消息"重取一次
-        Seed(3, "m3");
-        model.Reload();
-
-        Assert.Equal(3, model.Timeline().OfType<MessageItem>().Count());
-
-        model.SetFilter(ConversationFilter.Unread);
-        // 游标停在 2（打开时清的就是那一条为止），所以 seq 3 才是未读
-        Assert.Equal(new[] { 3L }, model.Timeline().OfType<MessageItem>().Select(m => m.Seq));
-        Assert.Equal("当前只看未读 · 点此处显示全部", model.FilterHint);
-
-        model.SetFilter(ConversationFilter.Read);
-        Assert.Equal(new[] { 1L, 2L }, model.Timeline().OfType<MessageItem>().Select(m => m.Seq));
-        Assert.Equal("当前只看已读 · 点此处显示全部", model.FilterHint);
-
-        model.SetFilter(ConversationFilter.All);
-        Assert.Null(model.FilterHint);
-        // 三条正文 + 一个日期分节头：Count 是"屏上的行"，不是"消息条数"
-        Assert.Equal(4, model.Timeline().Count);
-        Assert.Equal(3, model.Timeline().OfType<MessageItem>().Count());
-    }
-
-    [Fact]
     public void ATombstoneMovesTheLevelDotBecauseTheDotIsNotAColumn()
     {
         // 会话行那个小圆点读的是"当前最后一条"的 level，不是某个落列的标志位：
@@ -323,16 +294,6 @@ public sealed class MainModelTest : IDisposable
         Assert.Equal(0, MainModel.BubbleMaxWidth(-1, false));
     }
 
-    [Fact]
-    public void TheFilterEmptyStateSaysWhyAndTheUnfilteredOneSaysThereIsNothing()
-    {
-        var model = Model();
-        Assert.Equal("还没有消息", model.EmptyText);
-
-        model.SetFilter(ConversationFilter.Unread);
-        Assert.Equal("该筛选下没有消息", model.EmptyText);
-    }
-
     // ---- 搜索 ---------------------------------------------------------------------------------------
 
     [Fact]
@@ -426,17 +387,30 @@ public sealed class MainModelTest : IDisposable
     [Fact]
     public void ConnectionStateBecomesOneSentence()
     {
+        // 左侧菜单只有 60px 宽，正文一律两字：原来的"离线，正在重连（socket 断了）"会把这一栏撑成字墙
         Assert.Equal("在线", MainModel.DescribeState(new SyncState.Online(12L)));
         Assert.Equal("连接中", MainModel.DescribeState(new SyncState.Connecting()));
-        Assert.Equal("离线，正在重连（socket 断了）",
+        Assert.Equal("离线",
             MainModel.DescribeState(new SyncState.Offline("socket 断了", TimeSpan.FromSeconds(4))));
-        // Blocked 那句是人要处理的事，不是网络在重试：直接把原因当文案，不再套一层"离线，正在重连"
-        Assert.Equal("服务端身份对不上", MainModel.DescribeState(new SyncState.Blocked("服务端身份对不上")));
+        Assert.Equal("异常", MainModel.DescribeState(new SyncState.Blocked("服务端身份对不上")));
         Assert.Equal("未连接", MainModel.DescribeState(new SyncState.Idle()));
 
-        Assert.False(MainModel.NeedsAttention(new SyncState.Online(1L)));
-        Assert.True(MainModel.NeedsAttention(new SyncState.Offline("x", TimeSpan.Zero)));
-        Assert.True(MainModel.NeedsAttention(new SyncState.Blocked("x")));
+        // 正文变短不等于原因被丢掉：排障时"离线"和"为什么离线"是两件事，后半句挪到悬停提示里。
+        // RetryIn 也在这里出口——顶栏不显示它，它就没有别的地方可去了
+        Assert.Equal("离线（socket 断了，4 秒后重连）",
+            MainModel.StateDetail(new SyncState.Offline("socket 断了", TimeSpan.FromSeconds(4))));
+        Assert.Equal("异常（服务端身份对不上）",
+            MainModel.StateDetail(new SyncState.Blocked("服务端身份对不上")));
+        // 没有额外可说的状态就退回正文，免得悬停弹出一个和正文一模一样的框
+        Assert.Equal("在线", MainModel.StateDetail(new SyncState.Online(12L)));
+        Assert.Equal("离线", MainModel.StateDetail(new SyncState.Offline(string.Empty, TimeSpan.Zero)));
+
+        // 三种状态三种颜色：在线绿、断链橙、要人处理的红；没启动是灰，不假装自己在连
+        Assert.Equal("Accent", MainModel.StateToken(new SyncState.Online(1L)));
+        Assert.Equal("State.Offline", MainModel.StateToken(new SyncState.Offline("x", TimeSpan.Zero)));
+        Assert.Equal("State.Offline", MainModel.StateToken(new SyncState.Connecting()));
+        Assert.Equal("Level.Error", MainModel.StateToken(new SyncState.Blocked("x")));
+        Assert.Equal("Fg.Secondary", MainModel.StateToken(new SyncState.Idle()));
     }
 
     [Fact]

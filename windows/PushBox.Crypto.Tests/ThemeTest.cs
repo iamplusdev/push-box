@@ -59,15 +59,21 @@ public class ThemeTest
     private const string Light = "Themes/Tokens.xaml";
     private const string Dark = "Themes/Tokens.Dark.xaml";
 
-    /// <summary>§9.1 表格的浅色那一列，逐格抄下来。</summary>
+    /// <summary>§9.1 表格的浅色那一列，逐格抄下来。
+    /// 底色是分层的：页面 <c>Bg.Page</c> 最浅，左侧菜单 <c>Bg.Elevated</c> 与分割线同色，
+    /// 会话列表 <c>Bg.SenderList</c> 再深一档——微信 PC 那三块本来就肉眼可分，
+    /// 只靠一条 1px 线区分在浅色下几乎看不出来。气泡 <c>Bg.Bubble.In</c> 比列表更深。</summary>
     private static readonly Dictionary<string, string> DocumentedLight = new()
     {
-        ["Bg.Page"] = "#F5F5F5",
-        ["Bg.Elevated"] = "#EEEEEE",
-        ["Bg.Bubble.In"] = "#E8F7F0",
-        ["Fg.Primary"] = "#212121",
+        ["Bg.Page"] = "#FAFAFA",
+        ["Bg.Elevated"] = "#E0E0E0",
+        ["Bg.Bubble.In"] = "#E8E8EA",
+        ["Bg.SenderList"] = "#EEEFF0",
+        // 选中行是比列表底深一档的灰（微信 PC 那档），整行染绿太吵；accent 只留在 3px 竖条上
+        ["Bg.Selected"] = "#E2E2E2",
+        ["Fg.Primary"] = "#19191A",
         ["Fg.Secondary"] = "#757575",
-        ["Accent"] = "#0ABF5E",
+        ["Accent"] = "#14A36A",
         ["Badge.Unread"] = "#F5222D",
         ["Divider"] = "#E0E0E0",
         ["State.Offline"] = "#FF8C00",
@@ -75,14 +81,21 @@ public class ThemeTest
         ["Level.Warning"] = "#FF8C00",
         ["Level.Info"] = "#757575",
         ["Level.Highlight"] = "#1A73E8",
+        // 滚动条三态：静止最浅、悬停加深、拖动最深。轨道与箭头都不画，所以只有这三个值
+        ["ScrollBar.Thumb"] = "#A1A1A2",
+        ["ScrollBar.ThumbHover"] = "#888889",
+        ["ScrollBar.ThumbDrag"] = "#6E6E6F",
     };
 
-    /// <summary>§9.1 的深色那一列：整站反色且不碰纯黑。</summary>
+    /// <summary>§9.1 的深色那一列：整站反色且不碰纯黑。
+    /// 滚动条的深浅顺序在这里反过来（静止最深、拖动最浅），因为深底上要靠"变亮"来表示被抓住。</summary>
     private static readonly Dictionary<string, string> DocumentedDark = new()
     {
         ["Bg.Page"] = "#1A1A1A",
         ["Bg.Elevated"] = "#242424",
-        ["Bg.Bubble.In"] = "#0D3D28",
+        ["Bg.Bubble.In"] = "#2A2A2C",
+        ["Bg.SenderList"] = "#1E1E1E",
+        ["Bg.Selected"] = "#2E2E2E",
         ["Fg.Primary"] = "#E0E0E0",
         ["Fg.Secondary"] = "#9E9E9E",
         ["Accent"] = "#0A8F4A",
@@ -93,6 +106,9 @@ public class ThemeTest
         ["Level.Warning"] = "#FFB74D",
         ["Level.Info"] = "#9E9E9E",
         ["Level.Highlight"] = "#1A73E8",
+        ["ScrollBar.Thumb"] = "#6E6E6F",
+        ["ScrollBar.ThumbHover"] = "#888889",
+        ["ScrollBar.ThumbDrag"] = "#A1A1A2",
     };
 
     [Fact]

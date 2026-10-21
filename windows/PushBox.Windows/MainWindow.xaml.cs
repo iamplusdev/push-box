@@ -42,6 +42,16 @@ public partial class MainWindow : Window
     /// <summary>没贴在底部时落进来的新消息数（§9.3 的胶囊），回到底部就清零。</summary>
     private int _newBelow;
 
+    /// <summary>会话列表那一栏的宽度。默认 260，用户拖过手柄之后记住拖到的值——
+    /// <see cref="ApplyPaneWidth"/> 每次窗口尺寸变化都会重摆列宽，不回记就会把用户拖的宽度抹掉。</summary>
+    private double _listWidth = ListDefaultWidth;
+
+    private const double ListDefaultWidth = 260;
+
+    private const double MenuWidth = 60;
+
+    private const double SplitterWidth = 4;
+
     public MainWindow(DeviceStore db, IdentityStore identities, ReadReporter reporter,
         SearchService search, DeleteReporter deletions, MediaLoader media, SyncEngine? engine = null)
     {
@@ -53,6 +63,12 @@ public partial class MainWindow : Window
         _engine = engine;
         // 头像这一格自己取字节，所以取字节的这条路要在窗口装配时接上（只有窗口有 MediaLoader 和身份）
         AvatarBox.Loader = token => _media.AvatarAsync(Identity(), token);
+        // 拖完才记账：拖动过程中列宽是连续变的，每一下都写会让 ApplyPaneWidth 和手柄互相抢
+        ListSplitter.DragCompleted += (_, _) =>
+        {
+            if (Body.ColumnDefinitions[1].Width.IsAbsolute)
+                _listWidth = Body.ColumnDefinitions[1].Width.Value;
+        };
     }
 
     /// <summary>
@@ -90,7 +106,6 @@ public partial class MainWindow : Window
 
     // 给测试用的只读视图（与 FirstLaunchWindow 同一手法）：XAML 写坏——x:Name 对不上、
     // 面板初始状态不对、模板没挂上——要能在 dotnet test 里被抓住，而不是等人去点。
-    public Visibility FilterBarProbe => FilterBar.Visibility;
     public Visibility ConversationListProbe => ConversationList.Visibility;
     public Visibility NoConversationProbe => NoConversationBar.Visibility;
     public Visibility BackButtonProbe => BackButton.Visibility;
@@ -256,8 +271,10 @@ public partial class MainWindow : Window
     /// <summary>点了顶栏的"设置"。开哪扇窗、给它哪些服务，都是装配那一层（App）的事。</summary>
     public event Action? SettingsRequested;
 
-    /// <summary>托盘那一行的两样输入：状态文案与未读总数。</summary>
-    public string TrayState => _engine is null ? string.Empty : MainModel.DescribeState(_engine.State);
+    /// <summary>托盘那一行的两样输入：状态文案与未读总数。
+    /// 这里给的是带原因的那半句（<see cref="MainModel.StateDetail"/>）而不是顶栏那两字——
+    /// 托盘气泡有的是宽度，而它常常是用户唯一还看着的地方（主窗已经收到托盘里去了）。</summary>
+    public string TrayState => _engine is null ? string.Empty : MainModel.StateDetail(_engine.State);
 
     public int TrayUnread => _model.TotalUnread();
 
@@ -412,9 +429,6 @@ public partial class MainWindow : Window
         var opened = _model.Selected is not null;
         NoConversationBar.Visibility = opened ? Visibility.Collapsed : Visibility.Visible;
         ConversationTitle.Text = _model.Selected?.DisplayName ?? string.Empty;
-        FilterMenu.Visibility = opened ? Visibility.Visible : Visibility.Collapsed;
-        FilterBar.Visibility = _model.FilterHint is { Length: > 0 } ? Visibility.Visible : Visibility.Collapsed;
-        FilterBarText.Text = _model.FilterHint ?? string.Empty;
         EmptyText.Text = opened && items.Count == 0 ? _model.EmptyText : string.Empty;
     }
 
@@ -429,17 +443,6 @@ public partial class MainWindow : Window
         _newBelow = 0;
         _ = ScrollToBottomAsync();
     }
-
-    private void OnFilterAll(object sender, RoutedEventArgs e) => _model.SetFilter(ConversationFilter.All);
-
-    private void OnFilterUnread(object sender, RoutedEventArgs e) =>
-        _model.SetFilter(ConversationFilter.Unread);
-
-    private void OnFilterRead(object sender, RoutedEventArgs e) => _model.SetFilter(ConversationFilter.Read);
-
-    /// <summary>§9.3：筛选提示条点一下就回"全部"，不用再去开 ⋮ 菜单。</summary>
-    private void OnFilterBarClicked(object sender, MouseButtonEventArgs e) =>
-        _model.SetFilter(ConversationFilter.All);
 
     // ---- 引擎状态 ---------------------------------------------------------------------------------
 
@@ -457,9 +460,13 @@ public partial class MainWindow : Window
     private void ApplyEngineState(SyncState state)
     {
         StatusText.Text = MainModel.DescribeState(state);
-        StatusDot.Visibility = MainModel.NeedsAttention(state) ? Visibility.Visible : Visibility.Collapsed;
-        // Blocked 是"这事要人来处理"（设备被吊销、服务端身份对不上），橙点那种"再等等就好"是在骗人
-        StatusDot.Fill = BrushOf(state is SyncState.Blocked ? "Level.Error" : "State.Offline");
+        // 正文只说"离线/异常"两字，原因挂在悬停上——菜单 60px 宽，一整句会把这一栏撑成字墙
+        StatusArea.ToolTip = MainModel.StateDetail(state);
+        // 点与字同色：在线绿 / 断链橙 / 要人处理的红 / 没启动灰，扫一眼就知道该不该管
+        var token = MainModel.StateToken(state);
+        StatusDot.Fill = BrushOf(token);
+        StatusText.Foreground = BrushOf(token);
+        StatusDot.Visibility = Visibility.Visible;
         // 帧落库后引擎会把 Online 的游标往前推，所以"有新消息"到这里就是"重取当前会话那一批 + 重画"。
         // 不重取的话新消息只进库不进屏——它正是 §9.3 那句"当前会话内来新消息要跟着滚到底"的前提
         var landed = _model.Reload();
@@ -513,7 +520,9 @@ public partial class MainWindow : Window
         }), DispatcherPriority.Render).Task;
     }
 
-    /// <summary>§8.1 的窄窗口退化单栏：分界由模型算（<see cref="MainModel.NarrowPaneBelow"/>），这里只摆列宽。</summary>
+    /// <summary>§8.1 的窄窗口退化单栏：分界由模型算（<see cref="MainModel.NarrowPaneBelow"/>），这里只摆列宽。
+    /// Body 是**四**列：菜单 / 会话列表 / 拖拽手柄 / 对话区。手柄那一列必须跟着一起摆——
+    /// 漏掉它的话手柄列会留着 XAML 里的 4px 或被当成星号列，对话区就被挤到窗口右半边去了。</summary>
     private void ApplyPaneWidth()
     {
         // 还没布局过就没有"窗口宽度"可言，此时别把上限算成 0 把整条时间线挤没
@@ -521,38 +530,38 @@ public partial class MainWindow : Window
 
         var narrow = _model.IsNarrow(ActualWidth);
         BackButton.Visibility = narrow ? Visibility.Visible : Visibility.Collapsed;
-        
-        // 三栏布局：最左侧菜单固定 60px，中间列表固定 260px，右侧对话区占剩余空间
-        const double menuWidth = 60;
-        const double listWidth = 260;
-        
+
         if (!narrow)
         {
-            // 宽屏模式：三栏全显示
-            Body.ColumnDefinitions[0].Width = new GridLength(menuWidth);
-            Body.ColumnDefinitions[1].Width = new GridLength(listWidth);
-            Body.ColumnDefinitions[2].Width = new GridLength(1, GridUnitType.Star);
-            Timeline.MaxWidth = MainModel.BubbleMaxWidth(ActualWidth - menuWidth - listWidth, false);
+            // 宽屏模式：四栏全显示，列表宽用用户拖过的那个值
+            Body.ColumnDefinitions[0].Width = new GridLength(MenuWidth);
+            Body.ColumnDefinitions[1].Width = new GridLength(_listWidth);
+            Body.ColumnDefinitions[2].Width = new GridLength(SplitterWidth);
+            Body.ColumnDefinitions[3].Width = new GridLength(1, GridUnitType.Star);
+            Timeline.MaxWidth = MainModel.BubbleMaxWidth(
+                ActualWidth - MenuWidth - _listWidth - SplitterWidth, false);
             return;
         }
 
-        // 窄屏模式：只显示菜单栏 + 对话区，或只显示会话列表
+        // 窄屏模式：手柄没有意义（只有一栏可见），连带对话区一起收掉
         var showingConversation = _model.Selected is not null;
         if (showingConversation)
         {
             // 打开会话时：保留菜单栏，隐藏列表，显示对话区
-            Body.ColumnDefinitions[0].Width = new GridLength(menuWidth);
+            Body.ColumnDefinitions[0].Width = new GridLength(MenuWidth);
             Body.ColumnDefinitions[1].Width = new GridLength(0);
-            Body.ColumnDefinitions[2].Width = new GridLength(1, GridUnitType.Star);
+            Body.ColumnDefinitions[2].Width = new GridLength(0);
+            Body.ColumnDefinitions[3].Width = new GridLength(1, GridUnitType.Star);
         }
         else
         {
             // 未打开会话时：显示菜单栏和列表，隐藏对话区
-            Body.ColumnDefinitions[0].Width = new GridLength(menuWidth);
+            Body.ColumnDefinitions[0].Width = new GridLength(MenuWidth);
             Body.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
             Body.ColumnDefinitions[2].Width = new GridLength(0);
+            Body.ColumnDefinitions[3].Width = new GridLength(0);
         }
-        Timeline.MaxWidth = MainModel.BubbleMaxWidth(ActualWidth - menuWidth, true);
+        Timeline.MaxWidth = MainModel.BubbleMaxWidth(ActualWidth - MenuWidth, true);
     }
 
     // ---- 渲染用的小工具 ---------------------------------------------------------------------------

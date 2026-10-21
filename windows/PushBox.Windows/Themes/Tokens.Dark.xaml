@@ -6,7 +6,9 @@
     <!-- 深色模式：避免纯黑，使用深灰层级 -->
     <SolidColorBrush x:Key="Bg.Page" Color="#1A1A1A" />
     <SolidColorBrush x:Key="Bg.Elevated" Color="#242424" />
-    <SolidColorBrush x:Key="Bg.Bubble.In" Color="#0D3D28" />
+    <SolidColorBrush x:Key="Bg.Bubble.In" Color="#2A2A2C" />
+    <SolidColorBrush x:Key="Bg.SenderList" Color="#1E1E1E" />
+    <SolidColorBrush x:Key="Bg.Selected" Color="#2E2E2E" />
 
     <!-- 文字颜色（保证对比度） -->
     <SolidColorBrush x:Key="Fg.Primary" Color="#E0E0E0" />
@@ -25,6 +27,11 @@
 
     <!-- §7.4 的命中高亮：Android 那边两端同一个值（#1A73E8 + 加粗），深浅色都不换 -->
     <SolidColorBrush x:Key="Level.Highlight" Color="#1A73E8" />
+
+    <!-- 滚动条颜色（深色模式略亮） -->
+    <SolidColorBrush x:Key="ScrollBar.Thumb" Color="#6E6E6F" />
+    <SolidColorBrush x:Key="ScrollBar.ThumbHover" Color="#888889" />
+    <SolidColorBrush x:Key="ScrollBar.ThumbDrag" Color="#A1A1A2" />
 
     <!-- §9.2 的字体层级系统（深色主题复用浅色定义的样式，字体族与字号不随主题变化） -->
     <!-- 基础字体族 -->

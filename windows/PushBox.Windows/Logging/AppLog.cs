@@ -135,6 +135,10 @@ public static class AppLog
     public static void SyncOffline(string reason, int retryInSeconds) =>
         Write(LogEventLevel.Warning, "长连接断开 {Reason}，{Seconds} 秒后重连", reason, retryInSeconds);
 
+    /// <summary>服务端重放结束（resume_ok）：这条连接从此算在线，游标是本机落库到的 seq。</summary>
+    public static void SyncReady(long cursor) =>
+        Write(LogEventLevel.Information, "连接就绪 游标={Cursor}", cursor);
+
     /// <summary>重连不会自己变好的那一类（设备被吊销、服务端身份对不上）：顶栏挂"需要处理"，日志留同一句。</summary>
     public static void SyncBlocked(string reason) =>
         Write(LogEventLevel.Error, "同步已停：{Reason}", reason);
@@ -145,6 +149,10 @@ public static class AppLog
 
     public static void BackfillUnreachable(string exceptionType) =>
         Write(LogEventLevel.Warning, "补拉连不上 {Type}", exceptionType);
+
+    /// <summary>REST 分页补拉跑到 has_more=false：from/to 都是 seq，不含消息内容；没有取到新行时不写。</summary>
+    public static void BackfillCompleted(long fromSeq, long toSeq) =>
+        Write(LogEventLevel.Information, "补拉完成 {From}..{To}", fromSeq, toSeq);
 
     /// <summary>身份文件读不出来时用手上那一份继续跑——这条不留痕的话，"为什么同步用的是旧游标"就查不到。</summary>
     public static void IdentityFileUnreadable(string exceptionType) =>

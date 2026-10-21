@@ -87,7 +87,7 @@ public sealed class EnrollmentFlow
         var code = new string((recoveryCode ?? "").Replace(" ", "").Replace("\t", "")
             .Replace("\r", "").Replace("\n", "").ToCharArray());
         if (code.Length == 0)
-            throw new ArgumentException("恢复码不能为空：在手机的「我的 → 备份与恢复」里能看到它和二维码。");
+            throw new ArgumentException("恢复码不能为空：在手机的「设置 → 设备信息」里能看到它和二维码。");
         if (code.Length != RecoveryCodeLength)
             throw new ArgumentException(
                 $"恢复码应该是 {RecoveryCodeLength} 位，现在有 {code.Length} 位——多半是复制时漏了字符，请重新复制一次。");

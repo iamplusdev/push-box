@@ -352,10 +352,14 @@ public sealed class SyncEngine : IPushObserver
                 await ApplyConfigAsync(config, ct);
                 break;
             case SimpleFrame { Kind: FrameTypes.ResumeOk }:
+            {
                 // §5.3：重放到这里就结束了，这条连接从此算"在线"。这句不能只在"有消息落库"时说——
                 // 一个还没发过消息的 Space 照样有一条好连接，顶栏一直停在"连接中"是在骗人
-                SetState(new SyncState.Online(_db.GroupCursor()));
+                var cursor = _db.GroupCursor();
+                SetState(new SyncState.Online(cursor));
+                AppLog.SyncReady(cursor);
                 break;
+            }
             default:
                 break; // §5.3 前向兼容：不认识的帧跳过。握手帧（hello/kx）在 W6 内部就消化了，到不了这里
         }
@@ -450,6 +454,7 @@ public sealed class SyncEngine : IPushObserver
         if (identity == null) return;
 
         var after = missingFrom - 1;
+        var high = after;
         while (!ct.IsCancellationRequested)
         {
             HistoryPage page;
@@ -475,8 +480,14 @@ public sealed class SyncEngine : IPushObserver
             foreach (var message in page.Messages) Ingest(message, false);
 
             var newest = page.Messages.Count == 0 ? 0L : page.Messages.Max(m => m.Seq);
+            if (newest > high) high = newest;
             // 空页或游标不前进就停：服务端哪怕 has_more 说错也不把自己钉死在这里
-            if (!page.HasMore || newest <= after) return;
+            if (!page.HasMore || newest <= after)
+            {
+                // 有进展才留痕：空账号开机那次 RestoreHistory 不该每天写一行"补拉完成"
+                if (high > missingFrom - 1) AppLog.BackfillCompleted(missingFrom, high);
+                return;
+            }
             after = newest;
         }
     }

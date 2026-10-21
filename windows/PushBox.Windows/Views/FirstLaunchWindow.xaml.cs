@@ -24,6 +24,50 @@ public partial class FirstLaunchWindow : Window
         InitializeComponent();
         _model = model ?? new OnboardingModel();
         NameBox.Text = OnboardingModel.SuggestedDeviceName();
+        
+        // 绑定事件以实时更新生成的 URL
+        ServerHostBox.TextChanged += (s, e) => UpdateGeneratedUrl();
+        ServerPortBox.TextChanged += (s, e) => UpdateGeneratedUrl();
+        UseHttpsCheckbox.Checked += (s, e) => UpdateGeneratedUrl();
+        UseHttpsCheckbox.Unchecked += (s, e) => UpdateGeneratedUrl();
+        
+        // 设置默认值
+        ServerHostBox.Text = "";
+        ServerPortBox.Text = "7404";
+        UseHttpsCheckbox.IsChecked = false;
+        UpdateGeneratedUrl();
+    }
+
+    /// <summary>根据主机、端口和 HTTPS 开关生成完整的 URL</summary>
+    private string BuildBaseUrl(string host, string port, bool useHttps)
+    {
+        var trimmedHost = host?.Trim().TrimEnd('/') ?? "";
+        if (string.IsNullOrEmpty(trimmedHost)) return "";
+        
+        var scheme = useHttps ? "https" : "http";
+        var trimmedPort = port?.Trim() ?? "";
+        
+        // 如果是标准端口（80/443）或空，不显示端口
+        if (!string.IsNullOrEmpty(trimmedPort) && trimmedPort != "80" && trimmedPort != "443")
+        {
+            return $"{scheme}://{trimmedHost}:{trimmedPort}";
+        }
+        return $"{scheme}://{trimmedHost}";
+    }
+
+    private void UpdateGeneratedUrl()
+    {
+        var url = BuildBaseUrl(ServerHostBox.Text, ServerPortBox.Text, UseHttpsCheckbox.IsChecked ?? false);
+        if (!string.IsNullOrEmpty(url))
+        {
+            GeneratedUrlBox.Text = $"将连接到：{url}";
+            GeneratedUrlBox.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            GeneratedUrlBox.Text = "";
+            GeneratedUrlBox.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void OnJoinClick(object sender, RoutedEventArgs e) => ShowRecoveryCodeInput();
@@ -57,9 +101,12 @@ public partial class FirstLaunchWindow : Window
 
         try
         {
+            // 从主机、端口和 HTTPS 开关构建完整的 URL
+            var serverUrl = BuildBaseUrl(ServerHostBox.Text, ServerPortBox.Text, UseHttpsCheckbox.IsChecked ?? false);
+            
             var result = join
-                ? await _model.JoinAsync(ServerBox.Text, CodeBox.Text, NameBox.Text, cts.Token)
-                : await _model.CreateSpaceAsync(ServerBox.Text, NameBox.Text, cts.Token);
+                ? await _model.JoinAsync(serverUrl, CodeBox.Text, NameBox.Text, cts.Token)
+                : await _model.CreateSpaceAsync(serverUrl, NameBox.Text, cts.Token);
 
             if (result.Cancelled) return;
             if (!result.Succeeded)

@@ -343,7 +343,7 @@ public sealed class SyncEngineTest : IDisposable
         // 落库在消费线程、断开在读循环，两者谁先 SetState 不作保证，所以这里只断言"这几种状态都出现过"
         // 而不是它们的下标顺序——顺序断言会变成一条靠毫秒差运气跑的测试
         Assert.Contains(new SyncState.Online(18483L), states);
-        // 顶栏要能直接显示"离线，1 秒后重连"，所以 Offline 带的是下一次真正要等的时间
+        // 状态区的悬停提示要能说"离线，1 秒后重连"，所以 Offline 带的是下一次真正要等的时间
         Assert.Contains(new SyncState.Offline("server_closed", TimeSpan.FromSeconds(1)), states);
         Assert.Contains(new SyncState.Connecting(), states);
         Assert.IsType<SyncState.Idle>(states.Last());

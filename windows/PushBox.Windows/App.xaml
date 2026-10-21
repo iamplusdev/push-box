@@ -4,6 +4,71 @@
              xmlns:local="clr-namespace:PushBox.Windows">
     <!-- 没有 StartupUri：§7.5 要先判断本机是否已有设备身份，首启两屏和主窗口只能有一个被 Show -->
     <Application.Resources>
+        <!-- 自定义滚动条样式（微信PC风格：窄、简洁、低调） -->
+        <!-- 隐式样式：自动应用到所有 ScrollBar，无需显式引用 -->
+        <Style TargetType="ScrollBar">
+            <Setter Property="Width" Value="6"/>
+            <Setter Property="MinWidth" Value="6"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <!-- 两个翻页按钮只留命中区、不画任何东西：默认模板那圈边框会在
+                                     滑块下方露出一截带描边的白块（实测截图里就是它），比滑块还扎眼 -->
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="Transparent"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Style>
+                                            <Style TargetType="Thumb">
+                                                <Setter Property="Background" Value="{DynamicResource ScrollBar.Thumb}"/>
+                                                <Setter Property="Template">
+                                                    <Setter.Value>
+                                                        <ControlTemplate TargetType="Thumb">
+                                                            <Border Background="{TemplateBinding Background}" 
+                                                                    CornerRadius="3"/>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter Property="Background" Value="{DynamicResource ScrollBar.ThumbHover}"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsDragging" Value="True">
+                                                        <Setter Property="Background" Value="{DynamicResource ScrollBar.ThumbDrag}"/>
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Thumb.Style>
+                                    </Thumb>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="Transparent"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
+        <!-- 兼容旧名称（保留以便其他地方引用） -->
+        <Style x:Key="WeChatScrollBar" TargetType="ScrollBar" BasedOn="{StaticResource {x:Type ScrollBar}}"/>
+        <Style x:Key="ModernScrollBar" TargetType="ScrollBar" BasedOn="{StaticResource {x:Type ScrollBar}}"/>
     </Application.Resources>
 </Application>

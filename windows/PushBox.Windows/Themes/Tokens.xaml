@@ -4,16 +4,19 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!-- 页面与卡片背景 -->
-    <SolidColorBrush x:Key="Bg.Page" Color="#F5F5F5" />
-    <SolidColorBrush x:Key="Bg.Elevated" Color="#EEEEEE" />
-    <SolidColorBrush x:Key="Bg.Bubble.In" Color="#E8F7F0" />
+    <SolidColorBrush x:Key="Bg.Page" Color="#FAFAFA" />
+    <SolidColorBrush x:Key="Bg.Elevated" Color="#E0E0E0" />
+    <SolidColorBrush x:Key="Bg.Bubble.In" Color="#E8E8EA" />
+    <SolidColorBrush x:Key="Bg.SenderList" Color="#EEEFF0" />
+    <!-- 会话行选中底：比列表底深一档的灰（微信 PC 那档），不铺 accent——整行染绿太吵 -->
+    <SolidColorBrush x:Key="Bg.Selected" Color="#E2E2E2" />
 
     <!-- 文字颜色 -->
-    <SolidColorBrush x:Key="Fg.Primary" Color="#212121" />
+    <SolidColorBrush x:Key="Fg.Primary" Color="#19191A" />
     <SolidColorBrush x:Key="Fg.Secondary" Color="#757575" />
 
-    <!-- 品牌主色（更鲜活的绿） -->
-    <SolidColorBrush x:Key="Accent" Color="#0ABF5E" />
+    <!-- 品牌主色（微信风格绿） -->
+    <SolidColorBrush x:Key="Accent" Color="#14A36A" />
 
     <!-- 语义色 -->
     <SolidColorBrush x:Key="Badge.Unread" Color="#F5222D" />
@@ -25,6 +28,11 @@
 
     <!-- §7.4 的命中高亮：Android 那边是硬编码的 #1A73E8 且加粗，深浅两色同一个值，所以两份字典里都一样 -->
     <SolidColorBrush x:Key="Level.Highlight" Color="#1A73E8" />
+
+    <!-- 滚动条颜色 -->
+    <SolidColorBrush x:Key="ScrollBar.Thumb" Color="#A1A1A2" />
+    <SolidColorBrush x:Key="ScrollBar.ThumbHover" Color="#888889" />
+    <SolidColorBrush x:Key="ScrollBar.ThumbDrag" Color="#6E6E6F" />
 
     <!-- §9.2 的字体层级系统（字号常量）。XAML 无法直接引用 C# 常量，所以在资源字典中定义 Style。
          正文 15/行高23、摘要 13/行高18、标签 12/行高16、标题四档 20/18/16/15。

@@ -68,9 +68,8 @@ public sealed class MainWindowTest : IDisposable
                 var window = new MainWindow(_db, _identities, reporter,
                     new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader());
 
-                // 一条会话都没打开：右栏是那句"从左侧选一条会话线"，筛选条与胶囊都还没话可说
+                // 一条会话都没打开：右栏是那句"从左侧选一条会话线"，胶囊也还没话可说
                 Assert.Equal(Visibility.Visible, window.NoConversationProbe);
-                Assert.Equal(Visibility.Collapsed, window.FilterBarProbe);
                 Assert.Equal(Visibility.Collapsed, window.NewBelowProbe);
                 // W14 的回滚提示条同样是"没话可说"的那一个：它只在删除失败时才出现
                 Assert.Equal(Visibility.Collapsed, window.NoticeProbe);
