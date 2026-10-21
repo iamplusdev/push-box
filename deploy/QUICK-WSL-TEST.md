@@ -111,7 +111,9 @@ curl http://localhost:7404/api/v1/admin/channels \
   -H "Authorization: Bearer $TOKEN"
 
 # 创建新频道（返回明文 secret）
-# groupId 不给就落到字面量 "admin" 这个 Space 里，任何真机都看不到它——先查一个真实 group_id 再建
+# groupId 必填，而且必须是 /admin/devices 里真出现过的 group_id（groups 表里有这一行）；
+# 省略或写不存在的 id 一律 400 invalid_param。2026-10-21 之前这里不校验，省略就落到字面量
+# "admin" 这个 Space，任何真机都看不到它——先查一个真实 group_id 再建
 curl -X POST http://localhost:7404/api/v1/admin/channels \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \

@@ -140,7 +140,7 @@ node deploy/probe/p0-e2e.mjs                            # 端到端验收：看�
   <table>
     <thead><tr><th>跑法</th><th>判什么</th><th>当前</th></tr></thead>
     <tbody>
-      <tr><td><code>mvn -B -pl core,server test</code></td><td>加密库 + 服务端逻辑（含碰库碰桶用例）</td><td>280 / 280（core 43 + server 237）</td></tr>
+      <tr><td><code>mvn -B -pl core,server test</code></td><td>加密库 + 服务端逻辑（含碰库碰桶用例）</td><td>282 / 282（core 43 + server 239）</td></tr>
       <tr><td><code>node deploy/probe/p0-e2e.mjs</code></td><td>逐字节复刻握手、签名、帧加密、补拉与<b>频道接入过滤</b>的端到端验收</td><td>末行 N/N、0 失败</td></tr>
       <tr><td><code>dotnet test windows/PushBox.sln</code></td><td>C# 与 Java 的协议向量对齐 + PC 端每一层逻辑</td><td>556 / 556</td></tr>
       <tr><td><code>dotnet run --project windows/PushBox.LiveCheck</code></td><td>真 WebSocket + 真服务端上的十二条判据</td><td>12 / 12</td></tr>
