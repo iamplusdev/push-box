@@ -1,5 +1,9 @@
-# §11.1 当前联调配置（D23）：MySQL 在本机 127.0.0.1，RustFS 仍在远端那台存储机（地址写在 deploy/env/local.env，不进本文件），服务端本机直跑、不进容器。
+# §11.1 当前联调配置（D23）：MySQL 在本机 127.0.0.1，服务端本机直跑、不进容器；存储默认本地文件，要验桶形态显式给 PB_STORAGE_TYPE=s3。
 # 凭据只从环境变量读取，任何情况下都不要把明文写进本文件（本文件会入库）。
+#
+# 端口不在这里出现：dev 继承 base application.yml 的 7404，与 prod 的 ${PB_SERVER_PORT:7404} 同一个默认值，
+# 所以本机实例、adb reverse、客户端里填的地址和文档里的 curl 示例都是 7404，只有一个端口要记。
+# 要另起一个不干扰手动实例的（PC 真服务体检、并发探针）就传 --server.port=8081，别改这个文件。
 spring:
   datasource:
     # 同机库是验收①"1s 内出通知"的判分前提：远端库（同网段另一台机上的 3306）实测单条 SQL 就要 362ms，
@@ -18,14 +22,21 @@ spring:
       max-lifetime: 900000
 
 pb:
+  # §11.1 本机联调默认走本地文件存储：只装一个 MySQL 就能把服务端跑起来，不必先立一套 RustFS/MinIO。
+  # 图片链路照常可用，对象落在 local-path 下。要验真正的 S3 形态就显式给 PB_STORAGE_TYPE=s3
+  # （那时 PB_S3_* 三件套重新变成必填，DevCredentialsGuard 会点名）。
+  storage:
+    type: ${PB_STORAGE_TYPE:local}
+    local-path: ${PB_STORAGE_LOCAL_PATH:./data/media}
   s3:
     # 存储机地址同样只从环境读：本文件会入库，写死任何真实地址等于把拓扑公开。
-    # 值在 deploy/env/local.env 里（PB_S3_ENDPOINT=...），缺它由 DevCredentialsGuard 当场点名。
-    endpoint: ${PB_S3_ENDPOINT}
+    # 给空串兜底而不是裸占位符：type=local 时这几项根本没有读者，让未解析的 `${PB_S3_ENDPOINT}`
+    # 原样留在属性里只会把"没配"伪装成一个非法地址（S3Config 的 require 认空串，不认字面量）。
+    endpoint: ${PB_S3_ENDPOINT:}
     region: us-east-1
-    bucket: pushbox
-    access-key: ${PB_S3_ACCESS_KEY}
-    secret-key: ${PB_S3_SECRET_KEY}
+    bucket: ${PB_S3_BUCKET:pushbox}
+    access-key: ${PB_S3_ACCESS_KEY:}
+    secret-key: ${PB_S3_SECRET_KEY:}
     path-style: true
     delete-grace: 168h
     # 宽限期巡检节奏（§4.5 media sweep）：tombstone 只把对象标成待删，过 delete-grace 才真删。

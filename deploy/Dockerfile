@@ -3,7 +3,8 @@
 # compose 里写成 context: .. / dockerfile: deploy/Dockerfile。
 # D27 后 Java 侧走 Maven，所以基础镜像用 maven 而不是设计早期草稿里的 gradle。
 # web-admin SPA 在独立 node 阶段构建后拷进 server 的静态资源目录，最终 fat jar 自带前端，
-# 由同一个 Spring Boot 进程在 8080 上同时吐 API 与页面（同源，无需 CORS/额外反代规则）。
+# 由同一个 Spring Boot 进程在 PB_SERVER_PORT（默认 7404）上同时吐 API 与页面
+# （同源，无需 CORS/额外反代规则；SPA 的路由回落见 SpaWebConfig）。
 
 # ---- 前端：构建管理台 SPA，产物 /web/dist ----
 FROM node:22-alpine AS webbuild
@@ -50,22 +51,22 @@ if [ -z "\${PB_DB_PASSWORD:-}" ]; then
   exit 1
 fi
 
-if [ -z "\${PB_S3_ENDPOINT:-}" ]; then
-  echo "❌ 错误: PB_S3_ENDPOINT 未设置"
-  exit 1
+# 2. 对象存储：只有走 S3 协议才要这三样。PB_STORAGE_TYPE=local（本机试用、单容器自包含部署）
+#    时对象直接落在容器文件系统里，一个外部存储都不需要——原来这里无条件要求 PB_S3_*，
+#    等于把"一个 docker run 起一套 PushBox"这条路堵死，只能为了过检查塞三个假值。
+if [ "\${PB_STORAGE_TYPE:-s3}" = "local" ]; then
+  echo "ℹ️  对象存储走本地文件系统（PB_STORAGE_TYPE=local），对象落在 \${PB_STORAGE_LOCAL_PATH:-./data/media}；不需要 PB_S3_*"
+else
+  for var in PB_S3_ENDPOINT PB_S3_ACCESS_KEY PB_S3_SECRET_KEY; do
+    if [ -z "\${!var:-}" ]; then
+      echo "❌ 错误: \$var 未设置（PB_STORAGE_TYPE=\${PB_STORAGE_TYPE:-s3} 时它是必填）"
+      echo "   不想外接存储就设 PB_STORAGE_TYPE=local"
+      exit 1
+    fi
+  done
 fi
 
-if [ -z "\${PB_S3_ACCESS_KEY:-}" ]; then
-  echo "❌ 错误: PB_S3_ACCESS_KEY 未设置"
-  exit 1
-fi
-
-if [ -z "\${PB_S3_SECRET_KEY:-}" ]; then
-  echo "❌ 错误: PB_S3_SECRET_KEY 未设置"
-  exit 1
-fi
-
-# 2. SSE-C 加密模式下的主钥长度验证
+# 3. SSE-C 加密模式下的主钥长度验证
 if [ "\${PB_S3_OBJECT_ENCRYPT:-none}" = "sse-c" ]; then
   MASTER_KEY="\${PB_S3_MASTER_KEY:-}"
   if [ -z "\$MASTER_KEY" ]; then
@@ -100,7 +101,7 @@ else
   esac
 fi
 
-# 3. Web 管理台：根密钥决定"谁能登录"，签名密钥决定"JWT 能不能被伪造"，两把不能是同一把。
+# 4. Web 管理台：根密钥决定"谁能登录"，签名密钥决定"JWT 能不能被伪造"，两把不能是同一把。
 if [ -z "\${PB_ADMIN_SECRET:-}" ]; then
   echo "ℹ️  PB_ADMIN_SECRET 未设置，Web 管理台已禁用"
 else
@@ -137,9 +138,13 @@ EOF
 RUN chmod +x /app/entrypoint.sh
 
 # 非 root 运行；/app/logs 归运行用户，compose 把 ./data/logs 挂在这里。
+# PB_STORAGE_TYPE=local 时对象落在 /app/data/media（见 application-prod.yml），要它活得比容器久
+# 就自己挂一个卷到 /app/data——默认没卷的话，容器一删图就没了，这是 local 拓扑的代价，不是缺陷。
 RUN useradd -r -u 10001 pushbox && mkdir -p /app/logs && chown -R pushbox:pushbox /app
 USER pushbox
-EXPOSE 8080
+# 监听端口是 ${PB_SERVER_PORT:7404}（application-prod.yml），EXPOSE 只是给人看的元数据，
+# 写 8080 会让"照着 docker inspect 猜端口"的人连不上——这一行以前就是错的。
+EXPOSE 7404
 # prod 不加载 application-dev.yml（那套写死了 127.0.0.1），凭据与地址全部来自 env。
 ENV SPRING_PROFILES_ACTIVE=prod
 ENTRYPOINT ["/app/entrypoint.sh"]

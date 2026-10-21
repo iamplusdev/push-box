@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 本机启动服务端（§11.1 D23：服务端不进容器，只连远端 MySQL/RustFS）。
+# 本机启动服务端（§11.1 D23：服务端不进容器，直连本机 MySQL；图片按 PB_STORAGE_TYPE 落盘或进桶）。
+# 口令由 local.env 的 export 带进来，本脚本不出现任何明文。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

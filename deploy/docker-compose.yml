@@ -7,7 +7,7 @@
 #      而 A 那台在跑的实例挂在 7101。配错了 /healthz 仍然会说 storage=up（它只判配置非空，
 #      见 HealthzController.storageConfigValid），要到第一条带图的消息才炸。
 #      同一段里桶 pushbox 也不会自动出现，需要建一次：mc mb local/pushbox，没有 mc 时用
-#      aws s3api create-bucket（两种命令都写在 deploy/QUICK-START.md「桶要建一次」）。
+#      aws s3api create-bucket（两种命令都写在 deploy/部署快速参考.md「桶要建一次」）。
 #   具体主机名与 TLS 口径写在 deploy/env/prod.env.example（模板里不放任何真实地址）。
 # 监控栈（prometheus + grafana）单独一本文件，想要监控时才多传一个 -f：
 #   docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d

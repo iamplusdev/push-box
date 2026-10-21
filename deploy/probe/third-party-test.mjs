@@ -1,6 +1,6 @@
 // 第三方入站接口测试：用真实 curl 调 POST /message，Node 模拟设备收帧验证端到端投递。
 // 用法：先 bash deploy/run-dev.sh，再 node deploy/probe/third-party-test.mjs
-// 可选环境变量：PB_BASE（默认 http://127.0.0.1:8080）、PB_CURL（默认 curl）
+// 可选环境变量：PB_BASE（默认 http://127.0.0.1:7404）、PB_CURL（默认 curl）
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -8,7 +8,7 @@ import pathModule from 'node:path'
 import { execFileSync } from 'node:child_process'
 import WebSocket from 'ws'
 
-const BASE = process.env.PB_BASE ?? 'http://127.0.0.1:8080'
+const BASE = process.env.PB_BASE ?? 'http://127.0.0.1:7404'
 const CURL = process.env.PB_CURL ?? 'curl'
 const MAX_LATENCY_MS = Number(process.env.PB_MAX_LATENCY_MS ?? 1000)
 

@@ -3,11 +3,14 @@
 // Android 侧只剩 UI 与存储，不再会有协议层意外。
 //
 // 用法：先 bash deploy/run-dev.sh，再 node deploy/probe/p0-e2e.mjs
+// PB_BASE 默认打本机标准端口 7404（与 base application.yml、prod 的 ${PB_SERVER_PORT:7404} 同一个默认值）。
+// 这会真建空间与频道，所以那个端口上跑着别人手上的实例时，先另起一个自己用完就关的：
+//   bash deploy/run-dev.sh --server.port=8081  &&  PB_BASE=http://127.0.0.1:8081 node deploy/probe/p0-e2e.mjs
 import crypto from 'node:crypto'
 import http from 'node:http'
 import WebSocket from 'ws'
 
-const BASE = process.env.PB_BASE ?? 'http://127.0.0.1:8080'
+const BASE = process.env.PB_BASE ?? 'http://127.0.0.1:7404'
 const DEBUG = Boolean(process.env.PB_DEBUG)
 const WS_URL = BASE.replace(/^http/, 'ws') + '/ws'
 // 验收线固定是 1s（§12 ①）；数据库在远端时单条 SQL 就是几百毫秒，

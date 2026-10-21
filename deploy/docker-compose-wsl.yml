@@ -14,11 +14,13 @@ services:
       PB_DB_URL: ${PB_DB_URL:?PB_DB_URL 未设置}
       PB_DB_USERNAME: ${PB_DB_USERNAME:-pushbox}
       PB_DB_PASSWORD: ${PB_DB_PASSWORD:?PB_DB_PASSWORD 未设置}
-      PB_S3_ENDPOINT: ${PB_S3_ENDPOINT:?PB_S3_ENDPOINT 未设置}
+      # 与主文件同口径：这三项用 :-（可空）而不是 :?（必填）。PB_STORAGE_TYPE=local 时它们本来就不该有值，
+      # 而必填会把"顺手起一个不带 RustFS 的测试栈"这条路堵死；真走 s3 时缺值由 S3Config 与镜像入口脚本点名拒绝启动。
+      PB_S3_ENDPOINT: ${PB_S3_ENDPOINT:-}
       PB_S3_REGION: ${PB_S3_REGION:-us-east-1}
       PB_S3_BUCKET: ${PB_S3_BUCKET:-pushbox}
-      PB_S3_ACCESS_KEY: ${PB_S3_ACCESS_KEY:?PB_S3_ACCESS_KEY 未设置}
-      PB_S3_SECRET_KEY: ${PB_S3_SECRET_KEY:?PB_S3_SECRET_KEY 未设置}
+      PB_S3_ACCESS_KEY: ${PB_S3_ACCESS_KEY:-}
+      PB_S3_SECRET_KEY: ${PB_S3_SECRET_KEY:-}
       PB_S3_PATH_STYLE: ${PB_S3_PATH_STYLE:-true}
       # 与主文件同步：prod profile 只认这两个键名，缺映射时 PB_STORAGE_TYPE=local 是个死开关。
       PB_STORAGE_TYPE: ${PB_STORAGE_TYPE:-s3}

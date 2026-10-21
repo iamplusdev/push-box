@@ -76,6 +76,23 @@ class DevCredentialsGuardTest {
     assertThatCode(() -> refresh("dev", Map.of(), false)).doesNotThrowAnyException();
   }
 
+  @Test
+  @DisplayName("⑦ PB_STORAGE_TYPE=local 时三件 S3 键不再是必填：本机只装一个 MySQL 就要能起来")
+  void localStorageOnlyNeedsTheDbPassword() {
+    assertThatCode(() -> refresh("dev",
+        Map.of("PB_DB_PASSWORD", SENTINEL, "pb.storage.type", "local"), true))
+        .doesNotThrowAnyException();
+  }
+
+  @Test
+  @DisplayName("⑧ 同上但连口令都没给：只点 PB_DB_PASSWORD 一个名，不许把用不上的 PB_S3_* 一起报出来")
+  void localStorageFailureNamesOnlyTheRealGap() {
+    assertThatThrownBy(() -> refresh("dev", Map.of("pb.storage.type", "local"), true))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("PB_DB_PASSWORD")
+        .hasMessageNotContaining("PB_S3_ENDPOINT");
+  }
+
   private static void refresh(String profile, Map<String, String> props, boolean withDataSource) {
     GenericApplicationContext ctx = new GenericApplicationContext();
     // 摘掉进程环境与系统属性：mvn test 常常是在 source 过 local.env 的终端里跑的，

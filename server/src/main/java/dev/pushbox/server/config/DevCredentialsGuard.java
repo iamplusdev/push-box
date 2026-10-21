@@ -25,8 +25,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class DevCredentialsGuard implements BeanFactoryPostProcessor, EnvironmentAware {
 
-  private static final List<String> REQUIRED =
-      List.of("PB_DB_PASSWORD", "PB_S3_ENDPOINT", "PB_S3_ACCESS_KEY", "PB_S3_SECRET_KEY");
+  private static final List<String> DB_REQUIRED = List.of("PB_DB_PASSWORD");
+
+  /** 只有 {@code pb.storage.type=s3} 才要这三样；本机联调默认走本地文件存储（见 application-dev.yml）。 */
+  private static final List<String> S3_REQUIRED =
+      List.of("PB_S3_ENDPOINT", "PB_S3_ACCESS_KEY", "PB_S3_SECRET_KEY");
 
   private ConfigurableEnvironment environment;
 
@@ -46,7 +49,11 @@ public class DevCredentialsGuard implements BeanFactoryPostProcessor, Environmen
     if (beanFactory.getBeanNamesForType(DataSource.class, true, false).length == 0) {
       return;
     }
-    List<String> missing = REQUIRED.stream().filter(this::isUnset).toList();
+    List<String> missing = new java.util.ArrayList<>(
+        DB_REQUIRED.stream().filter(this::isUnset).toList());
+    if (usesS3()) {
+      missing.addAll(S3_REQUIRED.stream().filter(this::isUnset).toList());
+    }
     if (missing.isEmpty()) {
       return;
     }
@@ -59,8 +66,14 @@ public class DevCredentialsGuard implements BeanFactoryPostProcessor, Environmen
                  把上面这几个键填进去（值从 deploy/env/local.env 抄，不要提交任何含明文的文件）；
               2) 跑一次 powershell -File deploy/env/set-user-env.ps1 写进当前用户的环境变量，
                  然后重启 IDEA——所有运行配置都会继承它，明文不进任何工程文件。
-            命令行跑则：set -a && . deploy/env/local.env && set +a && java -jar server/target/*.jar"""
+            命令行跑则：set -a && . deploy/env/local.env && set +a && java -jar server/target/*.jar
+            （只想要一个能收消息的本机服务端：PB_STORAGE_TYPE 保持默认的 local，就只需要 PB_DB_PASSWORD 一个键。）"""
         .formatted(missing));
+  }
+
+  /** 走 relaxed binding：环境变量 {@code PB_STORAGE_TYPE} 就是属性 {@code pb.storage.type}。 */
+  private boolean usesS3() {
+    return !"local".equalsIgnoreCase(environment.getProperty("pb.storage.type", "s3").trim());
   }
 
   private boolean isUnset(String key) {

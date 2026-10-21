@@ -157,10 +157,14 @@ public class PushboxWsHandler extends TextWebSocketHandler {
     // pb.ws.gap-threshold，于是每次连接只回 resume_gap、永远等不到 resume_ok（真服务体检 ② 抓到的）
     long latest = store.latestSeq(session.groupId);
     if (latest - sinceSeq > props.getWs().getGapThreshold()) {
+      log.info("重连差距超过阈值，回 resume_gap device_id={} group_id={} since_seq={} latest_seq={} threshold={}",
+          device.getString("device_id"), session.groupId, sinceSeq, latest,
+          props.getWs().getGapThreshold());
       registry.send(session, Frames.ResumeGap.of(sinceSeq + 1, latest));
       return;
     }
     long cursor = sinceSeq;
+    int sent = 0;
     // 一批要循环到取空才回 resume_ok。原先只发一批：落后条数在"一批"与 gap-threshold 之间的设备
     // 既收不满也收不到 resume_gap，客户端把"这一批发完"当成"已经追平"，
     // 剩下的消息要等下一次断线重连才有机会补上——不重连就永久静默
@@ -176,9 +180,12 @@ public class PushboxWsHandler extends TextWebSocketHandler {
             assembler.capFrame(assembler.toFrame(row, false), props.getWs().getFrameMaxBytes()))) {
           return; // 对端已断，剩下的等它下次重连
         }
+        sent++;
       }
       cursor = rows.get(rows.size() - 1).getLong("seq");
     }
+    log.info("补拉完成 device_id={} group_id={} since_seq={} cursor={} latest_seq={} sent={}",
+        device.getString("device_id"), session.groupId, sinceSeq, cursor, latest, sent);
     registry.send(session, Frames.Simple.resumeOk());
   }
 
