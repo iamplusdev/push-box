@@ -88,14 +88,17 @@ else
 fi
 
 # 测试计数是第九个自称拥有单一真相的地方，而且和版本号一样是人手抄的：README、开发指南、
-# 测试指南、发布检查清单/SUMMARY、CHANGELOG 与 site/ 都写着 "core 38 + server 223"。
+# 测试指南、发布检查清单/SUMMARY 与 CHANGELOG 都写着 "core 38 + server 223"。
 # v1.1.0 这轮抓到过四处同时挂着两版之前的 197/553，靠人肉对齐一定会漏，所以现读现比：
 # 以 ci.yml 里的基线为唯一真值，把上面这些文件里出现的 (core + server) 求和后比对。
 # docs/审计报告.md 不在扫描范围内——它有意把"旧声称值"和"复验值"并排留着当证据，
 # 一份文档里同时存在两个数，任何单值判据都会在那里误报。
+# site/ 同样不在扫描范围内，而且原因和审计报告不同：官网是给使用者看的，不该出现
+# "本项目有多少条单测"这种仓库内部数字（2026-10-22 改版时全部删掉）。把数字留在文档站
+# 只会让下一轮改版顺手删掉它、然后把这条闸判成"写法变了"。
 CI_BASELINE=$(grep -oE 'if tests < [0-9]+' "$ROOT_DIR/.github/workflows/ci.yml" | grep -oE '[0-9]+' | tail -1)
 TEST_COUNT_PATTERN='(core [0-9]+ \+ server [0-9]+|server [0-9]+ \+ core [0-9]+)'
-DOC_PATHS=(README.md docs/开发指南.md docs/测试指南.md 发布检查清单.md 发布准备报告.md CHANGELOG.md site)
+DOC_PATHS=(README.md docs/开发指南.md docs/测试指南.md 发布检查清单.md 发布准备报告.md CHANGELOG.md)
 COUNT_HITS=$(git -C "$ROOT_DIR" grep -hhoE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | wc -l)
 COUNT_FILES=$(git -C "$ROOT_DIR" grep -lE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | wc -l)
 DOC_TOTALS=$(git -C "$ROOT_DIR" grep -hhoE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | awk '{print $2 + $5}' | sort -un | tr '\n' ' ')
@@ -104,15 +107,51 @@ DOC_TOTALS=${DOC_TOTALS% }
 # 任何人把其中一句改成叙述式写法（"这一版实测 273 条"这种，意思完全一样）都会把闸门判红，
 # 而红的原因跟"数字腐烂"这件它本来要防的事毫无关系。改成数**带这份计数的文档个数**：
 # 一处改写不会掉文件，整种写法被换掉才会——那正是这条判据想抓的东西。
-# 2026-10-21 实测：8 个文件带计数（README、两份指南、清单、SUMMARY、CHANGELOG、site/install.html、site/overview.html）。
+# 2026-10-22 实测（site/ 摘出去之后）：5 个文件带计数（README、两份指南、清单、发布准备报告），
+# 所以下限取 4——容许一处改成叙述式，容许不了两处；真的少了两处就该来改这条判据。
 if [ -z "$CI_BASELINE" ]; then
     fail "没从 .github/workflows/ci.yml 读到用例基线（这条判据跟着 ci.yml 的「if tests < N」走，改了那边要改这里）"
-elif [ "$COUNT_FILES" -lt 6 ]; then
-    fail "只有 $COUNT_FILES 个文档还带着「core N + server N」这份用例数（预期至少 6 个）：写法变了或文档被清空了，这条判据得跟着改，别删"
+elif [ "$COUNT_FILES" -lt 4 ]; then
+    fail "只有 $COUNT_FILES 个文档还带着「core N + server N」这份用例数（预期至少 4 个）：写法变了或文档被清空了，这条判据得跟着改，别删"
 elif [ "$DOC_TOTALS" = "$CI_BASELINE" ]; then
     pass "文档里的 Java 用例总数与 ci.yml 基线一致：$DOC_TOTALS（$COUNT_HITS 处、$COUNT_FILES 个文档）"
 else
     fail "文档里的 Java 用例总数是 $DOC_TOTALS，ci.yml 基线是 $CI_BASELINE；不一致的行：$(git -C "$ROOT_DIR" grep -hoE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | sort -u | tr '\n' ' ')"
+fi
+
+# C# 侧原来是彻底没闸的：ci.yml 的 windows job 只跑 dotnet test，而它的退出码只回答"有没有红"，
+# 用例被静默裁掉（删了 [Fact]、改了分类过滤、整类没被 discover）照样退 0。文档那个数同样是人手抄——
+# 2026-10-22 加这条闸的当天就抓到一处现值腐烂：发布准备报告的状态表还挂着 556/556，
+# 其余六处在同一天已经改成实测的 554（撤掉「全部/未读/已读」筛选时连带删了 MainModelTest 两条）。
+# 唯一真值取 ci.yml 里那道断言的 $CS_BASELINE：改了它就同步改文档，别反过来抄文档。
+#
+# 判据形状与 Java 那条同源，但有两个刻意的差别，都是为了不在历史证据上误报：
+#   ① 只认"关键词同一行里的三位数对"（`554/554`、`303 / 554`），Java 与 C# 两个基线之外的数一律 FAIL；
+#   ② 带日期的行整行跳过——`发布检查清单` 的高 DPI 那条把 2026-10-21 那次的 556/556 当证据留着，
+#      和 CHANGELOG、docs/审计报告.md 一样属于"有意并排两个数"，任何单值判据在那里只会误报。
+# site/ 与 Java 那条同因由排除：官网不写仓库内部用例数（2026-10-22 实测 5 个文件带计数，下限 3 够用）。
+CS_CI_BASELINE=$(grep -oE 'CS_BASELINE = [0-9]+' "$ROOT_DIR/.github/workflows/ci.yml" | grep -oE '[0-9]+' | tail -1)
+CS_KEYWORD_PATTERN='dotnet test|Windows 测试|C# 单测|C# 协议向量|冒烟命令'
+CS_SCAN_PATHS=(README.md docs/开发指南.md docs/测试指南.md docs/Windows开发环境安装教程.md docs/软件设计方案.md 发布检查清单.md 发布准备报告.md)
+CS_LINES=$(git -C "$ROOT_DIR" grep -nE "$CS_KEYWORD_PATTERN" -- "${CS_SCAN_PATHS[@]}" \
+    | grep -vE '2026-1[0-2]-[0-9]{2}' || true)
+CS_NUMS=$(printf '%s\n' "$CS_LINES" | grep -oE '[0-9]{3}[[:space:]]*/[[:space:]]*[0-9]{3}' | grep -oE '[0-9]{3}' | sort -un | tr '\n' ' ' || true)
+CS_NUMS=${CS_NUMS% }
+CS_FILES=$(printf '%s\n' "$CS_LINES" | grep -oE '^[^:]+' | sort -u | wc -l || true)
+CS_BAD=$(printf '%s\n' $CS_NUMS | grep -vE "^($CI_BASELINE|$CS_CI_BASELINE)$" | tr '\n' ' ' || true)
+CS_BAD_RE=$(printf '%s\n' $CS_BAD | paste -sd'|' - || true)
+if [ -z "$CS_CI_BASELINE" ]; then
+    fail "没从 .github/workflows/ci.yml 读到 C# 用例基线（这条判据跟着 windows job 的「\$CS_BASELINE = N」走，改了那边要改这里）"
+elif [ "$CS_FILES" -lt 3 ]; then
+    fail "只有 $CS_FILES 个文档还在写 C# 用例数（预期至少 3 个）：写法变了或计数被删光了，这条判据得跟着改，别删"
+elif [ -n "$CS_BAD" ]; then
+    fail "文档里出现了基线之外的 C#/Java 用例数：$CS_BAD（Java 基线 $CI_BASELINE、C# 基线 $CS_CI_BASELINE）；不一致的行：$(printf '%s\n' "$CS_LINES" | grep -E "(^|[^0-9])($CS_BAD_RE)([^0-9]|$)" | cut -c1-160 | tr '\n' ' ')"
+else
+    pass "文档里的 C# 用例数与 ci.yml 基线一致：$CS_CI_BASELINE（现值 $CS_NUMS，$CS_FILES 个文档）"
+fi
+# 这条闸不能是空转的：如果没有任何一处文档真的写着 C# 基线那个数，上面只会"全都对"却没在比东西。
+if [ -n "$CS_CI_BASELINE" ] && ! printf '%s\n' $CS_NUMS | grep -qx "$CS_CI_BASELINE"; then
+    fail "C# 计数闸空转：没有任何一处文档写着基线值 $CS_CI_BASELINE（命中数：$CS_NUMS）"
 fi
 
 # 镜像体积只在真构建过之后才知道（v1.1.0 实测 654 MB）。清单里不再单独列这一条，
@@ -451,11 +490,34 @@ else
     pass "ci.yml 不改版本号，测的就是提交里的那份"
 fi
 
-# 四个 workflow 只在 main / v* 上触发，所以 main 这个分支名本身也是发布链的一部分。
+# 出制品与门禁的四个 workflow 只在 main / v* 上触发，所以 main 这个分支名本身也是发布链的一部分。
+# （第五个 site-deploy.yml 故意不挂 v*，它跟版本号无关，判据在下面那段。）
 if grep -q 'branches: \[main\]' "$ROOT_DIR/.github/workflows/ci.yml"; then
     pass "CI 触发分支与主分支口径一致（main）"
 else
     fail "CI 的触发分支不是 main，推上去不会有任何流水线运行"
+fi
+
+# 官网发布链。site/ 是纯静态的，这条链没有构建，所以它的风险全在"什么时候发、发的是什么"上，
+# 而这几件事在本机都看不出来：paths 被删掉只有推 main 那次才暴露，树哈希比较被删掉只有重跑一次
+# 才看得见（多一个空 commit 与一次 Pages 构建），.nojekyll 被漏掉则 Pages 会拿 Jekyll 过一遍站点。
+SITE_WF="$ROOT_DIR/.github/workflows/site-deploy.yml"
+if [ ! -f "$SITE_WF" ]; then
+    fail "site-deploy.yml 工作流文件缺失：改了 site/ 也不会有任何东西上线"
+elif ! grep -qE '^[[:space:]]+paths:' "$SITE_WF"; then
+    fail "site-deploy.yml 的 push 触发没有 paths 过滤：任何一次改代码的推送都会重发官网"
+elif ! grep -q 'skip=true' "$SITE_WF"; then
+    fail "site-deploy.yml 没有内容比较：workflow_dispatch 不吃 paths 过滤，没这一层每点一次就多一个空 commit"
+elif grep -qE '^[[:space:]]*tags:' "$SITE_WF"; then
+    fail "site-deploy.yml 挂在 tag 事件上：官网内容与版本号无关，打 v* 标签不该重发站点"
+elif grep -oE 'uses: [^ ]+' "$SITE_WF" | grep -qv '^uses: actions/'; then
+    fail "site-deploy.yml 引了非官方 action：这条链要往 gh-pages 写数据，第三方 action 是白多出来的供应链入口"
+elif ! grep -q 'site/.nojekyll' "$SITE_WF"; then
+    fail "site-deploy.yml 不检查 .nojekyll：Pages 以分支为源时会把这份静态站过一遍 Jekyll"
+elif [ ! -f "$ROOT_DIR/site/.nojekyll" ]; then
+    fail "site/.nojekyll 缺失：上面那条判据会红，补上（内容随意，Pages 只看它在不在）"
+else
+    pass "site-deploy.yml 护栏齐全（paths 过滤 + 树哈希比较 + 不挂 tag + 只用官方 action + .nojekyll 就位）"
 fi
 
 # ========================================

@@ -111,7 +111,7 @@ jobs:
 
       # 闸门用例的存在性证明：skipped 必须为 0，且执行总数不低于实测基线。
       # 只判"mvn 退出码 0"是不够的 —— 凭据没传进去时它同样退 0。
-      # 基线是 2026-10-22 用 JDK 21 实跑出来的 surefire 汇总：server 258（其中 114 条是闸门类）+ core 43 = 301。
+      # 基线是 2026-10-22 用 JDK 21 实跑出来的 surefire 汇总：server 263（其中 114 条是闸门类）+ core 43 = 306。
       # 这个数字只许涨不许跌；跌了说明有人删了测试或改了 include 规则，而不是"环境不一样"。
       # 223 → 227 是 AdminControllerBodyTest 那 4 条（管理台坏请求体返 400 的收口用例）；
       # 227 → 232 是 DeviceControllerBodyTest 那 5 条（设备侧同一收口），两次都是同版本 JDK 实跑抬的。
@@ -129,7 +129,12 @@ jobs:
       # 249 → 258 是本轮的 9 条：SpaWebConfigTest 7 条（单镜像里"未注册路径不该吞成 200+HTML"那条判据，
       # 含"jar 里没有 index.html 时回退要返回 null 而不是抛异常"）+ DevCredentialsGuardTest 2 条
       # （PB_STORAGE_TYPE=local 时只查 PB_DB_PASSWORD、=s3 时才点 PB_S3_* 三件套的名）。
-      # 总基线 292 → 301。
+      # 258 → 260 是同一闸门类的 ⑨⑩ 两条：local 模式却带着 PB_S3_* 必须出声（只报键名与落盘目录，
+      # 值一个字不进日志），真跑 s3 时这句不许响——必填项分档之后"忘了设 type"不再让启动失败，
+      # 只会让整轮测试静默跑在本地目录上，所以反向那条判据也得有用例兜着。
+      # 260 → 263 是 StorageWiringTest 那 3 条：它跑真 AnnotationConfigApplicationContext 而不是手工 new，
+      # 因为 local 模式起不来那条缺陷（`@Bean` 返回 null = NullBean = "没有这个 bean"）只有容器才照得出来。
+      # 总基线 292 → 301 → 303 → 306。
       - name: 断言 DB 闸门用例真的执行了
         run: |
           set -euo pipefail
@@ -147,8 +152,8 @@ jobs:
           if skipped != 0:
               print("::error::有 %d 条用例被跳过：DB/S3 凭据没传到位（见本 job 顶部说明），全绿不代表测过" % skipped)
               sys.exit(1)
-          if tests < 301:
-              print("::error::用例总数 %d 低于基线 301，测试被静默裁剪了" % tests); sys.exit(1)
+          if tests < 306:
+              print("::error::用例总数 %d 低于基线 306，测试被静默裁剪了" % tests); sys.exit(1)
           print("✅ 闸门用例全部执行")
           PY
 
@@ -193,7 +198,34 @@ jobs:
           dotnet-version: "8.0.x"
       - name: dotnet test PushBox.Crypto.Tests
         working-directory: windows
-        run: dotnet test PushBox.Crypto.Tests/PushBox.Crypto.Tests.csproj -c Release --nologo
+        run: dotnet test PushBox.Crypto.Tests/PushBox.Crypto.Tests.csproj -c Release --nologo --results-directory TestResults --logger "trx;LogFileName=crypto.trx"
+      # C# 侧原来没有基线闸：dotnet test 的退出码只回答"有没有红"，用例被静默裁掉（删了 [Fact]、
+      # 改了分类过滤、整类没被 discover）它照样退 0，而 README / 两份指南 / site/ 里的数字是人手抄的。
+      # 2026-10-22 就抓到 发布准备报告 还挂着 556/556、其余六处已经改成实测 554 —— 和 Java 那边
+      # 同一个失效方式。所以这里用 trx 数出真实条数（不看控制台文案，避免 runner 语言影响解析），
+      # 下面这一行的数字是 release-verify.sh 里 C# 计数闸读的唯一真值：改了它就同步改文档，别反过来。
+      - name: 断言 C# 用例数没有被静默裁剪
+        working-directory: windows
+        shell: pwsh
+        run: |
+          $CS_BASELINE = 554
+          $trx = Get-ChildItem -Path TestResults -Recurse -Filter crypto.trx | Select-Object -First 1
+          if (-not $trx) { Write-Output "::error::找不到 crypto.trx，测试根本没跑出结果文件"; exit 1 }
+          [xml]$report = Get-Content -LiteralPath $trx.FullName -Raw
+          $results = @($report.TestRun.Results.UnitTestResult)
+          $notPassed = @($results | Where-Object { $_.outcome -ne 'Passed' })
+          Write-Output "C# 用例总数=$($results.Count) 未通过=$($notPassed.Count)"
+          if ($notPassed.Count -gt 0) {
+            $notPassed | Select-Object -First 20 | ForEach-Object {
+              Write-Output "::error::$($_.testName) 结果=$($_.outcome)（skip 也算没测过）"
+            }
+            exit 1
+          }
+          if ($results.Count -lt $CS_BASELINE) {
+            Write-Output "::error::用例总数 $($results.Count) 低于基线 $CS_BASELINE，测试被静默裁剪了"
+            exit 1
+          }
+          Write-Output "✅ C# 用例全部执行且不低于基线"
 
   android:
     name: Android 编译
