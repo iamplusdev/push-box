@@ -801,7 +801,7 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
         warn "工作区有 $CHANGED_FILES 个文件未提交"
     fi
 
-    if git tag --list | grep -q '^v'; then
+    if git tag --list | grep -qE '(^v|[a-z]+-v)[0-9]'; then
         LATEST_TAG=$(git tag --sort=-v:refname | head -1)
         pass "最新标签: $LATEST_TAG"
     else

@@ -27,13 +27,22 @@
 ### 解耦带出来的一处回归：更新检查不能再读 `/releases/latest`
 
 - 分端发布后每个平台各占一个 Release，`/releases/latest` 只返回最后创建的那个：Android 可能读到 Windows 的 tag（没有 apk → 永远不提示更新），反过来也一样，而且**不会报错**。两端改成读 `releases?per_page=30` 列表，按资产名挑出属于自己平台的 Release，再从 tag 去掉 `android-v` / `windows-v` / `v` 前缀得到版本号；一条匹配的都没有时按"没有可安装版本"处理。
-- 验证到哪一步：Android `./gradlew :app:compileDebugKotlin` exit 0（`-q` 无输出），Windows `dotnet build … -c Release` **0 警告 0 错误**。运行时行为要等第一个 `android-v*` / `windows-v*` Release 才验得到（本机没有可用的 `gh` / 仓库 token，这一条不写成已验）。
+- 验证到哪一步：Android `./gradlew :app:compileDebugKotlin` exit 0（`-q` 无输出），Windows `dotnet build … -c Release` **0 警告 0 错误**。首个组件标签发布后（2026-10-22），Windows 的 `UpdateClient` 真实代码直连线上 `releases?per_page=30` 选出 `windows-v1.1.2` / `PushBox-Setup-1.1.2-win-x64.exe`，`IsNewer` 对 1.1.1 为真、对 1.1.2 为假（第一次跑被系统代理共用的未登录出口限额挡成 403，客户端把它翻成"限流或未授权"那句人话；换成不放代理的 `HttpClient` 后通过）。Android 的同一套选取口径（认 `pushbox-release-` 资产、剥 `android-v` / `v` 前缀）喂同一份线上 JSON 也选出 `android-v1.1.2` / `pushbox-release-1.1.2.apk` / 1.1.2，但**没有在真机上跑过更新弹窗**。
 
 ### 验证
 
 - `bash scripts/release-verify.sh` **66 通过 / 0 失败 / 2 警告**（本机无 docker CLI 判不了镜像体积、工作区有未提交文件）。
 - 三个 workflow 的 YAML 用 PyYAML `safe_load` 解析通过，tags 分别为 `android-v*`+`v*` / `windows-v*`+`v*` / `server-v*`+`v*`；`bash -n` 通过 `set-version.sh` 与 `release-verify.sh`。
-- 两条客户端改动只做到编译；`isNewer` / `Compare` 的分段比较算法未动，tag 前缀剥离暂无单测（两个项目本来就没有更新检查的测试）。
+- 更新检查的 `isNewer` / `Compare` 分段比较算法未动，tag 前缀剥离暂无单测（两个项目本来就没有更新检查的测试）。
+
+### 发布与清理（2026-10-22）
+
+- **按组件标签发的第一版**：`server-v1.1.2`、`android-v1.1.2`、`windows-v1.1.2` 各自只触发自己那条链；同一 head（`9f8e201`）上的 9 条 workflow（3 条标签链 + `main` 的 CI、三条构建、站点、Hub 说明）全部 success。
+  - Android：run `39763487166` → Release `android-v1.1.2`，资产 `pushbox-release-1.1.2.apk`（12,797,054 B，sha256 `1bf6972c53564f1287296f93363fe20dfabd3ab542da6c692751517442e9960f`）。
+  - Windows：run `39763487499` → Release `windows-v1.1.2`，资产 `PushBox-Setup-1.1.2-win-x64.exe`（58,722,683 B，sha256 `52f8c5d58e85489edc9edb78ef7b7cd919dc5fd58b3ffb488ced003419016445`）。
+  - 服务端：run `39763487572` → Docker Hub `1.1.2` / `1.1` / `latest`，不建 GitHub Release。
+- **旧产物清零**：GitHub Release `v1.1.0` / `v1.1.1`（连同资产）与对应标签、本地 `v1.0.0` 标签一并删除，远端只剩三个 `*-v1.1.2` 标签；Docker Hub 删掉 `1.1.0`、`1.1.1` 与 9 枚旧 `sha-*`，只剩 `1.1.2` / `1.1` / `latest` / `main` / `sha-9f8e201`。
+- `bash scripts/release-verify.sh` 复跑 **66 通过 / 0 失败 / 2 警告**。
 
 ---
 
