@@ -21,7 +21,11 @@ object UpdateApi {
 
     private const val OWNER = "iamplusdev"
     private const val REPO = "push-box"
-    private const val LATEST_URL = "https://api.github.com/repos/$OWNER/$REPO/releases/latest"
+
+    // 分端发布后每个平台各占一个 Release，/releases/latest 只会返回"最后发的那个"：
+    // Android 可能读到 Windows 的 Release（没有 apk → 永远不提示更新），反过来也一样。
+    // 所以改读列表，按资产名挑出属于本平台的那一条；标签也因此不能假定是 vX.Y.Z。
+    private const val RELEASES_URL = "https://api.github.com/repos/$OWNER/$REPO/releases?per_page=30"
 
     data class Latest(
         val tag: String,
@@ -46,7 +50,7 @@ object UpdateApi {
     }
 
     suspend fun check(client: OkHttpClient): Latest = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url(LATEST_URL)
+        val request = Request.Builder().url(RELEASES_URL)
             .header("User-Agent", "PushBox-Android")
             .header("Accept", "application/vnd.github+json")
             .get().build()
@@ -56,34 +60,36 @@ object UpdateApi {
             }
             val text = response.body?.string() ?: throw java.io.IOException("更新检查：空响应")
             val root = Json.MAPPER.readTree(text)
-            val tag = root.path("tag_name").asText("")
-            val version = tag.removePrefix("v")
-            val notes = root.path("body").asText("")
-            val assets = root.path("assets")
-            // 只认 CI 产的签名包 pushbox-release-*。不再退回 debug 包，也不"随便挑一个 .apk"：
+            if (!root.isArray) throw java.io.IOException("更新检查：GitHub 返回的不是 releases 列表")
+            // 列表按创建时间倒序，逐条找第一条带 Android 签名包的 release。
+            // 只认 CI 产的 pushbox-release-*：不退回 debug 包，也不"随便挑一个 .apk"。
             // 装上签名不同的包，下一次升级就是 INSTALL_FAILED_UPDATE_INCOMPATIBLE，
             // 用户只能卸载重装、本地历史全丢——而这一步当场看不出任何问题。
-            // 挑不到就留 apkUrl=null，界面按"有新版本但没有可安装的资产"提示。
-            var chosen: com.fasterxml.jackson.databind.JsonNode? = null
-            if (assets.isArray) {
+            for (release in root) {
+                val assets = release.path("assets")
+                if (!assets.isArray) continue
                 for (a in assets) {
-                    if (a.path("name").asText("").startsWith("pushbox-release-")) {
-                        chosen = a
-                        break
-                    }
+                    if (!a.path("name").asText("").startsWith("pushbox-release-")) continue
+                    val tag = release.path("tag_name").asText("")
+                    return@withContext Latest(
+                        tag = tag,
+                        version = versionOf(tag),
+                        notes = release.path("body").asText(""),
+                        apkUrl = a.path("browser_download_url").asText(null),
+                        apkName = a.path("name").asText("pushbox-update.apk"),
+                        apkSize = a.path("size").asLong(0L),
+                    )
                 }
             }
-            val pick = chosen
-            Latest(
-                tag = tag,
-                version = version,
-                notes = notes,
-                apkUrl = pick?.path("browser_download_url")?.asText(null),
-                apkName = pick?.path("name")?.asText("pushbox-update.apk") ?: "pushbox-update.apk",
-                apkSize = pick?.path("size")?.asLong(0L) ?: 0L,
-            )
+            // 一条带 APK 的 Release 都没有：等同"没有可装的版本"，界面会说已是最新。
+            Latest(tag = "", version = "0.0.0", notes = "",
+                apkUrl = null, apkName = "pushbox-update.apk", apkSize = 0L)
         }
     }
+
+    /** android-v1.2.3 与旧的 v1.2.3 都取 1.2.3；别的组件的 Release 不会走到这里（已按资产过滤）。 */
+    private fun versionOf(tag: String): String =
+        tag.trim().removePrefix("android-v").removePrefix("v")
 
     /**
      * 纯数字段比较（每段取前导数字，容忍 "1.2.0-beta" 与尾随缺失段）。

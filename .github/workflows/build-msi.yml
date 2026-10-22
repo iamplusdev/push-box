@@ -1,13 +1,17 @@
 name: Build Windows Installer
 
-# 推 main 打包 setup.exe 挂成 workflow artifact；打 v* 标签时额外发布到 GitHub Release。
+# 三条发布链是解耦的：本文件只认 windows-v* 与旧的 v*（三端一起发）两种标签。
+# 只改服务端时打 server-v*，这里根本不会被触发；main 上的日常构建也只在 windows/ 真的变了时跑。
 # 构建入口复用 windows/installer/build-installer.sh（dotnet publish self-contained win-x64 → Inno 压包），
 # 版本号只从 PushBox.Windows.csproj 的 <Version> 取，与脚本一致。
-# tag 事件不再带 paths 过滤（否则只改了其它目录的 commit 打 tag 会静默不发布）。
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    paths:
+      - "windows/**"
+      - "scripts/set-version.sh"
+      - ".github/workflows/build-msi.yml"
+    tags: ["windows-v*", "v*"]
   workflow_dispatch:
 
 permissions:
@@ -33,13 +37,14 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
-      # 统一版本号注入
+      # 统一版本号注入（标签取 windows-vX.Y.Z / vX.Y.Z 的 X.Y.Z）
       - name: Set version from git tag
         id: version
         shell: bash
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
+            VERSION="${GITHUB_REF_NAME##*-v}"   # windows-v1.2.0 / v1.2.0 -> 1.2.0
+            VERSION="${VERSION#v}"
           else
             VERSION="0.1.0-${GITHUB_RUN_NUMBER}"
           fi
@@ -51,7 +56,8 @@ jobs:
         run: |
           # 正式 tag（X.Y.Z）才注入；main/dispatch 的 0.1.0-<run> 非正式版本脚本会判失败，
           # 这里容忍并沿用 csproj/iss 已提交默认，保证 main 每次都能产出安装包。
-          bash scripts/set-version.sh "${{ steps.version.outputs.version }}" \
+          # --only=windows：解耦之后这里不碰服务端与 Android 的版本号。
+          bash scripts/set-version.sh --only=windows "${{ steps.version.outputs.version }}" \
             || echo "⚠️ 非正式版本（${{ steps.version.outputs.version }}）跳过注入，沿用已提交 <Version>。"
 
       - name: Build installer
@@ -157,26 +163,30 @@ jobs:
           if-no-files-found: error
 
       - name: Publish to GitHub Release (tag push only)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
           CERT_B64: ${{ secrets.CODESIGN_CERT_BASE64 }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -uo pipefail
+          # 组件标签（windows-vX.Y.Z）只发安装包，标题写清这一页是什么；旧的 vX.Y.Z 仍按三端一起发。
           # 未签名时把 SmartScreen 这一句写进 Release 说明：下载 setup.exe 的人只看这一页，
-          # 不点进来不会知道"挡一道窗"是预期行为而不是包坏了。build-apk.yml 里写了同一句——
-          # 两个 workflow 在同一 tag 上抢着建 release，谁先 create 谁说了算，所以两边都得带上。
-          # 镜像标签同样不能照抄 git tag：docker-publish.yml 推的是去掉 v 的 1.1.0 / 1.1 / latest。
-          IMG_TAG="${TAG#v}"
-          NOTE='自动构建产物：Android APK / Windows 安装包 / Docker 镜像 iamplusdev/push-box:'"$IMG_TAG"'（同一镜像还有 '"${IMG_TAG%.*}"' 与 latest 两个标签）'
+          # 不点进来不会知道"挡一道窗"是预期行为而不是包坏了。
+          NOTE="自动构建产物：Windows 安装包 v${VERSION}（self-contained，逐用户安装）"
+          if [[ "$TAG" == v* ]]; then
+            NOTE='自动构建产物：Android APK / Windows 安装包 / Docker 镜像 iamplusdev/push-box:'"$VERSION"'（同一镜像还有 '"${VERSION%.*}"' 与 latest 两个标签）'
+          fi
           if [ -z "$CERT_B64" ]; then
             NOTE="$NOTE
 
           **Windows 安装包未签名**（仓库没配 CODESIGN_CERT_BASE64）：首次运行 setup.exe 时 Windows 会弹一层「Windows 保护了你的电脑」，点「更多信息」→「仍要运行」即可继续安装。配置代码签名证书后这一段自动消失，见 docs/代码签名指南.md。"
           fi
-          gh release create "$TAG" --target "$SHA" --title "PushBox $TAG" --notes "$NOTE" --verify-tag 2>/dev/null || true
+          TITLE="PushBox Windows v${VERSION}"
+          if [[ "$TAG" == v* ]]; then TITLE="PushBox $TAG"; fi
+          gh release create "$TAG" --target "$SHA" --title "$TITLE" --notes "$NOTE" --verify-tag 2>/dev/null || true
           shopt -s nullglob
           gh release upload "$TAG" dist-msi/*.exe --clobber

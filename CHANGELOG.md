@@ -7,6 +7,36 @@
 
 ---
 
+## v1.1.2（2026-10-22）—— 三条发布链解耦；NAS 表单不再露出半套 s3（第三十轮）
+
+> 起点是两张飞牛（FNOS）「创建容器」表单截图：**「存储位置」一栏是空的**，环境变量里只露出 4 个 s3 项（region / bucket / path-style / object-encrypt），看起来像"桶配了一半"；以及一句要求——只改服务端时不要把 APK、MSI 两条流水线一起拉起来跑。
+
+### NAS 图形界面：两个卷、两个变量、s3 六行
+
+- **镜像 ENV 不再烘焙 s3 的四个默认值**（region / bucket / path-style / object-encrypt）：飞牛的容器表单会把 `ENV` 逐行铺成输入框，这四项露出来就自带"桶已经配了一半"的暗示，而实际起作用的默认值在 `application-prod.yml` 与 entrypoint 里各有一份。删掉之后 local 形态行为不变，表单里只剩真正该由你填的库口令两项。
+- **存储位置 = 两条挂载**：`deploy/docker-compose.nas.yml` 的头注释写明两个 named volume 的挂载点（`/app/data/media`、`/app/logs`）、用 `docker volume inspect <项目名>_server_media -f '{{.Mountpoint}}'` 查宿主路径、改绑宿主目录时必须 `sudo chown -R 10001:10001`；**不挂就是删容器即删图**。
+- **`deploy/NAS部署指南.md` 新增「路径 C：不建 Compose 项目，直接在表单里填」**：挂载两张表、只填 `PB_DB_HOST` + `PB_DB_PASSWORD`、要 s3 就六行（type / endpoint / AK / SK / bucket / 加密方式），判据与 Compose 那条路逐条相同。README、`deploy/部署快速参考.md`、`site/install.html` 各加一段指路。
+
+### 发布链解耦：只改服务端就只打 `server-v*`
+
+- **三个 workflow 各认各的触发**：`docker-publish.yml` 只认 `server-v*` 与旧的 `v*`，`build-apk.yml` 只认 `android-v*` 与 `v*`，`build-msi.yml` 只认 `windows-v*` 与 `v*`；push `main` 时三条链按目录过滤（服务端 `server/**`、`core/**`、`web-admin/**`、`pom.xml`、`deploy/**`；客户端各自目录），不再"改一个像素全套跑一遍"。`ci.yml` 保持每次 push 全量跑——它是门禁，不跟发布链的过滤走。
+- **版本号按端独立**：`scripts/set-version.sh --only=server|android|windows|site X.Y.Z` 只写这一端的构建配置；不带 `--only` 仍是三端全写。tag 解析兼容 `<组件>-vX.Y.Z` 与旧的 `vX.Y.Z`。
+- **Docker Hub 的版本标签改由 shell 现算**：`docker/metadata-action` 的 `type=semver` 不认 `server-v1.2.3`，改成 `type=raw` 喂闸门从 pom 现读的 `version` / `major_minor` / `latest`，tag 事件才继续推出 `X.Y.Z` / `X.Y` / `latest` 三枚。
+- **门禁跟着改**：`release-verify.sh` 的「三端版本一致」换成按端自洽（服务端 pom == 两份 compose == WSL 速查、官网徽章 == pom；Android versionName/versionCode；Windows csproj/Inno），并新增三条判据：三条 workflow 只认自己的标签前缀、两条客户端注入必须带 `--only=`、更新检查不许再用 `/releases/latest`。
+
+### 解耦带出来的一处回归：更新检查不能再读 `/releases/latest`
+
+- 分端发布后每个平台各占一个 Release，`/releases/latest` 只返回最后创建的那个：Android 可能读到 Windows 的 tag（没有 apk → 永远不提示更新），反过来也一样，而且**不会报错**。两端改成读 `releases?per_page=30` 列表，按资产名挑出属于自己平台的 Release，再从 tag 去掉 `android-v` / `windows-v` / `v` 前缀得到版本号；一条匹配的都没有时按"没有可安装版本"处理。
+- 验证到哪一步：Android `./gradlew :app:compileDebugKotlin` exit 0（`-q` 无输出），Windows `dotnet build … -c Release` **0 警告 0 错误**。运行时行为要等第一个 `android-v*` / `windows-v*` Release 才验得到（本机没有可用的 `gh` / 仓库 token，这一条不写成已验）。
+
+### 验证
+
+- `bash scripts/release-verify.sh` **66 通过 / 0 失败 / 2 警告**（本机无 docker CLI 判不了镜像体积、工作区有未提交文件）。
+- 三个 workflow 的 YAML 用 PyYAML `safe_load` 解析通过，tags 分别为 `android-v*`+`v*` / `windows-v*`+`v*` / `server-v*`+`v*`；`bash -n` 通过 `set-version.sh` 与 `release-verify.sh`。
+- 两条客户端改动只做到编译；`isNewer` / `Compare` 的分段比较算法未动，tag 前缀剥离暂无单测（两个项目本来就没有更新检查的测试）。
+
+---
+
 ## v1.1.1（2026-10-22）—— 红了能不能知道红在哪一条，装进 NAS 要填几个口令（第二十九轮）
 
 > 前半的起点是 `v1.1.0` 发出去之后紧接着的一笔：`main` 上 `ci.yml` 的 Windows job 红了一次，而这一轮改的既不是 C# 也不是构建脚本——是"红了以后能不能知道红在哪一条"。后半的起点是另一个人：有用户把 `iamplusdev/push-box:1.1.0` 拉进飞牛（FNOS）的图形界面，`compose up` 连解析阶段都没过。

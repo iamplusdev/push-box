@@ -42,31 +42,56 @@ section() {
 }
 
 # ========================================
-# 1. 版本号一致性检查
+# 1. 版本号自洽检查（分端）
 # ========================================
-section "检查版本号一致性"
+section "检查各端版本号自洽"
 
+# 三条发布链各打各的标签（server-v* / android-v* / windows-v*），版本号也各走各的：
+# 只改服务端时打 server-v1.2.0，客户端不必跟着刷号、也不该被连带重建。所以这里不再要求
+# 三端同号，只要求每一端在自己会引用的那些地方对得上——服务端是 pom / 两份 compose /
+# WSL 速查 / 官网徽章，Android 是 versionName / versionCode，Windows 是 csproj / Inno。
 ANDROID_VERSION=$(grep 'versionName' "$ROOT_DIR/android/app/build.gradle.kts" | grep -oP '"[^"]+"' | tr -d '"')
 WINDOWS_VERSION=$(grep '<Version>' "$ROOT_DIR/windows/PushBox.Windows/PushBox.Windows.csproj" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
+INNO_VERSION=$(grep '#define MyAppVersion' "$ROOT_DIR/windows/installer/PushBox.iss" | grep -oP '"[^"]+"' | tr -d '"')
 DOCKER_TAG=$(grep -E 'image: (docker\.io/iamplusdev/push-box|pushbox/server):' "$ROOT_DIR/deploy/docker-compose.yml" | head -1 | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
-
-echo "Android: $ANDROID_VERSION"
-echo "Windows: $WINDOWS_VERSION"
-echo "Docker:  $DOCKER_TAG"
-
-if [ "$ANDROID_VERSION" = "$WINDOWS_VERSION" ] && [ "$WINDOWS_VERSION" = "$DOCKER_TAG" ]; then
-    pass "三端版本一致: $ANDROID_VERSION"
-else
-    fail "版本不一致! Android=$ANDROID_VERSION, Windows=$WINDOWS_VERSION, Docker=$DOCKER_TAG"
-fi
-
-# Maven 是第四个自称拥有版本号的地方：jar 名、Dockerfile 的通配、run-dev.sh 都跟着它走
 MAVEN_VERSION=$(grep -m1 '<version>' "$ROOT_DIR/pom.xml" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
-if [ "$MAVEN_VERSION" = "$ANDROID_VERSION" ]; then
-    pass "Maven 版本与三端一致: $MAVEN_VERSION"
+WSL_TAG=$(grep -m1 -E 'image: pushbox/server:' "$ROOT_DIR/deploy/docker-compose-wsl.yml" | sed -E 's/^.*://')
+WSL_DOC_TAG=$(grep -m1 -oE 'pushbox/server:[0-9]+\.[0-9]+\.[0-9]+' "$ROOT_DIR/deploy/WSL测试速查.md" | sed -E 's/^.*://')
+
+echo "服务端:  $MAVEN_VERSION（compose $DOCKER_TAG / WSL compose $WSL_TAG / WSL 文档 $WSL_DOC_TAG）"
+echo "Android: $ANDROID_VERSION"
+echo "Windows: $WINDOWS_VERSION（Inno $INNO_VERSION）"
+echo "（三端版本号互相独立，不要求相等）"
+
+# 服务端：pom 是唯一真值，jar 名、两份 compose 的标签、排障文档里的本地镜像名都跟着它走。
+if ! [[ "$MAVEN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    fail "没从 pom.xml 读出 X.Y.Z 版本号（读到：'$MAVEN_VERSION'）：pom 写法变了就改这条判据的取值方式，别删"
+elif [ "$DOCKER_TAG" != "$MAVEN_VERSION" ]; then
+    fail "deploy/docker-compose.yml 钉的是 :$DOCKER_TAG，pom 是 $MAVEN_VERSION；照 compose 起的人拉不到这一版（跑 bash scripts/set-version.sh --only=server）"
+elif [ "$WSL_TAG" != "$MAVEN_VERSION" ]; then
+    fail "deploy/docker-compose-wsl.yml 钉的是 :$WSL_TAG，pom 是 $MAVEN_VERSION（跑 bash scripts/set-version.sh --only=server）"
+elif [ "$WSL_DOC_TAG" != "$MAVEN_VERSION" ]; then
+    fail "deploy/WSL测试速查.md 里的本地镜像名是 :$WSL_DOC_TAG，pom 是 $MAVEN_VERSION；照文档 buildx 出来的镜像 compose 会找不到（跑 bash scripts/set-version.sh --only=server）"
 else
-    fail "pom.xml 版本=$MAVEN_VERSION 与三端=$ANDROID_VERSION 不一致（jar 名会跟着 pom 走）"
+    pass "服务端版本自洽: $MAVEN_VERSION（pom / 生产 compose / WSL compose / WSL 速查）"
 fi
+
+# Android / Windows 各自只要求自己是严格 X.Y.Z、且本端两处引用一致。
+if [[ "$ANDROID_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    pass "Android versionName 是严格 X.Y.Z: $ANDROID_VERSION"
+else
+    fail "Android versionName 不是严格 X.Y.Z（读到：'$ANDROID_VERSION'）；set-version.sh 只接受正式版本"
+fi
+
+if ! [[ "$WINDOWS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    fail "PushBox.Windows.csproj 的 <Version> 不是严格 X.Y.Z（读到：'$WINDOWS_VERSION'）"
+elif [ "$INNO_VERSION" != "$WINDOWS_VERSION" ]; then
+    fail "Inno 的 MyAppVersion=$INNO_VERSION 与 csproj 的 $WINDOWS_VERSION 不一致（跑 bash scripts/set-version.sh --only=windows）"
+else
+    pass "Windows 版本自洽: $WINDOWS_VERSION（csproj / Inno）"
+fi
+
+# Dockerfile 与 run-dev.sh 不许写死 jar 名：pom 的版本号一改，写死的那份就找不到 jar 了
 if grep -q 'pushbox-server-\*\.jar' "$ROOT_DIR/deploy/Dockerfile" \
     && grep -q 'pushbox-server-\*\.jar' "$ROOT_DIR/deploy/run-dev.sh"; then
     pass "Dockerfile 与 run-dev.sh 都按通配取 jar，不吃版本号"
@@ -76,15 +101,16 @@ fi
 
 # 官网徽章是第七个自称拥有版本号的地方，而且是人手写的：set-version.sh 一开始不覆盖它，
 # 结果 1.1.0 这轮构建配置全对、site/ 七个页面却挂着 1.0.0 —— 公开仓里这种数字不会自己回头修。
+# 站点展示的是服务端/产品版本，所以口径是徽章 == pom，不跟 Android/Windows 的号走。
 BADGE_PATTERN='([0-9]+\.[0-9]+\.[0-9]+ · 自托管推送|class="ver">[0-9]+\.[0-9]+\.[0-9]+)'
 BADGE_VERSIONS=$(grep -hoE "$BADGE_PATTERN" "$ROOT_DIR"/site/*.html | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -u)
 BADGE_HITS=$(grep -hoE "$BADGE_PATTERN" "$ROOT_DIR"/site/*.html | wc -l)
 if [ "$BADGE_HITS" -lt 6 ]; then
     fail "只认出 $BADGE_HITS 处站点版本徽章（预期至少 6 处）：徽章写法改了，这条判据得跟着改，别删"
 elif [ "$BADGE_VERSIONS" = "$MAVEN_VERSION" ]; then
-    pass "官网版本徽章与 pom 一致: $BADGE_VERSIONS（$BADGE_HITS 处）"
+    pass "官网版本徽章与服务端一致: $BADGE_VERSIONS（$BADGE_HITS 处）"
 else
-    fail "官网徽章里的版本是 $(echo "$BADGE_VERSIONS" | tr '\n' ' ')，与 pom 的 $MAVEN_VERSION 不一致（跑 bash scripts/set-version.sh）"
+    fail "官网徽章里的版本是 $(echo "$BADGE_VERSIONS" | tr '\n' ' ')，与 pom 的 $MAVEN_VERSION 不一致（跑 bash scripts/set-version.sh --only=server）"
 fi
 
 # 测试计数是第九个自称拥有单一真相的地方，而且和版本号一样是人手抄的：README、开发指南、
@@ -415,12 +441,15 @@ section "检查 Android 构建配置"
 # versionCode 必须由 versionName 推出来（scripts/set-version.sh 同一套算法），
 # 写死一个更大的数会让正式版 tag 注入后反而变小，用户端 INSTALL_FAILED_VERSION_DOWNGRADED。
 ANDROID_CODE=$(grep 'versionCode' "$ROOT_DIR/android/app/build.gradle.kts" | grep -oE '[0-9]+' | head -1)
-IFS=. read -r MAJOR MINOR PATCH <<<"$ANDROID_VERSION"
-EXPECTED_CODE=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
-if [ "$ANDROID_CODE" = "$EXPECTED_CODE" ]; then
-    pass "versionCode=$ANDROID_CODE 与 versionName=$ANDROID_VERSION 对得上"
+if [[ "$ANDROID_VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    EXPECTED_CODE=$(( BASH_REMATCH[1] * 10000 + BASH_REMATCH[2] * 100 + BASH_REMATCH[3] ))
+    if [ "$ANDROID_CODE" = "$EXPECTED_CODE" ]; then
+        pass "versionCode=$ANDROID_CODE 与 versionName=$ANDROID_VERSION 对得上"
+    else
+        fail "versionCode=$ANDROID_CODE 应为 $EXPECTED_CODE（versionName $ANDROID_VERSION）"
+    fi
 else
-    fail "versionCode=$ANDROID_CODE 应为 $EXPECTED_CODE（versionName $ANDROID_VERSION）"
+    fail "versionName 不是 X.Y.Z，无法推导 versionCode（读到：'$ANDROID_VERSION'）"
 fi
 
 # release 必须由环境变量注入的 keystore 签名：缺签名要构建失败，
@@ -436,6 +465,19 @@ if grep -rq 'pushbox-debug-' "$ROOT_DIR/.github/workflows/build-apk.yml" \
     fail "仍在收集或认可 debug APK 资产"
 else
     pass "发布链路与客户端都只认签名 release 包"
+fi
+
+# 分端发布后每个平台各占一个 GitHub Release，/releases/latest 只返回"最后发的那个"：
+# 谁改回去，另一端的更新检查就会静默地永远看不到新版本（不报错，只是不提示）。
+UPDATE_KT="$ROOT_DIR/android/app/src/main/java/cn/iamplus/pushbox/net/UpdateApi.kt"
+UPDATE_CS="$ROOT_DIR/windows/PushBox.Windows/Update/UpdateClient.cs"
+# 只看真正的 URL 常量（结尾带引号），不看注释里"不能再用 /releases/latest"那句解释。
+if grep -q 'releases/latest"' "$UPDATE_KT" "$UPDATE_CS"; then
+    fail "两端的更新检查又用回了 /releases/latest：分端 Release 会互相顶掉（改回 releases?per_page=… 列表并按资产挑）"
+elif grep -q 'releases?per_page=' "$UPDATE_KT" && grep -q 'releases?per_page=' "$UPDATE_CS"; then
+    pass "两端更新检查按资产筛选 Release 列表，分端发布不会互相顶掉"
+else
+    fail "更新检查没有按资产筛选 Release 列表：分端发布后另一平台会读错 Release"
 fi
 
 # 签名证书指纹的单一来源：android/release-cert.sha256 给 build-apk.yml 现读现比，
@@ -521,17 +563,21 @@ injects_version() {
 # 出制品的三个 workflow 对版本号的处理**不再一致，这是故意的**：build-apk / build-msi 仍然在构建
 # 现场由 tag 注入，产物自称哪一版跟 tag 走，而 GitHub Release 删了重传得回来；docker-publish 反过来
 # ——镜像推上 Hub 收不回来，所以它只**核对**仓库里已提交的那份版本，绝不现场改写。
-WORKFLOWS=("build-apk.yml" "build-msi.yml")
-for wf in "${WORKFLOWS[@]}"; do
-    if [ -f "$ROOT_DIR/.github/workflows/$wf" ]; then
-        # 检查是否包含版本注入步骤
-        if injects_version "$ROOT_DIR/.github/workflows/$wf"; then
-            pass "$wf 由 tag 注入版本号"
+# 注入还必须限定 --only=<本端>：不带 scope 等于把三端版本号一起刷，解耦就只剩标签这一层。
+WORKFLOWS=("build-apk.yml:android" "build-msi.yml:windows")
+for entry in "${WORKFLOWS[@]}"; do
+    wf="${entry%%:*}"
+    scope="${entry#*:}"
+    if [ ! -f "$ROOT_DIR/.github/workflows/$wf" ]; then
+        fail "$wf 工作流文件缺失"
+    elif injects_version "$ROOT_DIR/.github/workflows/$wf"; then
+        if grep -qE "bash scripts/set-version\.sh --only=$scope" "$ROOT_DIR/.github/workflows/$wf"; then
+            pass "$wf 由 tag 注入版本号（--only=$scope）"
         else
-            warn "$wf 可能缺少版本注入步骤"
+            fail "$wf 注入版本号时没限定 --only=$scope：只改这一端也会把其余两端的号一起刷掉"
         fi
     else
-        fail "$wf 工作流文件缺失"
+        warn "$wf 可能缺少版本注入步骤"
     fi
 done
 
@@ -545,6 +591,29 @@ elif grep -q '版本号一致性闸门' "$DP"; then
 else
     fail "docker-publish.yml 既没有注入也没有核对闸门：tag、pom、compose 三者对不上时没有任何东西会拦下来"
 fi
+
+# 三条链必须各认各的标签：自己的 <component>-v* 加上旧的 v*（三端一起发）。
+# 漏掉自己的前缀 = 打 tag 根本没有流水线跑；把别人的前缀写进 tags = "只改服务端"又把客户端带上。
+# 两种都是解耦承诺的破口，且在本机看不出来（tag 推上去才知道），所以在这里静态判死。
+COMPONENT_TAG_GATES=("build-apk.yml:android-v*" "build-msi.yml:windows-v*" "docker-publish.yml:server-v*")
+for entry in "${COMPONENT_TAG_GATES[@]}"; do
+    wf="${entry%%:*}"
+    want="${entry#*:}"
+    file="$ROOT_DIR/.github/workflows/$wf"
+    if [ ! -f "$file" ]; then
+        fail "$wf 工作流文件缺失（$want 这条链没有落点）"
+        continue
+    fi
+    found=$(grep -hE '^[[:space:]]+tags:' "$file" | grep -oE '(android|windows|server)-v\*' | sort -u | tr '\n' ' ')
+    found=${found% }
+    if [ "$found" != "$want" ]; then
+        fail "$wf 的发布标签是 [$found]，应当只认 [$want]：漏掉自己的前缀打 tag 不跑，混进别人的前缀会连带重建"
+    elif ! grep -q '"v\*"' "$file"; then
+        fail "$wf 不再接受旧的 v*：三端一起发的老流程会静默不跑（这一条故意保留兼容）"
+    else
+        pass "$wf 只认 $want 与旧的 v*"
+    fi
+done
 
 # 文件在磁盘上不等于门禁在跑：.github/ 曾被 .gitignore 挡着，那时四个 workflow 全都只活在本机，
 # 推上去的仓库里一个 workflow 都没有，"CI 全绿"其实是"CI 从没运行"。
@@ -561,7 +630,7 @@ else
     pass "ci.yml 不改版本号，测的就是提交里的那份"
 fi
 
-# 出制品与门禁的四个 workflow 只在 main / v* 上触发，所以 main 这个分支名本身也是发布链的一部分。
+# 出制品与门禁的四个 workflow 只在 main / 各自的组件标签 / 旧的 v* 上触发，主分支名本身也是发布链的一部分。
 # （第五个 site-deploy.yml 故意不挂 v*，它跟版本号无关，判据在下面那段。）
 if grep -q 'branches: \[main\]' "$ROOT_DIR/.github/workflows/ci.yml"; then
     pass "CI 触发分支与主分支口径一致（main）"

@@ -39,6 +39,8 @@ docker run -d --name pushbox \
 ```
 
 `192.0.2.20` 是 RFC 5737 的文档保留地址，**照抄一定连不上**——换成你那台库的局域网 IP 或服务名。
+不想敲命令、要在飞牛/群晖的「创建容器」表单里填的，照 [NAS 部署指南](deploy/NAS部署指南.md) 路径 C：
+**存储位置加两行**（`/app/data/media`、`/app/logs`），**环境变量只填两个**；存储位置空着的话，删容器就把图片一起删了。
 
 **镜像之外只有一件事要做**：那个库和那个用户得先存在，服务端不会替你建库（Flyway 只建表）。
 在库所在那台机器上跑一次就够了——NAS 上装的 MySQL 就填它的局域网 IP，别填 `127.0.0.1`（容器里的环回是它自己）：
@@ -94,7 +96,7 @@ docker run -d --name pushbox \
 - **明文在 s3 这档是拒启的**，不像 local 只出声：默认 `PB_S3_OBJECT_ENCRYPT=none`，而桶侧任何拿到
   同一组 AK/SK 的读者都能直接把图片读走。所以要么像上面那样 `sse-c` + 主钥（**主钥一旦有对象落库就
   不可轮换**，换了旧对象再也解不开），要么显式 `-e PB_ALLOW_PLAINTEXT_MEDIA=1` 表态。
-- **`PB_S3_PATH_STYLE` 默认烘焙成 `true`**，MinIO / RustFS 是对的；接阿里云 OSS 或 AWS 时按服务商文档，
+- **`PB_S3_PATH_STYLE` 默认是 `true`**（取值在 `application-prod.yml`，不在镜像 ENV 里），MinIO / RustFS 是对的；接阿里云 OSS 或 AWS 时按服务商文档，
   必要时 `-e PB_S3_PATH_STYLE=false`。桶名不是 `pushbox`、区域不是 `us-east-1` 就改上面那两行。
 
 三条不能省的：
@@ -422,19 +424,28 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 ## 持续集成（GitHub Actions）
 
-推到 `main` 自动出各端产物、推 Docker Hub；打 `v*` 标签额外发布 GitHub Release；改动含 `site/**` 的
-`main` 推送还会把官网发到 GitHub Pages（线上地址 <https://iamplusdev.github.io/push-box/>）。六个工作流都在
-`.github/workflows/`，其中 `ci.yml` 是 PR 门禁（真 MySQL + 真对象存储，末尾断言"闸门用例一条都没被跳过"）。
+三条发布链互相独立：服务端、Android、Windows 各有自己的版本号与标签前缀（`server-v*` / `android-v*` /
+`windows-v*`），**只改服务端就只打 `server-v*`，两条客户端流水线不会被触发**；旧的 `v*` 标签仍然保留，
+一次发三端。推 `main` 时三条链按各自的目录过滤（见下表），改动含 `site/**` 的 `main` 推送还会把官网发到
+GitHub Pages（线上地址 <https://iamplusdev.github.io/push-box/>）。六个工作流都在 `.github/workflows/`，
+其中 `ci.yml` 是独立于发布的门禁（真 MySQL + 真对象存储，末尾断言"闸门用例一条都没被跳过"），
+每次推 `main` 都跑全量——它判的是三端契约有没有被改坏，不跟着发布链的过滤走。
 
 | 工作流 | 触发 | 产出 |
 |--------|------|------|
-| `docker-publish.yml` | push main / `v*` 标签 / 手动 | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`：标签上打本次的 `X.Y.Z` / `X.Y` / `latest`，main 上只打 `main`/`sha-*`（版本标签必须不可变）。构建前先跑版本闸门——tag、`pom.xml`、compose 三者版本号不一致就直接红，不会推出去一个自称某版、里面跑着另一版的镜像。手动触发默认是 **dry-run**（只构建不推），用它可以在不碰 Hub 的前提下验 `DOCKERHUB_*` 这对 secrets。**`v*` 标签事件首跑 2026-10-22 绿**（run `39724347017`，tag `v1.1.0`）：「版本号一致性闸门」「Docker metadata」「Build and push」「本次的标签清单」四步全 success，即 `1.1.0`/`1.1`/`latest` 三个标签随 buildx 一起推出。Hub 上的实际标签本机复核不到（`hub.docker.com`、`registry-1.docker.io` 都是 `http=000` 超时），这三枚标签存在只由那两步的退出码背书 |
-| `build-apk.yml` | push main / `v*` 标签 | 只出 `assembleRelease`（R8 + 签名），用 `apksigner verify` 把关后上传 `pushbox-release-*.apk`；标签时发 Release。没配 keystore 时构建直接失败，不再退化成"发一只 debug 包"。**标签发 Release 首跑 2026-10-22 绿**（run `39724346953`）：`Verify release APK signature` 与 `Publish to GitHub Release` 两步 success，资产 `pushbox-release-v1.1.0.apk`（12.8 MB）已挂到 Release 页 |
-| `build-msi.yml` | push main / `v*` 标签 | `windows-latest` 上 `dotnet publish self-contained win-x64` + Inno Setup 出 `setup.exe`，上传 artifact；标签时发 Release。**标签首跑 2026-10-22 绿**（run `39724347008`），资产 `PushBox-Setup-1.1.0-win-x64.exe`（58.7 MB）；`Sign installer` 仍 skipped——**安装包未签名**（`CODESIGN_*` 那对 secrets 未配） |
+| `docker-publish.yml` | push main（仅 `server/**`、`core/**`、`web-admin/**`、`pom.xml`、`deploy/**`）/ `server-v*` 或 `v*` 标签 / 手动 | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`：标签上打本次的 `X.Y.Z` / `X.Y` / `latest`，main 上只打 `main`/`sha-*`（版本标签必须不可变）。构建前先跑版本闸门——tag、`pom.xml`、compose 三者版本号不一致就直接红，不会推出去一个自称某版、里面跑着另一版的镜像。手动触发默认是 **dry-run**（只构建不推），用它可以在不碰 Hub 的前提下验 `DOCKERHUB_*` 这对 secrets。**`v*` 标签事件首跑 2026-10-22 绿**（run `39724347017`，tag `v1.1.0`）：「版本号一致性闸门」「Docker metadata」「Build and push」「本次的标签清单」四步全 success，即 `1.1.0`/`1.1`/`latest` 三个标签随 buildx 一起推出。Hub 上的实际标签本机复核不到（`hub.docker.com`、`registry-1.docker.io` 都是 `http=000` 超时），这三枚标签存在只由那两步的退出码背书 |
+| `build-apk.yml` | push main（仅 `android/**`、`core/**`（`:pbcore` 直接编译共享 core）等 Android 路径）/ `android-v*` 或 `v*` 标签 | 只出 `assembleRelease`（R8 + 签名），用 `apksigner verify` 把关后上传 `pushbox-release-*.apk`；标签时发 Release。没配 keystore 时构建直接失败，不再退化成"发一只 debug 包"。**标签发 Release 首跑 2026-10-22 绿**（run `39724346953`）：`Verify release APK signature` 与 `Publish to GitHub Release` 两步 success，资产 `pushbox-release-v1.1.0.apk`（12.8 MB）已挂到 Release 页 |
+| `build-msi.yml` | push main（仅 `windows/**` 等 Windows 路径）/ `windows-v*` 或 `v*` 标签 | `windows-latest` 上 `dotnet publish self-contained win-x64` + Inno Setup 出 `setup.exe`，上传 artifact；标签时发 Release。**标签首跑 2026-10-22 绿**（run `39724347008`），资产 `PushBox-Setup-1.1.0-win-x64.exe`（58.7 MB）；`Sign installer` 仍 skipped——**安装包未签名**（`CODESIGN_*` 那对 secrets 未配） |
 | `update-dockerhub-description.yml` | push main 且改动含 `README.md`（带 `paths:` 过滤的两个之一，另一个是 `site-deploy.yml`） | 把 `README.md` 同步为 Docker Hub 仓库说明。**2026-10-22 第一次跑绿**（run `39720441754`，push `main`、head `ab5c9fb7`，改动含 `README.md`）。此前它空了一整版：唯一那次 `main` 推送是"新建分支"（`before` 是全零），GitHub 算不出改动文件集，带 `paths:` 的它被跳过、另外四个照跑；因为从没被登记过，连网页上的「Run workflow」都不存在，只能等一次改到 `README.md` 的常规推送（排查过程与四条证据见 `发布检查清单.md`「Hub 仓库说明」）。**Hub 上的说明正文本机没复核到**——`hub.docker.com` 从这台机器三条路都是超时，这一句只有 CI 那一步的退出码背书 |
-| `site-deploy.yml` | push main 且改动含 `site/**` / 手动 | 把 `site/` 那棵目录树原样发到一条**只装站点**的分支 `gh-pages`（分支的根树 == `site/` 的树，没有源码也没有构建产物），Pages 以它为源。没有构建步骤，用 `git commit-tree` + push 完成，只依赖 `actions/checkout`。**内容没变就不发**：`paths:` 挡掉"只改代码"的推送，树哈希比较再挡掉"同一份 site/ 被带进来两次"和手动重跑（dispatch 不吃 `paths:`，所以这层不可省）。不挂 `v*` 标签——官网与版本号无关。**首跑已在 2026-10-22 兑现**：run `39720441735` 推出 `gh-pages`（根树等于那次推送的 `HEAD:site`），Pages 构建 `39720519087` success，`https://iamplusdev.github.io/push-box/` 实测 200，页面里全部资源都是相对路径所以子路径下不缺样式。**它不开 GitHub Pages**：源没配置时这条链只推分支、站点地址打不开，第一次要么在网页 Settings → Pages 把源设成 `gh-pages` / `/`，要么拿管理员 token 调一次 `POST /repos/<仓库>/pages` |
+| `site-deploy.yml` | push main 且改动含 `site/**` / 手动 | 把 `site/` 那棵目录树原样发到一条**只装站点**的分支 `gh-pages`（分支的根树 == `site/` 的树，没有源码也没有构建产物），Pages 以它为源。没有构建步骤，用 `git commit-tree` + push 完成，只依赖 `actions/checkout`。**内容没变就不发**：`paths:` 挡掉"只改代码"的推送，树哈希比较再挡掉"同一份 site/ 被带进来两次"和手动重跑（dispatch 不吃 `paths:`，所以这层不可省）。不挂任何标签——官网与版本号无关。**首跑已在 2026-10-22 兑现**：run `39720441735` 推出 `gh-pages`（根树等于那次推送的 `HEAD:site`），Pages 构建 `39720519087` success，`https://iamplusdev.github.io/push-box/` 实测 200，页面里全部资源都是相对路径所以子路径下不缺样式。**它不开 GitHub Pages**：源没配置时这条链只推分支、站点地址打不开，第一次要么在网页 Settings → Pages 把源设成 `gh-pages` / `/`，要么拿管理员 token 调一次 `POST /repos/<仓库>/pages` |
 
-出制品与门禁的那四个工作流没有 `paths:` 过滤：只要落到 `main` 或 `v*` 标签，哪怕只改一个像素也会整套跑一遍。**推其它分支名（例如发布前的 `publish` 分支）不触发任何工作流**，这也是"代码先上远端、CI 暂时不动"能成立的原因。`site-deploy.yml` 从非 `main` 分支手动触发且真要推上去时会被直接拒（Pages 只有一个地址，没有预览地址可回退），要越过这道确认得显式勾上 `force_branch`；勾 `dry_run` 不拦，因为它一个字节都不推。
+三条构建链在 `main` 上只按自己的目录过滤：改 `server/**` 只跑 `docker-publish.yml`，改 `windows/**` 只跑
+`build-msi.yml`，改 `android/**` 只跑 `build-apk.yml`；`core/**` 是 Java 侧共享源码（`:pbcore` 直接编译它），
+所以它动了服务端与 Android 两条都会跑。**打 tag 时不过滤**（GitHub 对 tag 推送不评估 `paths`；否则 tag 指到
+的提交恰好没碰这些目录就会静默不发布）。`ci.yml` 没有过滤，每次推 `main` 全量跑——那是门禁，不是发布。
+**推其它分支名（例如发布前的 `publish` 分支）不触发任何工作流**，这也是"代码先上远端、CI 暂时不动"能
+成立的原因。`site-deploy.yml` 从非 `main` 分支手动触发且真要推上去时会被直接拒（Pages 只有一个地址，
+没有预览地址可回退），要越过这道确认得显式勾上 `force_branch`；勾 `dry_run` 不拦，因为它一个字节都不推。
 
 **要在仓库 Settings → Secrets and variables → Actions 配的密钥：**
 
@@ -444,7 +455,13 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 ### 应用内更新
 
-打了 `v*` 标签发布的 GitHub Release 就是各端「检查更新」的来源：Android 与 Windows 客户端读 `api.github.com/repos/iamplusdev/push-box/releases/latest`，比对 `versionName`/tag 的 semver，发现新版**先弹一只确认框**（"发现新版本 X，是否下载并安装？→更新/稍后"），**用户点确认才下载**——下载完 Android 拉系统安装面板让用户再确认一次，Windows 下 `PushBox-Setup-*-win-x64.exe` 后静默覆盖安装并提示重启；手动检查与冷启动发现都汇到同一只确认框。检查只在「冷启动静默查一次」和「设置里手动点检查」两处触发（未认证限额 60 次/小时/IP，不进轮询），冷启动那趟还受设置里「启动时自动检查更新」开关门控（默认开）。走的是公开 https，与自建的业务服务器无关。
+打了 `android-v*` / `windows-v*` 标签（或旧的 `v*`）发布的 GitHub Release 就是两端「检查更新」的来源：
+客户端读 `releases?per_page=30` 列表，按资产名（`pushbox-release-*.apk` / `PushBox-Setup-*-win-x64.exe`）
+挑出属于自己平台的那一条，再从 tag 里去掉 `android-v` / `windows-v` / `v` 前缀得到版本号。**不能再用
+`/releases/latest`**：分端发布后每个平台各占一个 Release，那个接口只返回"最后发的那个"，另一平台会读到
+别人的 tag 或看不到自己的新版本。发现新版**先弹一只确认框**（"发现新版本 X，是否下载并安装？→更新/稍后"），
+**用户点确认才下载**——下载完 Android 拉系统安装面板让用户再确认一次，Windows 下
+`PushBox-Setup-*-win-x64.exe` 后静默覆盖安装并提示重启；手动检查与冷启动发现都汇到同一只确认框。检查只在「冷启动静默查一次」和「设置里手动点检查」两处触发（未认证限额 60 次/小时/IP，不进轮询），冷启动那趟还受设置里「启动时自动检查更新」开关门控（默认开）。走的是公开 https，与自建的业务服务器无关。
 
 两处 CI 专属适配（都不改本地开发用的文件）：`gradle-wrapper.properties` 已经写死官方 `services.gradle.org` 发行包，CI 上不再需要临时改写；APK 质量闸是"能编出来、签上名，且证书指纹等于 `android/release-cert.sha256` 里钉的基线"——换 key 会让老用户卸载重装、历史消息全丢，所以这一步直接判红而不是只打印。服务端测试**已经进 CI 了**——`ci.yml` 用 service container 起真 MySQL 8.4（带 `--ngram_token_size=2`）与真 RustFS，本地不需要 `deploy/env/local.env` 也能得到同一份判据；早先"因为依赖外部存储所以不放 CI"的说法已经作废。
 
@@ -472,7 +489,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 ---
 
-**文档版本**：v1.1.1  
+**文档版本**：v1.1.2  
 **最后更新**：2026-10-22  
 **主分支**：main  
 **官网**：<https://iamplusdev.github.io/push-box/>（源码在 `site/`，改 `site/**` 推到 `main` 就自动发布）  

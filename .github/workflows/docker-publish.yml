@@ -1,25 +1,35 @@
 name: Build and Push Docker Image
 
-# 服务端镜像 = Spring Boot API + 烘进去的 Web 管理台（web-admin/dist），同源跑在 8080。
+# 服务端镜像 = Spring Boot API + 烘进去的 Web 管理台（web-admin/dist），同源、默认端口 7404。
 # 构建上下文必须是仓库根（Dockerfile 要 core/ + server/ + web-admin/ + 根 pom.xml），dockerfile 用 deploy/Dockerfile。
 # Secrets：DOCKERHUB_USERNAME / DOCKERHUB_TOKEN（access token，不是登录密码）。
 # 质量闸就是"镜像能编出来"：多阶段里 mvn package 会编译 core+server、npm run build 会 tsc 前端。
 # 这里**不跑测试**：服务端那套要连真库真桶，已由 `ci.yml` 用 service container 跑并断言"闸门用例一条没被跳过"；
 # 在两个 workflow 里各跑一遍只会让同一个红出现两次，而推送这条的判据本来就不是测试。
-# tag 事件不再带 paths 过滤（否则只改了其它目录的 commit 打 tag 会静默不发布）。
+# 三条发布链是解耦的：本文件只认 server-v* 与旧的 v*（三端一起发）两种标签。
+# 只改服务端时打 server-v*，Android 与 Windows 两条流水线根本不会被触发。
+# main 上的构建按 paths 过滤（server/、core/、web-admin/、pom.xml、deploy/），改文档或客户端不会重推一份 main 镜像。
+# tag 事件不带 paths 过滤（否则 tag 指到的提交恰好没碰这些目录时会静默不发布）。
 #
-# 版本号的唯一来源是**仓库里已提交的那份**（`pom.xml`，由 `scripts/set-version.sh` 写全），workflow 不再现场改写它。
-# 旧写法在 `v*` 事件上跑 `set-version.sh "${GITHUB_REF_NAME#v}"`，于是"tag 说 1.2.3、pom 说 1.1.0"也能
-# 构建成功：推上去的是一个自称 1.2.3、里面跑的却是 1.1.0 的镜像，而 Docker Hub 推出去收不回来——被人拉走的
-# 那份 manifest 就是错的。现在这种不一致在构建之前就被下面那道闸门拦红。
-# 版本标签只在 `v*` 事件上打（`1.1.0` / `1.1` / `latest`）；push main 只出 `main` 与 `sha-<7位>`。
+# 版本号的唯一来源是**仓库里已提交的那份**（`pom.xml`，由 `scripts/set-version.sh --only=server` 写全），
+# workflow 不再现场改写它。旧写法在 tag 事件上跑 `set-version.sh "${GITHUB_REF_NAME#v}"`，于是"tag 说 1.2.3、
+# pom 说 1.1.0"也能构建成功：推上去的是一个自称 1.2.3、里面跑的却是 1.1.0 的镜像，而 Docker Hub 推出去收不回来——
+# 被人拉走的那份 manifest 就是错的。现在这种不一致在构建之前就被下面那道闸门拦红。
+# 版本标签只在 tag 事件上打（server-v1.1.2 / v1.1.2 → `1.1.2` / `1.1` / `latest`）；push main 只出 `main` 与 `sha-<7位>`。
 # 这不是偷懒，是不可变性：`1.1.0` 如果被每次合并都覆盖一次，钉着它的人今天和上周拉到的就不是同一个镜像，
 # "回滚到 1.1.0"这件事就不存在了。要让 main 也推 X.Y.Z，得先接受这一点。
 # 这一口径 2026-10-20 由维护者确认过（备选方案都否掉了），不是漏配——别把它"顺手补全"。
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    paths:
+      - "server/**"
+      - "core/**"
+      - "web-admin/**"
+      - "pom.xml"
+      - "deploy/**"
+      - ".github/workflows/docker-publish.yml"
+    tags: ["server-v*", "v*"]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -86,9 +96,11 @@ jobs:
             exit 1
           fi
           if [ "${REF_TYPE}" = "tag" ]; then
-            TAG_VERSION="${REF_NAME#v}"
+            # server-v1.2.3 与旧的 v1.2.3 都取 X.Y.Z
+            TAG_VERSION="${REF_NAME##*-v}"
+            TAG_VERSION="${TAG_VERSION#v}"
             if [ "${TAG_VERSION}" != "${POM_VERSION}" ]; then
-              echo "::error::tag 是 v${TAG_VERSION}，pom.xml 写的却是 ${POM_VERSION}。先 bash scripts/set-version.sh ${TAG_VERSION} 并提交，再重新打这个 tag。不能推一个自称 v${TAG_VERSION}、里面跑着 ${POM_VERSION} 的镜像——推送不可逆，被人拉走的那份 manifest 永远错着"
+              echo "::error::tag 是 ${REF_NAME}（版本 ${TAG_VERSION}），pom.xml 写的却是 ${POM_VERSION}。先 bash scripts/set-version.sh --only=server ${TAG_VERSION} 并提交，再重新打这个 tag。不能推一个自称 ${TAG_VERSION}、里面跑着 ${POM_VERSION} 的镜像——推送不可逆，被人拉走的那份 manifest 永远错着"
               exit 1
             fi
             if [ "${COMPOSE_TAG}" != "${POM_VERSION}" ]; then
@@ -97,6 +109,7 @@ jobs:
             fi
           fi
           echo "version=${POM_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "major_minor=${POM_VERSION%.*}" >> "$GITHUB_OUTPUT"
           echo "✅ 版本口径一致：${POM_VERSION}"
 
       # dry-run（workflow_dispatch 勾了"不推"）时只构建并 load 进 runner 本地 daemon：
@@ -136,11 +149,14 @@ jobs:
             # 分支（main）：main + sha-<短>
             type=ref,event=branch
             type=sha,prefix=sha-,format=short
-            # 打 v1.2.3 标签时：1.2.3 与 1.2（type=semver 只匹配合法 semver 标签，非 semver 的 v 标签自动忽略）
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            # latest 只给正式（非预发布）标签：v1.0.0 更新 latest，v1.0.0-rc1 不覆盖。
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+            # 标签事件（server-v1.2.3 / v1.2.3）：X.Y.Z 与 X.Y。
+            # 不用 type=semver：它只认 vX.Y.Z 这种裸 semver，组件前缀（server-v）会被整个忽略；
+            # 版本值由上一道闸门从 pom 现读，这里直接引用它的输出。
+            type=raw,value=${{ steps.version.outputs.version }},enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=${{ steps.version.outputs.major_minor }},enable=${{ github.ref_type == 'tag' }}
+            # latest 只给标签事件。能走到这里的 tag 已经过了"版本 = pom 的严格 X.Y.Z"那道闸，
+            # 所以不存在把 latest 指向预发布版本的风险。
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
           labels: |
             # 版本号还要打进镜像本身：`docker image inspect` 读得到，不用靠标签名猜自己跑的是哪一版。
             # metadata 自己的 org.opencontainers.image.version 在 tag 事件上取 git tag 名、

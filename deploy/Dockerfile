@@ -8,9 +8,9 @@
 #
 # 这个镜像的目标用法是"在图形界面里拉下来、填两个框就能跑"（飞牛/群晖/1Panel 这类 NAS UI 没有
 # .env 这一层，只能在表单里逐条加环境变量）。所以 D76 把配置分成三类：
-#   烘焙（下面的 ENV 段）：非凭据的拓扑默认值——端口、存储模式、目录、库名与库用户名、区域与桶。
+#   烘焙（下面的 ENV 段）：非凭据的拓扑默认值——端口、存储模式、目录、库名与库用户名。
 #   必填（只剩 2 个）：PB_DB_HOST 或 PB_DB_URL、PB_DB_PASSWORD。口令绝不给默认值。
-#   按需：管理台两把钥（留空即整个管理台关闭，这本身是一个安全状态）、外接对象存储的 PB_S3_* 三项。
+#   按需：管理台两把钥（留空即整个管理台关闭，这本身是一个安全状态）、外接对象存储的 PB_S3_*。
 
 # ---- 前端：构建管理台 SPA，产物 /web/dist ----
 FROM node:22-alpine AS webbuild
@@ -292,6 +292,11 @@ RUN useradd -r -u 10001 pushbox && mkdir -p /app/logs /app/data/media && chown -
 #     占位，等于给下一个想省事的人留了一条"那就顺手填个值"的路。
 #   - `PB_ADMIN_SECRET` 留空 = 管理台禁用（AdminAuthController 对空 secret 直接 403「管理台未启用」），
 #     所以"镜像里没有这两个键"本身就是一个安全状态，不是漏配。
+# 存储相关的默认值同理**不放进 ENV**：飞牛/群晖的"创建容器"表单会把镜像的每个 ENV 显示成一行，
+# 于是 PB_S3_REGION / BUCKET / PATH_STYLE / OBJECT_ENCRYPT 四行会以一个"看起来像已经配了桶"的
+# 半套形态出现——没有 endpoint 与 AK/SK，谁看了都以为是配置不全。它们该由
+# application-prod.yml 与 entrypoint 兜底（取值完全一样：us-east-1 / pushbox / true / none），
+# 真要用桶的人按文档一次性加齐 PB_STORAGE_TYPE=s3 + 5 个 PB_S3_*，而不是在表单里补半套。
 # 与 compose 的分工：compose 显式传 PB_STORAGE_TYPE=s3 等值，会覆盖这里的 local——
 # 图形界面单容器要的是自包含，生产那两套拓扑要的是外接存储，两个默认服务于两种人。
 ENV SPRING_PROFILES_ACTIVE=prod \
@@ -303,11 +308,7 @@ ENV SPRING_PROFILES_ACTIVE=prod \
     PB_DB_USERNAME=pushbox \
     PB_DB_WAIT_SECONDS=60 \
     PB_STORAGE_TYPE=local \
-    PB_STORAGE_LOCAL_PATH=/app/data/media \
-    PB_S3_REGION=us-east-1 \
-    PB_S3_BUCKET=pushbox \
-    PB_S3_PATH_STYLE=true \
-    PB_S3_OBJECT_ENCRYPT=none
+    PB_STORAGE_LOCAL_PATH=/app/data/media
 
 USER pushbox
 # 监听端口是 ${PB_SERVER_PORT:7404}（application-prod.yml），EXPOSE 只是给人看的元数据，

@@ -14,7 +14,7 @@ using PushBox.Windows.Net;
 namespace PushBox.Windows.Update;
 
 /// <summary>
-/// GitHub Releases 上"<b>最新那一个 release</b>"在本机眼里的样子：够决定要不要升、升下来是哪个文件，
+/// GitHub Releases 上"<b>选中那一个 release</b>"在本机眼里的样子：够决定要不要升、升下来是哪个文件，
 /// 别的字段（作者、时间、下载计数）一概不取——更新检查只关心这三件事。
 /// </summary>
 public sealed record GitHubRelease(string Tag, string Version, string Notes,
@@ -38,7 +38,11 @@ public sealed class UpdateClient
 {
     public const string Owner = "iamplusdev";
     public const string Repo = "push-box";
-    public const string LatestUrl = $"https://api.github.com/repos/{Owner}/{Repo}/releases/latest";
+
+    // 分端发布后每个平台各占一个 Release，/releases/latest 只会返回"最后发的那个"：
+    // Windows 可能读到 Android 的 Release（没有 exe → 永远不提示更新），反过来也一样。
+    // 所以改读列表，按资产名挑出属于本平台的那一条；标签也因此不能假定是 vX.Y.Z。
+    public const string ReleasesUrl = $"https://api.github.com/repos/{Owner}/{Repo}/releases?per_page=30";
 
     /// <summary>GitHub 无 UA 直接 403，这一句是硬性要求而不是礼貌。</summary>
     private const string UserAgent = "PushBox-Windows";
@@ -78,10 +82,10 @@ public sealed class UpdateClient
         return assembly.GetName().Version?.ToString(3) ?? "0.0.0";
     }
 
-    /// <summary>拉最新 release 并解析出可安装的 windows 包。任何非 2xx 都翻成一句人话，交给界面直接显示。</summary>
+    /// <summary>拉最近的 releases，挑出第一条带 windows 安装包的；任何非 2xx 都翻成一句人话，交给界面直接显示。</summary>
     public async Task<GitHubRelease> CheckLatestAsync(CancellationToken ct = default)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, LatestUrl);
+        using var request = new HttpRequestMessage(HttpMethod.Get, ReleasesUrl);
         request.Headers.UserAgent.ParseAdd(UserAgent);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
 
@@ -113,7 +117,19 @@ public sealed class UpdateClient
             }
 
             using var doc = JsonDocument.Parse(text);
-            return FromJson(doc.RootElement);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                throw new HttpRequestException("更新检查失败：GitHub 返回的不是 releases 列表");
+
+            // 列表按创建时间倒序，逐条找第一条带 Windows 安装包的 release；
+            // 服务端/Android 的 Release 不会被误当成"最新版"。
+            foreach (var release in doc.RootElement.EnumerateArray())
+            {
+                var parsed = FromJson(release);
+                if (parsed.HasInstaller) return parsed;
+            }
+
+            // 一条带安装包的 Release 都没有：等同"没有可装的版本"。
+            return new GitHubRelease("", "0.0.0", "", null, "", 0L);
         }
     }
 
@@ -142,10 +158,16 @@ public sealed class UpdateClient
         return new GitHubRelease(tag, VersionOf(tag), notes, url, name, size);
     }
 
-    /// <summary>从 <c>tag_name</c> 取可比对的版本：去掉前导 <c>v</c>／<c>V</c>，其余原样交给 <see cref="IsNewer"/> 的分段解析。</summary>
+    /// <summary>
+    /// 从 <c>tag_name</c> 取可比对的版本：<c>windows-v1.2.3</c> 与旧的 <c>v1.2.3</c> 都取 <c>1.2.3</c>，
+    /// 其余原样交给 <see cref="IsNewer"/> 的分段解析。
+    /// </summary>
     public static string VersionOf(string tag)
     {
         var value = (tag ?? "").Trim();
+        const string componentPrefix = "windows-v";
+        if (value.StartsWith(componentPrefix, StringComparison.OrdinalIgnoreCase))
+            return value[componentPrefix.Length..];
         return value.Length > 0 && (value[0] == 'v' || value[0] == 'V') ? value[1..] : value;
     }
 

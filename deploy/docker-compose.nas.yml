@@ -6,16 +6,18 @@
 #   1) 本文件刻意不使用任何 ${VAR} 插值。图形界面里没有文件可编辑，解析阶段的
 #      "required variable ... is missing a value" 既读不懂也改不动——那正是 2026-10-22 有人
 #      在飞牛上撞到的那条。要改的值一律写成字面量。
-#   2) 需要人填的只有两处：库地址 PB_DB_HOST 与库口令 PB_DB_PASSWORD。其余项镜像自带默认值
-#      （deploy/Dockerfile 的 ENV 段），列在这里只是为了让人看得见它们存在。
+#   2) 需要人填的只有两处：库地址 PB_DB_HOST 与库口令 PB_DB_PASSWORD。其余项都有默认值
+#      （存储模式等烘焙在镜像的 ENV 段，桶那套在 application-prod.yml），列在这里只是为了让人看得见
+#      它们存在；s3 那几项**刻意不在本文件里出现**——只列一半（没有 endpoint 与 AK/SK）会让人以为
+#      "桶已经配好了"，真要用桶按 NAS部署指南 里那六行一起加。
 #      口令一律不要提交回仓库：这份文件贴进 NAS 之后就留在那台机器上，不要反过来把填好值的它 push 上去。
 
 name: pushbox-nas
 
 services:
   pushbox:
-    # CI 按 semver 去掉 git tag 的 v 推标签，所以 Hub 上是 <主.次.补丁> / <主.次> / latest 三种写法指向
-    # 同一个镜像；带 v 的形式（v1.2.0 这样）在 Hub 上不存在，别照抄。
+    # Hub 上是 <主.次.补丁>（如 1.1.2）/ <主.次>（1.1）/ latest 三种写法，指向同一个镜像；版本号由
+    # 发布工作流从 pom.xml 现读，不带 git 标签里的 v 或 server-v 前缀——v1.2.0、server-v1.2.0 在 Hub 上都不存在。
     # 想用自己现场出的镜像（ARM 机型，或不想等发版），把下面这行换成 pushbox:local：
     #   docker build -f deploy/Dockerfile -t pushbox:local .
     image: docker.io/iamplusdev/push-box:latest
@@ -53,6 +55,15 @@ services:
       # 要暴露到公网就得自己上 HTTPS 反代：明文链路上跑的是消息正文与管理台口令。
       - "7404:7404"
     volumes:
+      # 图形界面里的「存储位置」就是这两行：容器里的地址不变，宿主侧由 named volume 兜着。
+      # NAS 界面可能把 named volume 显示成空（因为它们不在某个共享文件夹里），那是正常的——
+      # 数据仍在 <项目名>_server_media / <项目名>_server_logs 里，路径用
+      #   docker volume inspect <项目名>_server_media -f '{{.Mountpoint}}'
+      # 查。想直接落到自己在 NAS 上建的文件夹，就把这两行换成绑定挂载，并先把目录交给 uid 10001：
+      #   - /vol1/1000/pushbox/media:/app/data/media     # 换成你那台 NAS 上的真实路径
+      #   - /vol1/1000/pushbox/logs:/app/logs
+      #   sudo chown -R 10001:10001 /vol1/1000/pushbox
+      # 一行都不挂也起得来，但对象落进容器可写层，docker rm 之后图片全没。
       - server_media:/app/data/media
       - server_logs:/app/logs
     healthcheck:

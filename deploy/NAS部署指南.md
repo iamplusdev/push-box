@@ -9,8 +9,8 @@
 
 ## 0. 先确认三件事
 
-- **镜像标签没有 `v`**。Hub 上打的是去掉 `v` 的 `X.Y.Z` / `X.Y` / `latest`（CI 的 `type=semver` 就这么算的）。
-  写 `push-box:v1.1.1` 会报 manifest unknown。
+- **镜像标签没有 `v`**。Hub 上打的是 `X.Y.Z` / `X.Y` / `latest`（发布工作流从 `pom.xml` 现读版本号）。
+  写 `push-box:v1.1.2` 或 `push-box:server-v1.1.2` 都会报 manifest unknown。
 - **PushBox 不自带数据库**，且必须是 **MySQL 8.0 或 8.4**。第一版迁移用了 `utf8mb4_0900_ai_ci`
   与 `FULLTEXT ... WITH PARSER ngram`（`server/src/main/resources/db/migration/V1__init.sql`），
   这两样 5.7 都没有。8.0/8.4 两个实例上都实测过迁移可过。
@@ -80,8 +80,54 @@ FLUSH PRIVILEGES;
   再也解不开，所以 `PB_S3_MASTER_KEY` 生成后当场备份到 Git 之外。
 - **`server_media` 那个卷不用删**。落桶之后它只是空着；留着它，以后想回 `local` 时路径还是通的。日志卷
   `server_logs` 任何时候都要留。
-- **`PB_S3_PATH_STYLE` 镜像里烘焙的是 `true`**，MinIO / RustFS 是对的；接阿里云 OSS 或 AWS 时按服务商文档
+- **`PB_S3_PATH_STYLE` 默认是 `true`**（取值在 `application-prod.yml`，不在镜像 ENV 里），MinIO / RustFS 是对的；接阿里云 OSS 或 AWS 时按服务商文档
   可能要加一行 `PB_S3_PATH_STYLE: "false"`。桶本身要你先建好，程序不建桶。
+
+### 路径 C：不建 Compose 项目，直接在「创建容器」表单里填
+
+飞牛/群晖的「创建容器」会把镜像拉下来、把镜像里烘焙的环境变量逐行显示成输入框。
+**只要填两个，其余显示出来的都可以不动**；但「存储位置」默认是空的，必须自己加两行，否则删了容器图片就没了。
+
+**存储位置：加两行**
+
+| 容器内路径 | 宿主文件夹（换成你自己 NAS 上的路径） |
+|---|---|
+| `/app/data/media` | `/vol1/1000/pushbox/media` |
+| `/app/logs` | `/vol1/1000/pushbox/logs` |
+
+先在 NAS 上把这两个文件夹建好，再用 SSH 执行一次（容器里的进程是 uid 10001）：
+
+```bash
+sudo chown -R 10001:10001 /vol1/1000/pushbox
+```
+
+不 chown 也能把容器建起来，但启动日志会当场报「本地存储目录 /app/data/media 不可写」并退出——
+这是刻意的，不然症状会推迟到第一条带图片的消息才出现。
+
+**环境变量：只填两个**
+
+| 填什么 | 值 |
+|---|---|
+| `PB_DB_HOST` | 库的局域网 IP（例如 `192.0.2.20`）；库和容器在同一台机器上也**别填 `127.0.0.1`** |
+| `PB_DB_PASSWORD` | 第 1 步建库时那个 `pushbox` 用户的口令 |
+
+表单里还会显示端口、目录、库名、库用户名这些——**都是默认值，不用改**。管理台默认关闭，想开再加
+`PB_ADMIN_SECRET` 与 `PB_ADMIN_JWT_SECRET` 两行（各用 `openssl rand -base64 32` 生成，不能同值）。
+
+**要外接桶**：在上面两个之外，把这六行一次性加齐（少一行容器都会在启动时点名）：
+
+```
+PB_STORAGE_TYPE=s3
+PB_S3_ENDPOINT=http://192.0.2.30:7101
+PB_S3_ACCESS_KEY=你的 AK
+PB_S3_SECRET_KEY=你的 SK
+PB_S3_BUCKET=pushbox
+PB_S3_OBJECT_ENCRYPT=sse-c
+PB_S3_MASTER_KEY=一段 base64 的 32 字节（openssl rand -base64 32）
+```
+
+这一节的判据与上面 Compose 那条完全相同；桶上不允许明文，所以 `sse-c` 与主钥那两行不是装饰，
+理由见上一小节那三条。
 
 ## 3. 路径 B：NAS 上还没有库，顺带起一个 MySQL
 

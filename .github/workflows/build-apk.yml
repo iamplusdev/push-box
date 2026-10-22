@@ -1,6 +1,10 @@
 name: Build Android APK
 
-# 推 main 打包并挂成 workflow artifact（每次都能下载测试）；打 v* 标签时额外发布到 GitHub Release。
+# 三条发布链是解耦的：本文件只认 android-v* 与旧的 v*（三端一起发）两种标签。
+# 只改服务端时打 server-v*，这里根本不会被触发；main 上的日常构建也只在 android/ 真的变了时跑。
+# 打 android-vX.Y.Z 时发布到 GitHub Release，文件名为 pushbox-release-X.Y.Z.apk；
+# 打 vX.Y.Z 时仍按"三端一起发"的老口径发布。
+#
 # 需要配的 Secrets（release 必须签名：未配置或误用 debug 签名一律判失败，不再回退 debug）：
 #   ANDROID_KEYSTORE_BASE64   release keystore 的 base64，要求"一整行标准字母表"：
 #                             Linux/macOS  base64 -w0 android/dev/pushbox-release.jks
@@ -13,11 +17,18 @@ name: Build Android APK
 #   ANDROID_KEYSTORE_PASSWORD keystore 口令
 #   ANDROID_KEY_ALIAS         别名
 #   ANDROID_KEY_PASSWORD      私钥口令（多数与 keystore 口令相同）
-# tag 事件不再带 paths 过滤（否则只改了其它目录的 commit 打 tag 会静默不发布）。
+# 标签事件不带 paths 过滤（否则 tag 指到的提交恰好没碰 android/ 时会静默不发布）；
+# main 事件按 paths 过滤，改服务端或文档不会顺带重打一个 APK。
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    paths:
+      - "android/**"
+      # :pbcore 直接编译 ../core 的同一份源码，core 动了 APK 必须跟着重出
+      - "core/**"
+      - "scripts/set-version.sh"
+      - ".github/workflows/build-apk.yml"
+    tags: ["android-v*", "v*"]
   workflow_dispatch:
 
 permissions:
@@ -58,12 +69,13 @@ jobs:
           [ -n "$(ls -A "$ANDROID_HOME/build-tools" 2>/dev/null)" ] || { echo "::error::缺 build-tools（apksigner 无处可取）"; exit 1; }
           echo "✅ compileSdk=$CS 在位；build-tools：$(ls "$ANDROID_HOME/build-tools" | tr '\n' ' ')"
 
-      # 统一版本号注入（从 git tag 或 run number 提取）
+      # 统一版本号注入（标签取 android-vX.Y.Z / vX.Y.Z 的 X.Y.Z；分支事件用 0.1.0-<run> 只为出测试包）
       - name: Set version from git tag
         id: version
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"  # v1.0.0 -> 1.0.0
+            VERSION="${GITHUB_REF_NAME##*-v}"   # android-v1.2.0 / v1.2.0 -> 1.2.0
+            VERSION="${VERSION#v}"
           else
             VERSION="0.1.0-${GITHUB_RUN_NUMBER}"
           fi
@@ -74,7 +86,8 @@ jobs:
         run: |
           # 正式 tag（X.Y.Z）才注入；main/dispatch 的 0.1.0-<run> 非正式版本脚本会判失败，
           # 这里容忍并沿用已提交默认，保证 main 每次都能产出可下载 artifact。
-          bash scripts/set-version.sh "${{ steps.version.outputs.version }}" \
+          # --only=android：解耦之后这里不碰服务端与 Windows 的版本号。
+          bash scripts/set-version.sh --only=android "${{ steps.version.outputs.version }}" \
             || echo "⚠️ 非正式版本（${{ steps.version.outputs.version }}）跳过注入，沿用已提交 versionCode/versionName。"
 
       - name: Put build-tools on PATH (for apksigner)
@@ -132,7 +145,8 @@ jobs:
         id: ver
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            # 文件名只带版本号，不带 android-v 前缀：android-v1.2.0 -> pushbox-release-1.2.0.apk
+            echo "value=${{ steps.version.outputs.version }}" >> "$GITHUB_OUTPUT"
           else
             echo "value=0.1.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           fi
@@ -149,7 +163,7 @@ jobs:
 
       - name: Calculate mapping.txt checksum
         id: mapping_sha
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           MAPPING_FILE="android/app/build/outputs/mapping/release/mapping.txt"
           if [ -f "$MAPPING_FILE" ]; then
@@ -178,22 +192,27 @@ jobs:
           if-no-files-found: error
 
       - name: Publish to GitHub Release (tag push only)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
           MAPPING_SHA256: ${{ steps.mapping_sha.outputs.value }}
           CERT_B64: ${{ secrets.CODESIGN_CERT_BASE64 }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -uo pipefail
-          # 两个构建工作流可能在同一 tag 上并发建 release：create 撞已存在就吞掉，
-          # 资产用 --clobber 覆盖上传，保证并发安全。
-          # 镜像标签是 docker-publish.yml 的 docker/metadata 按 semver 去掉 v 算出来的
-          # （1.1.0 / 1.1 / latest），与 git tag 的 v1.1.0 不同名：这里照抄 $TAG，
-          # 用户就会去拉一个 Hub 上不存在的 tag。
-          IMG_TAG="${TAG#v}"
-          NOTE="自动构建产物：Android APK / Windows 安装包 / Docker 镜像 iamplusdev/push-box:${IMG_TAG}（同一镜像另有 ${IMG_TAG%.*} 与 latest 两个标签）
+          # 组件标签（android-vX.Y.Z）只发 APK，标题写清这一页是什么；旧的 vX.Y.Z 仍是三端一起发，
+          # 标题与正文沿用原样。镜像标签由 docker-publish.yml 的闸门从 pom 现读（1.1.2 / 1.1 / latest），
+          # 与 git tag 不同名，所以不能照抄 $TAG，否则用户会去拉一个 Hub 上不存在的标签。
+          IMG_TAG="${VERSION}"
+          NOTE="自动构建产物：Android APK v${VERSION}（签名证书与仓库基线一致）
+          - 文件：\`pushbox-release-${VERSION}.apk\`
+          - 安装：下载后直接安装；覆盖安装保留历史消息"
+          if [[ "$TAG" == v* ]]; then
+            NOTE="自动构建产物：Android APK / Windows 安装包 / Docker 镜像 iamplusdev/push-box:${IMG_TAG}（同一镜像另有 ${IMG_TAG%.*} 与 latest 两个标签）"
+          fi
+          NOTE="$NOTE
 
           ## Mapping File（用于还原线上崩溃堆栈）
           - 归档：本 tag 对应 workflow run 的 artifact \`mapping-${TAG}\`（需要仓库读权限，不进公开 Release）
@@ -206,6 +225,8 @@ jobs:
 
           **Windows 安装包未签名**（仓库没配 CODESIGN_CERT_BASE64）：首次运行 setup.exe 时 Windows 会弹一层「Windows 保护了你的电脑」，点「更多信息」→「仍要运行」即可继续安装。配置代码签名证书后这一段自动消失，见 docs/代码签名指南.md。"
           fi
-          gh release create "$TAG" --target "$SHA" --title "PushBox $TAG" --notes "$NOTE" --verify-tag 2>/dev/null || true
+          TITLE="PushBox Android v${VERSION}"
+          if [[ "$TAG" == v* ]]; then TITLE="PushBox $TAG"; fi
+          gh release create "$TAG" --target "$SHA" --title "$TITLE" --notes "$NOTE" --verify-tag 2>/dev/null || true
           shopt -s nullglob
           gh release upload "$TAG" dist-apk/*.apk --clobber
