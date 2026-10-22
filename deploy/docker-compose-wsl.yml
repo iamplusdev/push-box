@@ -40,6 +40,10 @@ services:
       PB_SERVER_PORT: ${PB_SERVER_PORT:-7404}
     volumes:
       - server_logs:/app/logs
+      # 与主文件刻意不同：这里保留宿主绑定挂载 ./data/media，因为 deploy-wsl.sh / deploy-wsl.ps1 的
+      # reset 就是按目录 rm 的，换成 named volume 会把"清测试数据"变成还要 docker volume rm。
+      # 代价是本地拓扑在这套栈上要先让目录归 uid 10001（宿主目录属主跟着 host 走），否则
+      # entrypoint 的写入探针会拒绝启动——那是主文件推荐的挂法，测试栈图省事所以留旧写法。
       - ./data/media:/app/data/media
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${PB_SERVER_PORT:-7404}"]

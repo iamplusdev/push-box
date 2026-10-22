@@ -44,7 +44,7 @@ services:
       PB_S3_ACCESS_KEY: ${PB_S3_ACCESS_KEY:-}
       PB_S3_SECRET_KEY: ${PB_S3_SECRET_KEY:-}
       # 存储拓扑开关：s3（默认，用上面那组 PB_S3_*）| local（用下面的目录，不碰对象存储）。
-      # local 模式下 PB_STORAGE_LOCAL_PATH 指向的目录必须对 uid 10001 可写，本文件已把 ./data/media 挂进去。
+      # local 模式忘了把 type 改成 s3 不会报错，只会静默落本地盘——entrypoint 里那条 WARN 专门喊这件事。
       PB_STORAGE_TYPE: ${PB_STORAGE_TYPE:-s3}
       PB_STORAGE_LOCAL_PATH: ${PB_STORAGE_LOCAL_PATH:-/app/data/media}
       PB_S3_PATH_STYLE: ${PB_S3_PATH_STYLE:-true}
@@ -84,8 +84,17 @@ services:
       PB_SERVER_PORT: ${PB_SERVER_PORT:-7404}
     volumes:
       - server_logs:/app/logs
-      # 本地文件系统存储模式需要挂载数据目录（PB_STORAGE_TYPE=local 时生效）
-      - ./data/media:/app/data/media
+      # PB_STORAGE_TYPE=local（拓扑 C）时对象落在这里，别的拓扑是一个空目录。
+      # 用 named volume 而不是 ./data/media 绑定挂载，原因和上面 logs 那条一样：绑定挂载会把
+      # 宿主目录的属主带进来，而 Docker 替缺目录建的宿主目录属 root，uid 10001 写不动——症状是
+      # /healthz 一直 UP、第一条带图消息才 failed。named volume 首挂时继承镜像里 /app/data/media
+      # 的属主（Dockerfile 已建好并 chown 给 pushbox），一 up 就能写。
+      # 想把对象放在看得见的路径上（方便直接备份）就换回 ./data/media，但要先把宿主目录交给 10001：
+      #   sudo mkdir -p ./data/media && sudo chown -R 10001:10001 ./data/media
+      # 备份端跟着改：deploy/backup/backup.sh 的 MEDIA_DIR 指到
+      #   docker volume inspect pushbox_server_media -f '{{.Mountpoint}}'
+      # 而不是 ./data/media。
+      - server_media:/app/data/media
     healthcheck:
       # 只做 TCP 探活：JRE 镜像里没有 curl/wget，而 /healthz 会真连库，
       # 用业务探活做 healthcheck 等于让一次数据库抖动就把容器判死。
@@ -156,3 +165,4 @@ volumes:
   caddy_data: {}
   caddy_config: {}
   server_logs: {}
+  server_media: {}

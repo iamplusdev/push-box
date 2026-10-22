@@ -58,3 +58,13 @@ windows/bin/
 *.tmp
 # Kotlin 编译缓存与错误报告（errors/ 与 sessions/ 都是每次构建重生的）
 android/.kotlin/
+
+# dev 的本地对象存储默认落点：application-dev.yml 里是 ./data/media，而对象键自带 `media/` 前缀，
+# 所以里面长成 data/media/media/<msg_id>/0.bin——多那一层是键的形状，不是配错了目录。
+/data/
+
+# 真机截图与验收现场，每次跑都换一批名字；留本机当证据，不入库
+/.tmp-shot/
+/verify/
+# ci.yml 的 windows job 用它做 trx 计数闸的输入，本机复跑同一命令就会生成
+windows/TestResults/

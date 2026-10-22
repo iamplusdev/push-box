@@ -41,13 +41,21 @@ set -euo pipefail
 echo "🔍 验证生产环境配置..."
 
 # 1. 检查必填变量（compose 已通过 :\${VAR:?} 强制，这里做二次确认）
+#    报错文案一律自带"下一步做什么"：这个容器是 prod 拓扑唯一的入口，起不来时人只看到一段红字，
+#    不会去翻文档；只说"未设置"等于让人自己猜该写在哪、填什么形态。
 if [ -z "\${PB_DB_URL:-}" ]; then
-  echo "❌ 错误: PB_DB_URL 未设置"
+  echo "❌ 错误: PB_DB_URL 未设置（JDBC 连接串，必填）"
+  echo "   写在 deploy/.env（compose 与本文件都不接受明文地址/口令，.env 已 gitignore）："
+  echo "   复用外部 MySQL：PB_DB_URL=jdbc:mysql://<DB_HOST>:3306/pushbox?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=utf8"
+  echo "   compose 自带的 mysql 段：主机名换成服务名 mysql，其余参数照抄"
+  echo "   三种拓扑的完整取值见 deploy/部署快速参考.md"
   exit 1
 fi
 
 if [ -z "\${PB_DB_PASSWORD:-}" ]; then
-  echo "❌ 错误: PB_DB_PASSWORD 未设置"
+  echo "❌ 错误: PB_DB_PASSWORD 未设置（库口令，必填）"
+  echo "   写在 deploy/.env，生成：openssl rand -base64 24"
+  echo "   这一项同时喂给 MySQL 的 pushbox 用户，所以取值以「能连上那台库」为准，不是随便一个字符串"
   exit 1
 fi
 
@@ -55,7 +63,36 @@ fi
 #    时对象直接落在容器文件系统里，一个外部存储都不需要——原来这里无条件要求 PB_S3_*，
 #    等于把"一个 docker run 起一套 PushBox"这条路堵死，只能为了过检查塞三个假值。
 if [ "\${PB_STORAGE_TYPE:-s3}" = "local" ]; then
-  echo "ℹ️  对象存储走本地文件系统（PB_STORAGE_TYPE=local），对象落在 \${PB_STORAGE_LOCAL_PATH:-./data/media}；不需要 PB_S3_*"
+  MEDIA_DIR="\${PB_STORAGE_LOCAL_PATH:-/app/data/media}"
+  echo "ℹ️  对象存储走本地文件系统（PB_STORAGE_TYPE=local），对象落在 \$MEDIA_DIR；不需要 PB_S3_*"
+
+  # 分档必填引进来的反面风险，与 dev 侧 DevCredentialsGuard 同一条判据：忘了把 type 改成 s3
+  # 不再让启动失败，只会让整套部署静默落在本地目录上，而跑起来的一切看着都像桶形态。
+  LINGERING=""
+  for var in PB_S3_ENDPOINT PB_S3_ACCESS_KEY PB_S3_SECRET_KEY; do
+    if [ -n "\${!var:-}" ]; then LINGERING="\$LINGERING \$var"; fi
+  done
+  if [ -n "\$LINGERING" ]; then
+    echo "⚠️  PB_STORAGE_TYPE=local 但环境里还配着\$LINGERING：这几项在 local 模式一个字都不读。"
+    echo "   想跑桶形态就设 PB_STORAGE_TYPE=s3 重启；确实只要本地存储就把它们从 .env 删掉，"
+    echo "   别给下一个排障的人留一个「看着像配了 S3」的现场。"
+  fi
+
+  # 目录必须真能写。这里当场判死，不等第一条带图的消息：/healthz 的 storage 只校验配置项非空，
+  # 既不探端点也不试写（HealthzController.storageConfigValid），而把宿主目录绑定挂载进来时属主是
+  # root、容器里的 pushbox(10001) 写不动。照 2026-10-19「健康检查全绿、每条图片消息停在 failed」
+  # 那次的教训，这类错只能在启动时出声。
+  mkdir -p "\$MEDIA_DIR" 2>/dev/null || true
+  if ! ( : > "\$MEDIA_DIR/.entrypoint-write-probe" ) 2>/dev/null; then
+    echo "❌ 错误: 本地存储目录 \$MEDIA_DIR 不可写（容器内进程是 uid 10001）"
+    echo "   两种修法任选其一："
+    echo "     1) compose 用 named volume（推荐）：把 - ./data/media:/app/data/media"
+    echo "        换成 - server_media:/app/data/media，并在文件末尾的 volumes: 里补一行 server_media: {}"
+    echo "     2) 继续用宿主目录，就把它交给运行用户：sudo chown -R 10001:10001 ./data/media"
+    echo "   不挂卷也起得来（对象写容器可写层），但 docker rm 之后图片全没——那是 local 拓扑的代价，不是缺陷"
+    exit 1
+  fi
+  rm -f "\$MEDIA_DIR/.entrypoint-write-probe"
 else
   for var in PB_S3_ENDPOINT PB_S3_ACCESS_KEY PB_S3_SECRET_KEY; do
     if [ -z "\${!var:-}" ]; then
@@ -137,10 +174,13 @@ EOF
 
 RUN chmod +x /app/entrypoint.sh
 
-# 非 root 运行；/app/logs 归运行用户，compose 把 ./data/logs 挂在这里。
-# PB_STORAGE_TYPE=local 时对象落在 /app/data/media（见 application-prod.yml），要它活得比容器久
-# 就自己挂一个卷到 /app/data——默认没卷的话，容器一删图就没了，这是 local 拓扑的代价，不是缺陷。
-RUN useradd -r -u 10001 pushbox && mkdir -p /app/logs && chown -R pushbox:pushbox /app
+# 非 root 运行；/app/logs 归运行用户，compose 把 named volume server_logs 挂在这里。
+# PB_STORAGE_TYPE=local 时对象落在 /app/data/media（见 application-prod.yml）。这个目录要在镜像里
+# 就存在并归 pushbox：named volume 首次挂载时会把镜像里那个目录的属主与内容拷进去，所以
+# - server_media:/app/data/media 一挂就是可写的；反之若用宿主绑定挂载，属主跟着宿主目录走，
+# root 建的目录 uid 10001 写不动——entrypoint 会当场判死并给出两种修法，不留到第一条带图的消息。
+# 完全不挂卷也能起（对象落容器可写层），但 docker rm 之后图片全没，这是 local 拓扑的代价不是缺陷。
+RUN useradd -r -u 10001 pushbox && mkdir -p /app/logs /app/data/media && chown -R pushbox:pushbox /app
 USER pushbox
 # 监听端口是 ${PB_SERVER_PORT:7404}（application-prod.yml），EXPOSE 只是给人看的元数据，
 # 写 8080 会让"照着 docker inspect 猜端口"的人连不上——这一行以前就是错的。

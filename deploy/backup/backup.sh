@@ -12,7 +12,10 @@
 #   AGE_RECIPIENT=<age 公钥或 ssh 公钥> [RUSTFS_DATA_DIR=/path/to/data/rustfs] [MEDIA_DIR=/path/to/data/media] ./backup.sh
 #
 # 复用远端 RustFS（拓扑 A，没有本地卷）时不设 RUSTFS_DATA_DIR，改把"取对象"交给 mc mirror：见第 2 步备注。
-# 使用本地文件系统存储（拓扑 C）时设置 MEDIA_DIR=./data/media，跳过 S3/RustFS 备份。
+# 使用本地文件系统存储（拓扑 C）时设置 MEDIA_DIR=<本地卷挂载点>，跳过 S3/RustFS 备份。
+#   compose 用的是 named volume，挂载点现查、不要抄：
+#     MEDIA_DIR="$(docker volume inspect pushbox_server_media -f '{{.Mountpoint}}')"
+#   自己换成宿主绑定挂载（./data/media）时，MEDIA_DIR 就直接指那个目录。
 
 set -euo pipefail
 
@@ -71,7 +74,7 @@ else
     echo "✅ S3/RustFS 已通过 mc mirror 备份"
   else
     echo "⚠️  跳过对象备份：既没给 MEDIA_DIR/RUSTFS_DATA_DIR，也没装 mc。" >&2
-    echo "   如果使用本地存储，请设置 MEDIA_DIR=./data/media"
+    echo "   如果使用本地存储，请设置 MEDIA_DIR=\"\$(docker volume inspect pushbox_server_media -f '{{.Mountpoint}}')\""
   fi
 fi
 
