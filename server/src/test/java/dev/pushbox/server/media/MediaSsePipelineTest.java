@@ -40,7 +40,11 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
  */
 @EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-    properties = {"pb.s3.object-encrypt=sse-c",
+    properties = {"pb.storage.type=s3",
+        // 这一条是这一类自己的前提，不能指望环境给：dev 的默认值是 local（本机只装一个 MySQL 就能起步），
+        // 而 local 模式下 S3Config 不建 S3Client bean，@Autowired 直接 UnsatisfiedDependencyException。
+        // CI 里 PB_S3_* 齐了、这 7 条被门放开，跑法却是 local —— 于是 main 上第一次红就在这里。
+        "pb.s3.object-encrypt=sse-c",
         // base64(0x01..0x20)，正好 32 字节：不写就会被环境里那个空的 PB_S3_MASTER_KEY 顶成非法配置
         "pb.s3.master-key=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="})
 class MediaSsePipelineTest {
