@@ -24,6 +24,14 @@
 - **`docker buildx build --check`**：`Check complete, no warnings found.`（WSL Docker 29.9.1）。
 - **`scripts/release-verify.sh` 73 通过 / 0 失败 / 2 警告**：新增一条静态闸门，要求 entrypoint 既记住"口令占位值出现过"又真的 `unset PB_S3_MASTER_PASSPHRASE`；少任何一半就红。
 
+### 发布（2026-10-22）
+
+- 版本号 `1.1.4 → 1.1.5`（`--only=server`），提交 `a478f0e`，只打 `server-v1.1.5`；标签链 run `39780463627` 全 success，Android / Windows 标签链没有被触发。
+- **Hub 实查（WSL）**：`1.1.5` / `1.1` / `latest` 指向同一 index digest `sha256:058f5c471d40672db6535347d6c4aaa4000894c74fdae1c81357ae934c2330d7`；`main` 与 `sha-a478f0e` 是同一 commit 的另一次构建，digest `sha256:a67bff76…`。`1.1.4` / `sha-2d8f3b0`、`1.1.3` / `sha-d8c1486`、`sha-d4a889d` 都还在——这一轮没有删旧标签。
+- **从 Hub 拉回 `1.1.5` 复核**：config blob 的 `Volumes={'/app/data/media': {}, '/app/logs': {}}`、`User=pushbox`，ENV 17 项（原 10 项 + 五枚 `__SET_ME__` + `PB_S3_BUCKET=pushbox` + `PB_S3_OBJECT_ENCRYPT=none`）；镜像内 `/app/entrypoint.sh` 与源码渲染结果 md5 同为 `dd70ee6aca3bc69b39c71a1360ca30d2`。
+- **发布镜像实跑主钥场景**：`docker run` 只传 `PB_S3_MASTER_KEY`、保留烘焙的 `PB_S3_MASTER_PASSPHRASE=__SET_ME__`，日志出现"主钥长度验证通过"且没有"只能二选一"；随后照预期停在假数据库握手（测试用的是只 accept 再关闭的 TCP 监听器，不是真 MySQL），证明误杀已经消失。
+- **同一推送的连带 run**：`ci.yml`（run `39780448593`）、main 的 `docker-publish.yml`（run `39780448837`）、`site-deploy.yml`（run `39780448815`）、`update-dockerhub-description.yml`（run `39780448665`）与 `build-apk.yml`（run `39780448503`，只构建、不发 Release）全部 success；`build-msi.yml` 没跑。
+
 ### 未做
 
 - 未实现 KEK 轮换或旧对象重封装；未开始管理台内配置 S3 的第二阶段。边界与 v1.1.4 相同。
@@ -68,6 +76,7 @@
 - 版本号 `1.1.3 → 1.1.4`（`--only=server`），提交 `2d8f3b0`，只打 `server-v1.1.4`；标签事件只触发服务端链（run `39779506621`，`Validate Docker Hub credentials` → 版本闸门 → `Build and push` 全 success），Android / Windows 两条标签链没有被触发。
 - **Hub 实查（WSL）**：`1.1.4` / `1.1` / `latest` 三枚指向同一 index digest `sha256:0645e2ea9322d40698bbec6708ed311211dc921191824c902434c0656bcacd22`；`main` 与 `sha-2d8f3b0` 是同一 commit 的另一次构建，digest `sha256:3062a00bb8a84b75fdff1eb1d5c7639d865adf53847ae7db31ea92bf58f0d0d8`；`1.1.3` / `sha-d8c1486` 与更早的 `sha-d4a889d` 仍在，没有删旧标签。
 - **已知缺陷（v1.1.5 修）**：镜像 ENV 里的 `PB_S3_MASTER_PASSPHRASE=__SET_ME__` 被 entrypoint 当成真口令，只配 `PB_S3_MASTER_KEY` 的用户会被"二选一"误杀。发布后复查主钥路径时发现，v1.1.5 把占位值从环境里清掉并补了第 7 条场景；`1.1.4` 镜像本身保留这一缺陷。
+- **同一推送的连带 run**：`ci.yml`（run `39779496418`）、`site-deploy.yml`（run `39779496463`）、`update-dockerhub-description.yml`（run `39779496454`）与 main 的 `docker-publish.yml`（run `39779496509`）都 success；`build-apk.yml`（run `39779496365`）被紧接着的 v1.1.5 推送按 concurrency 取消，`build-msi.yml` 没跑。被取消的是"只构建、不发 Release"的那条，不影响任何产物。
 
 ### 未做
 
