@@ -98,10 +98,9 @@ a:hover { text-decoration: underline; }
 }
 
 .mark {
-  width: 30px; height: 30px; border-radius: 9px; flex: 0 0 30px;
-  background: var(--primary); color: var(--on-primary);
-  display: grid; place-items: center; font-weight: 700; font-size: 15px;
+  width: 30px; height: 30px; border-radius: 9px; flex: 0 0 30px; overflow: hidden;
 }
+.mark img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
 /* ---------- 首页 hero ---------- */
 
@@ -115,7 +114,10 @@ a:hover { text-decoration: underline; }
 .display {
   font-size: clamp(52px, 9vw, 96px); line-height: 1.02; letter-spacing: -2.5px;
   font-weight: 800; margin: 0 0 22px;
+  display: flex; align-items: center; gap: .19em;
 }
+/* 图标跟着标题字号走，做成一份 logotype，而不是浮在正文上方的一张贴图。 */
+.display img { width: .92em; height: .92em; border-radius: .21em; flex: 0 0 auto; }
 .tagline {
   font-size: clamp(18px, 2.4vw, 22px); line-height: 1.55; color: var(--lede);
   max-width: 660px; margin: 0 0 34px;
@@ -161,21 +163,26 @@ a:hover { text-decoration: underline; }
 .pillars .card > .n { display: block; margin-bottom: 14px; }
 @media (max-width: 900px) { .pillars { grid-template-columns: 1fr; } }
 
-/* 仓库卡片：链接由 repos.json 提供，页面里不重复写一遍 */
-.repo-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
+/* 仓库卡片：地址、clone 命令与角色都写在页面里，file:// 双击打开也不缺东西 */
+.repo-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 .repo-card {
   display: flex; flex-direction: column; gap: 10px;
   background: var(--elevated); border: 1px solid var(--divider); border-radius: var(--radius);
   padding: 20px 20px 18px; box-shadow: var(--shadow-sm); color: var(--fg);
 }
-.repo-card:hover { text-decoration: none; border-color: color-mix(in srgb, var(--primary) 45%, var(--divider)); box-shadow: var(--shadow); }
+.repo-card:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--divider)); box-shadow: var(--shadow); }
 .repo-card .top { display: flex; align-items: center; gap: 10px; }
 .repo-card .top b { font-size: 16.5px; }
 .repo-card .host { font: 600 11px/1 var(--sans); letter-spacing: .04em; color: var(--fg-2);
   background: var(--bubble); border: 1px solid var(--divider); border-radius: 6px; padding: 4px 7px; }
 .repo-card p { font-size: 13.5px; color: var(--fg-2); margin: 0; flex: 1; }
-.repo-card .go { font-size: 13px; color: var(--accent-ink); font-weight: 600; }
-.repo-hint { font-size: 13px; color: var(--fg-2); margin: 14px 0 0; }
+.repo-card .cmd {
+  font: 12.5px/1.5 var(--mono); color: var(--fg); background: var(--bubble);
+  border: 1px solid var(--divider); border-radius: 8px; padding: 9px 11px;
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal;
+}
+.repo-card .go { font-size: 13px; color: var(--accent-ink); font-weight: 600; text-decoration: none; }
+.repo-card .go:hover { text-decoration: underline; }
 
 .site-footer {
   border-top: 1px solid var(--divider); margin-top: 30px;
@@ -250,12 +257,14 @@ main { flex: 1; min-width: 0; padding: 34px 44px 90px; }
 
 /* ---------- 正文元素 ---------- */
 
-h1 { font-size: 32px; line-height: 1.3; margin: 0 0 6px; letter-spacing: -.6px; }
-h2 { font-size: 21px; margin: 42px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--divider); }
-h3 { font-size: 16px; margin: 26px 0 8px; }
-h4 { font-size: 14px; margin: 20px 0 6px; color: var(--fg-2); }
+h1 { font-size: 30px; line-height: 1.3; margin: 0 0 6px; letter-spacing: -.7px; }
+h2 { font-size: 20px; margin: 44px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--divider); letter-spacing: -.3px; }
+h3 { font-size: 16px; margin: 28px 0 8px; }
+h4 { font-size: 13px; margin: 20px 0 6px; color: var(--fg-2); }
 p { margin: 10px 0; }
-.lede { font-size: 17px; color: var(--lede); margin: 0 0 26px; }
+/* 正文行宽收到 74 字以内：一行拉到 1100px 时眼睛回不了下一行的行首。 */
+.wrap > p, .wrap > ul, .wrap > ol, .wrap > .callout { max-width: 74ch; }
+.lede { font-size: 16.5px; color: var(--lede); margin: 0 0 24px; }
 ul, ol { padding-left: 22px; }
 li { margin: 5px 0; }
 strong { font-weight: 600; }
@@ -297,11 +306,10 @@ tbody tr:hover { background: var(--bubble); }
 .tag.opt { color: var(--fg-2); }
 
 .callout {
-  border-left: 3px solid var(--primary); background: var(--elevated);
+  border-left: 3px solid var(--primary);
+  background: var(--bubble);
   border-radius: 0 var(--radius) var(--radius) 0;
-  padding: 12px 16px; margin: 16px 0; box-shadow: var(--shadow-sm);
-  border-top: 1px solid var(--divider); border-right: 1px solid var(--divider);
-  border-bottom: 1px solid var(--divider);
+  padding: 12px 16px; margin: 18px 0;
 }
 .callout.warn { border-left-color: var(--warning); }
 .callout.danger { border-left-color: var(--error); }
@@ -324,10 +332,30 @@ tbody tr:hover { background: var(--bubble); }
   background: #262c33; color: #dde3ea; border: 1px solid #3a424b; border-radius: 6px;
 }
 .code button:hover { background: #323a43; }
-.code .c { color: #82907f; }
+.code .c { color: #7f8b98; }
 .code .s { color: #a3d39c; }
 .code .k { color: #e0c085; }
 .code .n { color: #8fd3ff; }
+.code .f { color: #c8a6e8; }
+
+/* ---------- 步骤卡：一步一句说明 + 一条命令 ---------- */
+
+.steps { list-style: none; counter-reset: st; margin: 20px 0 28px; padding: 0; display: grid; gap: 18px; }
+.steps > li { counter-increment: st; position: relative; padding-left: 38px; }
+.steps > li::before {
+  content: counter(st);
+  position: absolute; left: 0; top: 1px;
+  width: 25px; height: 25px; border-radius: 50%;
+  background: var(--bubble); border: 1px solid var(--divider);
+  color: var(--accent-ink); font: 700 12px/23px var(--mono); text-align: center;
+}
+/* 说明只有一句；要补的话用 <span class="sub">，它比说明淡一档，不再引入新的层级 */
+.steps > li > b { display: block; font-size: 15px; font-weight: 600; line-height: 1.5; }
+.steps > li > .sub { display: block; font-size: 13.5px; color: var(--fg-2); margin-top: 3px; }
+.steps .code { margin: 8px 0 0; }
+.steps > li > ul { margin: 8px 0 0; }
+/* 示意图下面那一句注解，比正文小一档 */
+p.sub { font-size: 13px; color: var(--fg-2); margin: 14px 0 0; }
 
 /* ---------- 手机/桌面示意图 ---------- */
 

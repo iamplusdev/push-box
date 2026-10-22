@@ -6,6 +6,9 @@
 <title>PushBox · 自托管消息推送系统</title>
 <meta name="description" content="PushBox：任何程序一条 POST /message 就能推送到你自己的 Android 与 Windows。服务端存明文可搜索，链路上加密下发，不接厂商推送、不经第三方转发。">
 <link rel="stylesheet" href="assets/site.css">
+<link rel="icon" href="assets/img/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32x32.png">
+<link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
 <script src="assets/site.js" defer></script>
 </head>
 <body>
@@ -13,7 +16,7 @@
 
 <header class="site-header">
   <div class="bar">
-    <a class="logo" href="index.html"><span class="mark">P</span><b>PushBox</b><span class="ver">1.1.0</span></a>
+    <a class="logo" href="index.html"><span class="mark"><img src="assets/img/icon-192.png" alt=""></span><b>PushBox</b><span class="ver">1.1.0</span></a>
     <button id="navBtn" type="button" aria-label="打开菜单">☰</button>
     <nav class="links">
       <a href="overview.html">概览</a>
@@ -24,8 +27,6 @@
       <a href="admin-api.html">管理台 API</a>
       <a href="protocol.html">协议</a>
       <a href="#repos">仓库</a>
-      <a href="../docs/开发指南.md">开发指南</a>
-      <a href="../docs/测试指南.md">测试指南</a>
     </nav>
     <button class="theme-toggle" id="themeBtn" type="button">☾ 深色</button>
   </div>
@@ -36,15 +37,15 @@
 
   <section class="hero">
     <span class="eyebrow">自托管 · 单向消息推送</span>
-    <h1 class="display">PushBox</h1>
+    <h1 class="display"><img src="assets/img/icon-512.png" alt="" width="512" height="512">PushBox</h1>
     <p class="tagline">任何程序一条 <code>POST /message</code>，消息就推送到你自己的手机和电脑。服务端存下来、抓图转存、加密下发，多端几乎同时到账。</p>
     <div class="cta">
       <a class="btn primary" href="install.html">快速上手 <span aria-hidden="true">→</span></a>
-      <a class="btn ghost" href="overview.html">了解它怎么工作 <span aria-hidden="true">📄</span></a>
+      <a class="btn ghost" href="overview.html">它怎么工作</a>
     </div>
     <ul class="facts">
       <li>三端源码：Java 服务端 · Android · Windows</li>
-      <li>只依赖 MySQL 8 与一个 S3 兼容桶</li>
+      <li>只要一个 MySQL 8，图片可以落本地目录</li>
       <li>不接厂商推送，不经第三方转发</li>
     </ul>
   </section>
@@ -58,17 +59,17 @@
       <div class="card">
         <span class="n">01</span>
         <b>收得进来</b>
-        <p>一个频道号加一个密钥，任何脚本、Grafana、CI、cron 都能发。凭据只写不读，重复提交按 <code>msg_key</code> 幂等。</p>
+        <p>一个频道号加一个密钥，脚本、Grafana、CI、cron 都能发。同一条消息带同一个 <code>msg_key</code> 重复提交只会入库一次。</p>
       </div>
       <div class="card">
         <span class="n">02</span>
         <b>存得明白</b>
-        <p>正文与图片都存在你自己的 MySQL 与对象存储里，全文索引能搜、摘要服务端生成、外链图片抓取转存。</p>
+        <p>正文与图片都在你自己的机器上：MySQL 里全文可搜，摘要由服务端生成，外链图片抓回来转存。</p>
       </div>
       <div class="card">
         <span class="n">03</span>
         <b>送得到位</b>
-        <p>长连接加密下发到每台设备，手机与 PC 同时出通知；一边点开会话，另一边红点随即消失。断线按游标补齐，每台设备还可以只收自己接入的那几条频道。</p>
+        <p>长连接加密下发到每台设备，手机与 PC 同时出通知；一边点开会话，另一边红点随即消失。断线后按游标补齐。</p>
       </div>
     </div>
   </section>
@@ -76,21 +77,21 @@
   <section class="section">
     <div class="head">
       <h2>一条消息走过的路</h2>
-      <p>受理只写库、立刻回执；图片抓取与加密下发都在回执之后，第三方等不起的那几秒不由它承担。</p>
+      <p>校验通过就立刻回执，抓图和下发都在回执之后——第三方等不起的那几秒不由它承担。</p>
     </div>
     <div class="pipe">
-      <div class="step d"><b>你的程序</b><span>Grafana、CI、cron、内网服务，只需一个频道号 + 密钥</span></div>
-      <div class="step a"><b>受理</b><span>校验凭据、幂等、分配 <code>seq</code>、生成摘要，立即 200 回执</span></div>
-      <div class="step b"><b>抓图转存</b><span>外链图片并发抓取 → 缩略图 → 存进对象存储（超预算先出正文）</span></div>
+      <div class="step d"><b>你的程序</b><span>Grafana、CI、cron、内网服务</span></div>
+      <div class="step a"><b>受理</b><span>校验凭据、幂等、分配 <code>seq</code>、生成摘要，立即 200</span></div>
+      <div class="step b"><b>抓图转存</b><span>外链图片并发抓取 → 缩略图 → 存进你的存储</span></div>
       <div class="step a"><b>加密下发</b><span>每台设备自己的会话钥加密同一帧，多端同时到达</span></div>
-      <div class="step c"><b>客户端</b><span>入库、出通知，点进会话把已读报回去，别的端红点随之消失</span></div>
+      <div class="step c"><b>客户端</b><span>入库、出通知；点进会话后别的端红点消失</span></div>
     </div>
   </section>
 
   <section class="section">
     <div class="head">
-      <h2>装在你机器上的样子</h2>
-      <p>单向接收：气泡统一左对齐，不做"发送方 / 接收方"双色；告警级别只用气泡左侧一条 3px 色条表达。</p>
+      <h2>在你设备上长这样</h2>
+      <p>单向接收，所以气泡一律左对齐；告警级别用气泡左侧一条色条表达，不靠底色。</p>
     </div>
     <div class="mocks">
       <div class="phone">
@@ -122,49 +123,86 @@
             <i style="background:linear-gradient(135deg,#6b5a4a,#4a3d33)">日志</i>
           </div>
         </div></div>
-        <p style="font-size:12.5px;color:var(--fg-2);margin:14px 0 0">
-          四张图排成 2×2 而不是横排长条，<b>每一格的状态独立</b>——抓取失败的那一格可以单独重试，其余照常渲染。
-        </p>
+        <p class="sub">九张图排成 2×2，每格状态独立：抓取失败的那格单独重试，其余照常渲染。</p>
       </div>
     </div>
-  </section>
-
-  <section class="section" id="repos">
-    <div class="head">
-      <h2>源码仓库</h2>
-      <p>三端与文档都在同一个仓库里。下面这份清单由 <code>site/repos.json</code> 配置，加一个镜像只改那个文件。</p>
-    </div>
-    <div class="repo-grid" id="repoGrid"></div>
-    <p class="repo-hint" id="repoHint" hidden></p>
   </section>
 
   <section class="section">
     <div class="head">
       <h2>先发一条试试</h2>
-      <p>入站接口是 <code>POST {base}/message</code>，<b>不在</b> <code>/api/v1</code> 下，凭据放在请求体里。</p>
+      <p>入站接口是 <code>POST {base}/message</code>，<b>不在</b> <code>/api/v1</code> 下，凭据写在请求体里。</p>
     </div>
-    <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:7404/message \
+    <ol class="steps">
+      <li>
+        <b>在管理台建一个频道，拿到频道号和密钥</b>
+        <span class="sub">浏览器打开服务端根路径 <code>/</code>，登录后「频道 → 新建」。密钥只显示一次。</span>
+      </li>
+      <li>
+        <b>把凭据写进 payload.json</b>
+        <pre class="code" data-code="json"><code>{
+  "channel": "12345678",
+  "secret": "&lt;频道密钥&gt;",
+  "type": "markdown",
+  "level": "error",
+  "sender_id": "grafana",
+  "sender_name": "Grafana 告警",
+  "title": "CPU 使用率超过 90%",
+  "content": "主机 prod-03 · 近 5 分钟均值 92.4%"
+}</code></pre>
+      </li>
+      <li>
+        <b>发出去</b>
+        <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:7404/message \
   -H 'Content-Type: application/json' \
   --data-binary @payload.json</code></pre>
+        <span class="sub">别用 <code>-d</code> 内联 JSON：Git Bash 会改动引号里的内容，服务端只会回「请求体必须是合法 JSON」。</span>
+      </li>
+      <li>
+        <b>回来看这一行的 code</b>
+        <span class="sub"><code>200</code> 表示已入库并排进下发；<code>401</code> 是频道号或密钥不对；<code>429</code> 是超过了频道的限速。</span>
+      </li>
+    </ol>
     <div class="keys">
-      <div><b>49 ms</b><span>受理 → 通知到账（同机 MySQL 实测，验收线 1s）</span></div>
-      <div><b>301 / 554</b><span>Java 单测 / C# 单测，另有端到端协议探针与 12 项真机连接判据</span></div>
+      <div><b>约 50 ms</b><span>受理到通知到账（服务端与 MySQL 同机）</span></div>
       <div><b>3 s</b><span>图文合并窗口：正文先到，抓好的图并进同一帧</span></div>
     </div>
-    <p>完整起步命令与三端各自的安装步骤见 <a href="install.html">安装与部署</a>；字段全表、响应形状与错误码见 <a href="api.html">入站 API</a>。</p>
+    <p>三端各自的安装步骤见 <a href="install.html">安装与部署</a>；字段全表、响应形状与错误码见 <a href="api.html">入站 API</a>。</p>
   </section>
 
   <section class="section">
     <div class="head">
-      <h2>一个绕不开的取舍</h2>
-      <p>服务端到客户端这一跳是加密的（X25519 + AES-256-GCM 帧通道，REST 响应走一次性 sealed-box）；服务端库里存的是明文。</p>
+      <h2>一个要知道的取舍</h2>
+      <p>服务端到设备这一跳是加密的（X25519 + AES-256-GCM 帧通道）；服务端库里存的是明文。</p>
     </div>
     <div class="grid c3">
-      <div class="card"><b>明文是刻意的</b><p style="font-size:13px;color:var(--fg-2)">只有这样全文索引才能命中正文、服务端才能生成摘要、才能替你抓取外链图片。</p></div>
-      <div class="card"><b>密钥只能写不能读</b><p style="font-size:13px;color:var(--fg-2)">拿到 <code>secret</code> 能往这个频道推，但读不到任何历史；读历史要设备密钥或恢复码。"加入频道"用的也是这一对凭据，它只把这条频道登记进<b>这台设备</b>的接收集，不多给任何读权限。</p></div>
-      <div class="card"><b>请上 HTTPS</b><p style="font-size:13px;color:var(--fg-2)">帧加密补的是链路，TLS 补的是"服务端本身可信"，两者互不替代。<code>deploy/Caddyfile</code> 给了两条路。</p></div>
+      <div class="card"><b>明文换来了什么</b><p>全文索引能命中正文、服务端能生成摘要、能替你抓取外链图片。这三件事都要读得到内容。</p></div>
+      <div class="card"><b>密钥只能写不能读</b><p>拿到 <code>secret</code> 能往这个频道推，但读不到任何历史。读历史要设备密钥或恢复码。</p></div>
+      <div class="card"><b>请上 HTTPS</b><p>帧加密补的是链路，TLS 补的是「服务端本身可信」，两者互不替代。证书做法见 <a href="install.html#tls">安装与部署</a>。</p></div>
     </div>
-    <p>端到端加密被评估过并否决了——它的代价正是上面三件功能。展开版在 <a href="overview.html#trust">概览 · 信任边界</a>。</p>
+    <p>展开版在 <a href="overview.html#trust">概览 · 信任边界</a>。</p>
+  </section>
+
+  <section class="section" id="repos">
+    <div class="head">
+      <h2>源码仓库</h2>
+      <p>三端与文档在同一个仓库里。地址只有两个：GitHub 是主仓，Gitee 是给国内网络准备的镜像。</p>
+    </div>
+    <div class="repo-grid">
+      <div class="repo-card">
+        <span class="top"><b>GitHub</b><span class="host">主仓</span></span>
+        <p>提交历史、Issue 与 CI 都在这边。安装包（APK / Windows Setup）与 Docker 镜像的版本号标签由 CI 在打 <code>v*</code> 标签时产出。</p>
+        <code class="cmd">git clone https://github.com/iamplusdev/push-box.git</code>
+        <a class="go" href="https://github.com/iamplusdev/push-box">github.com/iamplusdev/push-box ↗</a>
+      </div>
+      <div class="repo-card">
+        <span class="top"><b>Gitee</b><span class="host">国内镜像</span></span>
+        <p>国内拉取更快。同步是手动的，所以它可能落后主仓；提 Issue 请回 GitHub。</p>
+        <code class="cmd">git clone https://gitee.com/iamplus/push-box.git</code>
+        <a class="go" href="https://gitee.com/iamplus/push-box">gitee.com/iamplus/push-box ↗</a>
+      </div>
+    </div>
+    <p class="sub">服务端与管理台不用自己构建：一个镜像同时含两者，跑法见 <a href="install.html#prod">Docker 部署</a>。</p>
   </section>
 
 </main>
@@ -176,22 +214,20 @@
       <a href="overview.html">概览</a>
       <a href="install.html">安装与部署</a>
       <a href="usage.html">使用说明</a>
-      <a href="../docs/开发指南.md">开发指南</a>
-      <a href="../docs/测试指南.md">测试指南</a>
+      <a href="protocol.html">长连接与加密</a>
     </nav>
     <nav>
       <b>接口</b>
       <a href="api.html">入站 API</a>
       <a href="client-api.html">客户端 API</a>
-      <a href="protocol.html">长连接与加密</a>
+      <a href="admin-api.html">管理台 API</a>
     </nav>
     <nav>
       <b>仓库</b>
       <a href="https://github.com/iamplusdev/push-box">GitHub</a>
       <a href="https://gitee.com/iamplus/push-box">Gitee</a>
-      <a href="https://gitea.iamplus.cn/iamplus/push-box">Gitea</a>
     </nav>
-    <p class="note">本页零构建：普通 HTML + 一个 CSS + 一个 JS，仓库里双击 <code>site/index.html</code> 就能看。内容取自三端 README 与 <code>docs/软件设计方案.md</code>，协议与字段以代码为准。</p>
+    <p class="note">PushBox · 自托管消息推送 · 1.1.0</p>
   </div>
 </footer>
 </body>

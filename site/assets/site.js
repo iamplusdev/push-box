@@ -36,6 +36,72 @@
     if (e.target.classList && e.target.classList.contains('scrim')) { document.body.classList.remove('nav-open'); }
   });
 
+  /* ---------- 代码高亮：一张规则表，不引第三方、不改变 textContent ---------- */
+  /* 每条规则 = [class, 正则]，正则里只准用 (?:)。顺序就是优先级：注释 > 字符串 > 标志 > 变量 > 关键字 > 数字。
+     只有 SQL 用忽略大小写：全语言忽略会把 mvn/deploy/port 这类普通词当成环境变量名染色。
+     高亮只做一件事——把 textContent 拆成若干 <span>，拼回去还是原来那一串，所以复制按钮复制到的仍是干净命令。 */
+  var SHELL_KW = 'if|then|else|elif|fi|for|in|do|done|while|until|case|esac|function|return|break|continue|'
+    + 'export|source|set|cd|echo|printf|cp|mv|rm|mkdir|chmod|chown|ln|git|curl|wget|npm|npx|node|java|javac|mvn|'
+    + 'docker|compose|bash|adb|dotnet|gradlew|openssl|grep|sed|awk|sort|head|tail|cat|less|mysql|mysqldump|'
+    + 'certutil|tar|gzip|xz|sudo|systemctl|service|age|env';
+  var SQL_KW = 'create|database|table|user|role|grant|revoke|on|to|flush|privileges|select|from|where|and|or|not|'
+    + 'null|insert|into|values|update|set|delete|join|left|inner|outer|order|by|group|limit|offset|count|sum|as|is|'
+    + 'exists|if|identified|password|alter|drop|index|primary|key|references|desc|show|like|between|having|distinct';
+  var QUOTED = "'(?:[^'\\\\]|\\\\.)*'|\"(?:[^\"\\\\]|\\\\.)*\"";
+  /* 命令行参数要连着点号和取值一起吃掉：--pb.s3.delete-grace=2s 是一条参数，不是四段。 */
+  var FLAG = /(?:^|\s)-{1,2}[A-Za-z][\w.-]*(?:=\S*)?/;
+  var RULES = {
+    bash: { f: 'g', r: [
+      ['c', /#[^\n]*/],
+      ['s', new RegExp(QUOTED)],
+      ['f', FLAG],
+      ['n', /\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|\b[A-Z][A-Z0-9_]{2,}\b/],
+      ['k', new RegExp('\\b(?:' + SHELL_KW + ')\\b')],
+      ['n', /\b\d+(?:\.\d+)*\b/]
+    ] },
+    sql: { f: 'gi', r: [
+      ['c', /--[^\n]*|\/\*[\s\S]*?\*\//],
+      ['s', /'(?:[^']|'')*'/],
+      ['k', new RegExp('\\b(?:' + SQL_KW + ')\\b')],
+      ['n', /\b\d+\b/]
+    ] },
+    json: { f: 'g', r: [
+      ['n', /"(?:[^"\\]|\\.)*"(?=\s*:)/],
+      ['s', /"(?:[^"\\]|\\.)*"/],
+      ['k', /\b(?:true|false|null)\b/],
+      ['n', /-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/]
+    ] }
+  };
+  RULES.powershell = RULES.bash;
+  RULES.python = RULES.bash;
+
+  function paint(pre) {
+    var lang = pre.getAttribute('data-code');
+    var rules = RULES[lang];
+    var src = pre.querySelector('code');
+    if (!rules || !src) return;
+    var text = src.textContent;
+    var re = new RegExp(rules.r.map(function (r) { return '(' + r[1].source + ')'; }).join('|'), rules.f);
+    var frag = document.createDocumentFragment(), last = 0, m, i;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      for (i = 1; i < m.length; i++) {
+        if (m[i] === undefined) continue;
+        var span = document.createElement('span');
+        span.className = rules.r[i - 1][0];
+        span.textContent = m[i];
+        frag.appendChild(span);
+        break;
+      }
+      last = re.lastIndex;
+      if (re.lastIndex === m.index) re.lastIndex++;   /* 零宽匹配会把 while 卡死 */
+    }
+    frag.appendChild(document.createTextNode(text.slice(last)));
+    src.textContent = '';
+    src.appendChild(frag);
+  }
+  document.querySelectorAll('pre[data-code]').forEach(paint);
+
   /* ---------- 代码块：右上角复制（读 code 的 textContent，不读 innerText，避免复制到高亮 span 的空白） ---------- */
   document.querySelectorAll('pre[data-code]').forEach(function (pre) {
     var src = pre.querySelector('code');
@@ -113,78 +179,17 @@
       if (file) file.textContent = body;
       if (out) {
         out.textContent =
-          'curl -sS ' + (String(f.get('base') || 'http://127.0.0.1:8080')) + '/message \\\n' +
+          'curl -sS ' + (String(f.get('base') || 'http://127.0.0.1:7404')) + '/message \\\n' +
           "  -H 'Content-Type: application/json' \\\n" +
           '  --data-binary @payload.json\n\n' +
           '# payload.json 就是上面这份；别用 -d 内联，\n' +
           '# Windows 的 Git Bash 会把单引号里的 JSON 改动，服务端只会回「请求体必须是合法 JSON」';
       }
+      if (file) paint(file.parentNode);
+      if (out) paint(out.parentNode);
     }
     form.addEventListener('input', render);
     form.addEventListener('change', render);
     render();
-  }
-
-  /* ---------- 仓库卡片：地址只写在 repos.json，改仓库不用动 HTML ---------- */
-  var grid = document.getElementById('repoGrid');
-  if (grid) {
-    var hint = document.getElementById('repoHint');
-    function host(url) {
-      try { return new URL(url, location.href).host; } catch (e) { return url; }
-    }
-    function card(item) {
-      var a = document.createElement('a');
-      a.className = 'repo-card' + (item.primary ? ' primary' : '');
-      a.href = item.url;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-      var top = document.createElement('span');
-      top.className = 'top';
-      var b = document.createElement('b');
-      b.textContent = item.name;
-      top.appendChild(b);
-      if (item.label) {
-        var t = document.createElement('span');
-        t.className = 'host';
-        t.textContent = item.label;
-        top.appendChild(t);
-      }
-      var p = document.createElement('p');
-      p.textContent = item.desc || host(item.url);
-      var go = document.createElement('span');
-      go.className = 'go';
-      go.textContent = host(item.url) + ' ↗';
-      a.appendChild(top);
-      a.appendChild(p);
-      a.appendChild(go);
-      return a;
-    }
-    function unavailable() {
-      // file:// 下浏览器禁止 fetch 同目录文件，这不是页面坏了，得把原因说清楚
-      if (hint) {
-        hint.hidden = false;
-        hint.textContent = '仓库卡片读不到 repos.json：浏览器不允许 file:// 页面 fetch 本地文件。'
-          + '用静态服务器打开即可显示，例如在 site/ 目录执行 python -m http.server 后访问 http://127.0.0.1:8000/；'
-          '也可以直接打开 repos.json 查看地址。';
-      }
-    }
-    if (location.protocol === 'file:') {
-      unavailable();
-    } else {
-      fetch('repos.json', { cache: 'no-store' })
-        .then(function (r) {
-          if (!r.ok) throw new Error(String(r.status));
-          return r.json();
-        })
-        .then(function (data) {
-          var list = (data && data.repositories) || [];
-          if (!list.length) { unavailable(); return; }
-          list.forEach(function (item) {
-            if (item && item.name && item.url) grid.appendChild(card(item));
-          });
-          if (data.updated && hint) hint.textContent = '共 ' + list.length + ' 个镜像，清单更新于 ' + data.updated + '。';
-        })
-        .catch(unavailable);
-    }
   }
 })();

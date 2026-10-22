@@ -6,6 +6,9 @@
 <title>长连接与加密 · PushBox</title>
 <meta name="description" content="PushBox 长连接与加密：/ws 握手时序、TOFU 指纹、帧类型表、resume_ok 与补拉循环、心跳、单帧截断、密钥轮换与 config 帧。">
 <link rel="stylesheet" href="assets/site.css">
+<link rel="icon" href="assets/img/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32x32.png">
+<link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
 <script src="assets/site.js" defer></script>
 </head>
 <body>
@@ -15,7 +18,7 @@
 
 <nav class="side">
   <a class="brand" href="index.html">
-    <span class="mark">P</span>
+    <span class="mark"><img src="assets/img/icon-192.png" alt=""></span>
     <span><b>PushBox</b><span>1.1.0 · 自托管推送</span></span>
   </a>
   <h3>文档</h3>
@@ -33,7 +36,6 @@
   <ul>
     <li><a href="https://github.com/iamplusdev/push-box">GitHub</a></li>
     <li><a href="https://gitee.com/iamplus/push-box">Gitee</a></li>
-    <li><a href="https://gitea.iamplus.cn/iamplus/push-box">Gitea</a></li>
   </ul>
   <h3>本页</h3>
   <div id="toc"></div>
@@ -49,61 +51,85 @@
   </div>
 
   <h1>长连接与加密</h1>
-  <p class="lede">实时下发的全部机制：一条 WebSocket、一次握手、之后所有帧都进同一个加密通道。这一页解释<b>为什么每个环节长这样</b>——照抄形状容易，抄错语义就会得到"消息偶尔不来"。</p>
+  <p class="lede">实时下发只有一条 WebSocket：一条 <code>/ws</code>，一次握手，之后所有帧走同一个加密通道。排查「消息偶尔不来」或对账协议时，参数与帧形状都在这一页。</p>
 
   <h2 id="endpoint">端点</h2>
   <div class="card">
-    <p style="margin:0"><span class="tag get">WS</span> &nbsp; <code>wss://{host}/ws?since_seq={lastSeq}</code></p>
+    <p><span class="tag get">WS</span> <code>wss://{host}/ws?since_seq={lastSeq}</code></p>
   </div>
   <ul>
-    <li><code>since_seq</code> 是这条连接<b>唯一的 query 参数</b>，客户端存的水位号。缺省视为 0（全量补拉）。</li>
-    <li><b>token 不在 URL 里</b>，它在 <code>auth</code> 帧里。URL 会落进访问日志与反向代理日志，凭据进去就等于泄露。</li>
-    <li>握手之前只有一个明文帧：<code>hello</code>。握手之后下行一律 <code>{t:"enc",n,data}</code>。</li>
+    <li><code>since_seq</code> 是唯一的 query 参数，客户端存的水位号；缺省视为 0，触发全量补拉。</li>
+    <li><b>token 不进 URL</b>：URL 会落进访问日志与反向代理日志。凭据只写在 <code>auth</code> 帧里。</li>
+    <li>握手完成前只有 <code>hello</code> 一帧明文；之后下行一律 <code>{t:"enc",n,data}</code>。</li>
   </ul>
+
+  <h2 id="params">连接参数</h2>
+  <table>
+    <thead><tr><th>参数</th><th>默认值</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>心跳节奏（<code>pb.ws.heartbeat-sec</code>）</td><td>25s</td><td><code>hello</code> 里的 <code>heartbeat</code> 就是这个值</td></tr>
+      <tr><td>判死线</td><td>40s</td><td>heartbeat + 15s 内无任何上行即关闭，原因 <code>heartbeat_timeout</code></td></tr>
+      <tr><td>重连退避</td><td>1s → 60s</td><td>指数翻倍封顶 60s；活过 2× 当前退避后重置回 1s</td></tr>
+      <tr><td>补拉批次（<code>pb.ws.replay-batch</code>）</td><td>500</td><td>循环补发，每批这么多条</td></tr>
+      <tr><td>补拉窗口</td><td>2000 条</td><td>落后超过它就改走 REST 全量补拉</td></tr>
+      <tr><td>单帧上限（<code>pb.ws.frame-max-bytes</code>）</td><td>32768 字节</td><td>超出按码点裁剪正文，不整条丢</td></tr>
+      <tr><td>签名时间窗</td><td>±300s</td><td><code>auth.ts</code> 与服务端时间的允许偏差</td></tr>
+    </tbody>
+  </table>
 
   <h2 id="handshake">握手时序</h2>
   <table>
-    <thead><tr><th>#</th><th>方向</th><th>帧</th><th>明文?</th><th>内容与作用</th></tr></thead>
+    <thead><tr><th>#</th><th>方向</th><th>帧</th><th>明文?</th><th>字段</th></tr></thead>
     <tbody>
-      <tr><td>1</td><td>下行</td><td><code>hello</code></td><td>是</td><td><code>server_time</code> · <code>heartbeat</code>（秒） · <code>server_pub_fp</code> · <code>nonce</code>（32 字节 base64，<b>这是客户端签名的挑战值</b>）</td></tr>
+      <tr><td>1</td><td>下行</td><td><code>hello</code></td><td>是</td><td><code>server_time</code> · <code>heartbeat</code> · <code>server_pub_fp</code> · <code>nonce</code></td></tr>
       <tr><td>2</td><td>上行</td><td><code>auth</code></td><td>是</td><td><code>device_id</code> · <code>token</code> · <code>ts</code> · <code>sig</code></td></tr>
       <tr><td>3</td><td>下行</td><td><code>kx</code></td><td>是</td><td><code>server_pub</code> · <code>eph_pub</code> · <code>sig</code> · <code>epoch</code></td></tr>
       <tr><td>4</td><td>下行</td><td><code>enc</code>…</td><td><b>否</b></td><td>补拉的历史帧 + <code>resume_ok</code>，之后是实时消息</td></tr>
     </tbody>
   </table>
   <div class="callout danger">
-    <p><b>服务端从不发 <code>auth_ok</code></b></p>
-    <p><code>authenticate()</code> 验签通过后<b>直接回 <code>kx</code></b>。所以"kx 到了"才是握手成功的信号；把"等一个 auth_ok"当成就绪条件，会得到一条永远不建通道的连接。<code>auth_ok</code> 这个类型留在帧表里只为兼容第三方实现发出它——Android 客户端收到它是 <code>Unit</code>（忽略）。失败才有下行：<code>auth_fail</code> 带 <code>error</code>（<code>expected_auth</code> / <code>invalid_device</code> / <code>clock_skew</code> / <code>bad_signature</code>），发完即按 policy violation 关闭。</p>
+    <p><b>服务端从不发 auth_ok</b></p>
+    <p>验签通过后直接回 <code>kx</code>——「kx 到了」才是握手成功。把「等一个 auth_ok」当就绪条件，会得到一条永远不建通道的连接。</p>
+    <p>失败才有 <code>auth_fail</code>，带 <code>error</code>：发完即关闭连接。</p>
   </div>
+  <ul>
+    <li><code>hello.nonce</code>：32 字节 base64，<b>这是客户端签名的挑战值</b>。</li>
+    <li><code>auth.ts</code>：epoch 毫秒，窗口 ±300s。</li>
+    <li><code>auth_fail.error</code> 取值：<code>expected_auth</code> / <code>invalid_device</code> / <code>clock_skew</code> / <code>bad_signature</code>。</li>
+    <li><code>auth_ok</code> 这个类型留在帧表里只为兼容第三方实现；Android 收到它直接忽略。</li>
+  </ul>
 
-  <h3>服务端如何确认"你真的持有私钥"</h3>
-  <p>握手帧的 canonical 是<b>四行</b>，逐字节：</p>
-  <pre class="code" data-code="text"><code>pushbox-ws-auth-v1
-{deviceId}
-{base64(serverNonce)}          # hello 里那枚 32 字节挑战值
-{ts}                            # epoch 毫秒，窗口 ±300s</code></pre>
-  <p>用设备的 <code>sign_pubkey</code>（注册时上传的那把）验 Ed25519。<b>token 只是"找设备"的索引，能不能连由签名决定</b>：token 泄露但私钥没走，攻击者仍然连不上；私钥泄露则 token 也拦不住。</p>
+  <h3>握手帧的形状</h3>
+  <pre class="code" data-code="json"><code>{"t":"hello","server_time":1730000000000,"heartbeat":25,"server_pub_fp":"&lt;sha256(server_pub) 前 16 位&gt;","nonce":"&lt;32 字节 base64&gt;"}
+{"t":"auth","device_id":"&lt;设备身份&gt;","token":"&lt;设备令牌&gt;","ts":1730000000000,"sig":"&lt;Ed25519 签名&gt;"}
+{"t":"kx","server_pub":"&lt;服务端身份公钥&gt;","eph_pub":"&lt;服务端临时 X25519 公钥&gt;","sig":"&lt;Ed25519 签名&gt;","epoch":"&lt;递增整数，轮换时 +1&gt;"}
+{"t":"enc","n":"&lt;帧序号&gt;","data":"&lt;base64(AES-256-GCM(内层帧))&gt;"}</code></pre>
+  <p><code>sig</code> 用注册时上传的 <code>sign_pubkey</code> 验 Ed25519。<b>token 只是「找设备」的索引，能不能连由签名决定</b>：token 泄露但私钥没走，攻击者仍然连不上。</p>
 
-  <h3>TOFU：怎么确认对端是"你的"服务端</h3>
-  <p>客户端手里没有服务端的指纹就无从验签，所以 <code>kx</code> 同时带身份公钥，客户端按两步走：</p>
+  <h3>TOFU：怎么确认对端是「你的」服务端</h3>
   <ol>
-    <li>比对 <code>sha256(server_pub)</code> 前 16 位与<b>本机已固定的指纹</b>。<b>首连即固定（TOFU）</b>；之后再变就该拒绝，而不是"弹个框问一下"。</li>
-    <li>用这把身份公钥验 <code>kx.sig</code>，签名覆盖的字节是 <code>server_eph_pub ‖ nonce</code>（<b>直接拼接，不是先哈希</b>）。</li>
+    <li>比对 <code>sha256(server_pub)</code> 前 16 位与本机已固定的指纹。<b>首连即固定（TOFU）</b>；之后再变就该拒绝，而不是「弹个框问一下」。</li>
+    <li>用这把身份公钥验 <code>kx.sig</code>。</li>
   </ol>
-  <p>换正式证书后指纹必然变，这是预期行为——<b>客户端要能"换绑"</b>，Android 的重启/清数据、Windows 的换 CA 都会重记指纹。别把它实现成"永久锁死"。</p>
+  <p>换正式证书后指纹必然变，这是预期行为：客户端要支持「换绑」（清数据、换 CA 都会重记指纹），别实现成永久锁死。</p>
 
   <h2 id="crypto">密钥层级</h2>
   <table>
     <thead><tr><th>材料</th><th>算法</th><th>谁持有</th><th>用途</th></tr></thead>
     <tbody>
-      <tr><td>设备 <code>enc</code> 密钥对</td><td>X25519</td><td>私钥只在设备，公钥上传</td><td>下行会话密钥 K 的协商、REST 响应密封盒</td></tr>
+      <tr><td>设备 <code>enc</code> 密钥对</td><td>X25519</td><td>私钥只在设备，公钥上传</td><td>协商每条连接的会话密钥 K；REST 密封盒</td></tr>
       <tr><td>设备 <code>sign</code> 密钥对</td><td>Ed25519</td><td>私钥只在设备，公钥上传</td><td>WS 握手签名、REST 请求签名</td></tr>
-      <tr><td>服务端身份密钥对</td><td>Ed25519</td><td>服务端进程</td><td>签 <code>kx</code>；指纹 <code>server_pub_fp</code> 供 TOFU</td></tr>
-      <tr><td>会话密钥 K</td><td>X25519 → HKDF-SHA256</td><td>每条连接各算一次</td><td>帧的 AES-256-GCM 密钥；info 串 <code>pushbox-frame-v1</code></td></tr>
-      <tr><td>恢复码</td><td>服务端只存哈希</td><td>用户抄写</td><td>换机/加设备。<b>丢了没有找回途径</b></td></tr>
+      <tr><td>服务端身份密钥对</td><td>Ed25519</td><td>服务端进程</td><td>签 <code>kx</code>；指纹供 TOFU</td></tr>
+      <tr><td>会话密钥 K</td><td>X25519 → HKDF-SHA256</td><td>每条连接各算一次</td><td>该连接帧的 AES-256-GCM 密钥</td></tr>
+      <tr><td>恢复码</td><td>服务端只存哈希</td><td>用户抄写</td><td>换机 / 加设备。<b>丢了没有找回途径</b></td></tr>
     </tbody>
   </table>
-  <p>派生：共享点 <code>shared = X25519(deviceEph.priv, deviceEnc.pub)</code>，再 <code>K = HKDF(shared, salt=nonce)</code>——WS 用 hello 的 nonce 作 salt，REST 密封盒用 <code>sha256(eph_pub)</code> 作 salt。帧加密是 <b>AES-256-GCM，nonce = 帧序号 <code>n</code>，AAD = <code>n</code></b>，所以序号重复必然解密失败，重放无处藏。</p>
+  <ul>
+    <li><b>每一台设备、每一条连接都协商自己的会话钥 K。</b>同一秒两台设备收到的是同一条明文、互不相干的密文。</li>
+    <li>K = HKDF(X25519 共享点, salt=nonce)：WS 用 <code>hello</code> 的 nonce 作 salt；REST 密封盒用 <code>sha256(eph_pub)</code>。info 串为 <code>pushbox-frame-v1</code>。</li>
+    <li>帧加密是 <b>AES-256-GCM，nonce = 帧序号 <code>n</code>，AAD = <code>n</code></b>：序号重复必然解密失败，重放无处藏。</li>
+  </ul>
+  <p>要自研客户端：逐字节构造、签名规范与测试向量都在 <code>docs/</code> 里的方案文档，以那份为准。</p>
 
   <h2 id="frames">帧类型表</h2>
   <p>一行一个 JSON 帧。<b>解析到未知 <code>t</code> 必须忽略而不是崩溃</b>——这是协议能向后加帧的唯一前提。</p>
@@ -112,117 +138,114 @@
     <tbody>
       <tr><td><code>hello</code></td><td>↓ 明文</td><td>见握手</td><td>连接即发</td></tr>
       <tr><td><code>auth</code> / <code>kx</code> / <code>auth_fail</code></td><td>↑ / ↓ / ↓ 明文</td><td>见握手</td><td>握手三帧</td></tr>
-      <tr><td><code>enc</code></td><td>↓ 密文</td><td><code>{t,n,data}</code>，<code>data</code>=base64(AES-GCM)</td><td><b>唯一的密文载体</b>，解开后里面才是下面这些帧</td></tr>
-      <tr><td><code>message</code></td><td>↓</td><td><code>seq id channel_no sender_id type title summary content level url media[] sender_name sender_avatar created_at notify truncated</code></td><td>一条新消息。<b>到达客户端时 <code>media[]</code> 通常已是终态</b>（合并窗口的作用），收到即可直接带图发通知</td></tr>
-      <tr><td><code>media_ready</code></td><td>↓</td><td><code>id seq media[] status</code></td><td>兜底帧：<b>不带新 seq</b>，客户端按 id 原地补图，<b>不重复通知、不推进已读游标</b></td></tr>
-      <tr><td><code>media_failed</code></td><td>↓</td><td>结构同上，只是 <code>t</code> 不同</td><td>重试耗尽后仍失败。客户端把对应格子画成「已失效」，<b>不要再等</b></td></tr>
-      <tr><td><code>read</code></td><td>↓</td><td><code>channel_no sender_id last_read_seq device_id</code></td><td>某个<b>其他端</b>置了已读。带来源 device_id，客户端该忽略自己发起的那一条</td></tr>
-      <tr><td><code>tombstone</code></td><td>↓</td><td><code>id</code> 或 <code>scope{channel_no, sender_id}</code>（互斥，先看 id）</td><td>删除同步。<code>scope.sender_id</code> 为 null 表示清该频道下<b>所有</b>会话。scope 是对象而非拼接串，因为 <code>sender_id</code> 允许含任意字符</td></tr>
-      <tr><td><code>config</code></td><td>↓</td><td><code>reason channel_no? device_id?</code></td><td>配置/凭据变更，见<a href="#config">下表</a></td></tr>
-      <tr><td><code>ping</code> / <code>pong</code></td><td>↓ / ↑</td><td>只有 <code>t</code></td><td>保活。<b>服务端不会回 <code>pong</code></b>，客户端收到就当 RTT 样本用</td></tr>
-      <tr><td><code>resume_ok</code></td><td>↓</td><td>只有 <code>t</code></td><td><b>"已追平"的唯一标记</b>，见<a href="#resume">补拉</a></td></tr>
-      <tr><td><code>resume_gap</code></td><td>↓</td><td><code>missing_from latest_seq</code></td><td>落后太多，<b>改走 REST 全量补拉</b></td></tr>
+      <tr><td><code>enc</code></td><td>↓ 密文</td><td><code>{t,n,data}</code></td><td><b>唯一的密文载体</b></td></tr>
+      <tr><td><code>message</code></td><td>↓</td><td>字段清单见表下</td><td>一条新消息</td></tr>
+      <tr><td><code>media_ready</code></td><td>↓</td><td><code>id seq media[] status</code></td><td>补图兜底</td></tr>
+      <tr><td><code>media_failed</code></td><td>↓</td><td>同 <code>media_ready</code></td><td>抓取失败的终态</td></tr>
+      <tr><td><code>read</code></td><td>↓</td><td><code>channel_no sender_id last_read_seq device_id</code></td><td>某个其他端置了已读</td></tr>
+      <tr><td><code>tombstone</code></td><td>↓</td><td><code>id</code> 或 <code>scope</code></td><td>删除同步</td></tr>
+      <tr><td><code>config</code></td><td>↓</td><td><code>reason channel_no? device_id?</code></td><td>变更通知，见<a href="#config">下表</a></td></tr>
+      <tr><td><code>ping</code> / <code>pong</code></td><td>↓ / ↑</td><td>只有 <code>t</code></td><td>保活</td></tr>
+      <tr><td><code>resume_ok</code></td><td>↓</td><td>只有 <code>t</code></td><td><b>「已追平」的唯一标记</b>，见<a href="#resume">补拉</a></td></tr>
+      <tr><td><code>resume_gap</code></td><td>↓</td><td><code>missing_from latest_seq</code></td><td>落后太多，改走 REST</td></tr>
     </tbody>
   </table>
+  <ul>
+    <li><code>enc.data</code> 是 base64 的 AES-GCM 密文；解开后里面才是上面这些内层帧。</li>
+    <li><code>message</code> 载荷字段：<code>seq id channel_no sender_id type title summary content level url media[] sender_name sender_avatar created_at notify truncated</code>。到达客户端时 <code>media[]</code> 通常已是终态，收到即可带图发通知。</li>
+    <li><code>media_ready</code> 不带新 seq：按 id 原地补图，<b>不重复通知、不推进已读游标</b>。</li>
+    <li><code>media_failed</code>：重试耗尽仍失败。对应格子画成「已失效」，不要再等。</li>
+    <li><code>read</code> 带来源 <code>device_id</code>：客户端应忽略自己发起的那一条。</li>
+    <li><code>tombstone</code> 的 <code>id</code> 与 <code>scope{channel_no, sender_id}</code> 互斥，先看 id。<code>scope.sender_id</code> 为 null 表示清该频道下所有会话。</li>
+    <li><b>服务端不会回 <code>pong</code></b>：客户端把收到的 <code>ping</code> 当 RTT 样本用。</li>
+  </ul>
 
   <h2 id="fanout">组内广播：一条消息，N 份信封</h2>
-  <p>消息<b>落库一次</b>（全局 <code>seq</code>），下发则是<b>逐连接</b>的：服务端遍历会话表里 <code>group_id</code> 相同的每一条 session，各自持锁、用<b>该连接自己的会话密钥与帧序号</b>封一个 <code>enc</code> 信封再写出去。所以同一秒里两台设备收到的是<b>同一条明文、互不相干的密文</b>——帧序号与 nonce 按连接独立，一条连接的 ratchet 不影响另一条。</p>
+  <p>消息<b>落库一次</b>，用全局 <code>seq</code> 排序。下发则是逐连接的：每条在线连接用自己的会话钥与帧序号封一个 <code>enc</code> 信封。</p>
   <ul>
-    <li><b>会话表按 <code>device_id</code> 唯一</b>：同一个设备身份的<b>新连接进来会主动关掉旧的那条</b>，不等心跳超时。这一条决定了"两台设备都收到"必须是<b>两个 <code>device_id</code></b>；把一端的身份复制到另一台机器，得到的只是"两台轮流持有同一条连接"，症状是只有一端收得到而且随启动顺序漂移。</li>
-    <li><b>带频道内容的帧要过逐设备的订阅过滤器</b>：下发前先一次 SQL 取出"这组里哪些设备能收这条频道"（<code>subscribed_only=0</code>，或已接入这条）；<code>config</code>、<code>read</code> 这类<b>不带内容</b>的控制帧永远全组广播、不过滤。这也是<b>接入与取消接入不发 config 帧</b>的原因之一（见<a href="#config">下表</a>）。</li>
-    <li><b>写失败就摘掉那条会话，继续下一个设备</b>：一个已经死掉的客户端不会把整组广播卡住，剩下的那台照样收到。</li>
-    <li><b>日志里那句 <code>在线下发=N</code> 是这个循环发出去的连接数</b>。两端都在线时它应该是 2——"为什么只有一端收到"，第一站就看这个数字。</li>
+    <li>会话表按 <code>device_id</code> 唯一：<b>同一身份的新连接会主动关掉旧连接</b>，不等心跳超时。</li>
+    <li>「两台设备都收到」必须是<b>两个不同的 <code>device_id</code></b>。把一端的身份文件拷到另一台，症状是只有一端收得到、随启动顺序漂移、全程不报错。</li>
+    <li>带频道内容的帧要过逐设备的订阅过滤器；<code>config</code>、<code>read</code> 这类不带内容的控制帧永远全组广播、不过滤。</li>
+    <li>某个设备写失败只摘掉那条会话，继续下一个设备：一台死掉的客户端不会卡住整组广播。</li>
+    <li>服务端日志里的 <code>在线下发=N</code> 就是本轮广播的连接数。两端都在线时它应该是 2——「为什么只有一端收到」先看这个数字。</li>
   </ul>
 
   <h2 id="resume">补拉：断线之后会发生什么</h2>
-  <p>验签通过、通道建好后，服务端立刻按连接上的 <code>since_seq</code> 补发：</p>
-  <pre class="code" data-code="text"><code>latest = 本组最大 seq               # 不是全局 MAX(seq)，见下面第二条
-if (latest - since_seq &gt; 2000)      -&gt; 发 resume_gap，到此为止，客户端走 REST
-else
-  cursor = since_seq
-  loop:                               # 每批 pb.ws.replay-batch（默认 500）
-    rows = 取 cursor 之后的消息（本 Space，且过一遍订阅过滤器）
-    if rows 为空: break
-    逐条发 message 帧（notify=false，走同一个截断规则）
-    cursor = 最后一条的 seq
-  发 resume_ok                        # 整个循环跑完才有这一帧</code></pre>
+  <p>验签通过、通道建好后，服务端立刻按连接上的 <code>since_seq</code> 补发。</p>
   <ul>
-    <li><b><code>resume_ok</code> 是唯一"已追平"标记</b>，整个循环跑完才发一条。补拉帧一律 <code>notify=false</code>——已有同样内容不该重复弹通知。</li>
-    <li>落后超过 <b>2000</b> 条时不发逐条重放，改回 <code>resume_gap{missing_from, latest_seq}</code>，让客户端走 REST 分页拉。<b>"重放快"不等于"重放合适"</b>：几千条帧挤在一条刚建好的连接上，既占带宽又把首屏堵死。<b>这里的 <code>latest</code> 只能跟自己组的行高比</b>：seq 是全局单调的，拿全局 <code>MAX(seq)</code> 减一个刚建好、一条消息都没有的 Space，游标恒为 0，别的 Space 推够 2000 条就把它永远顶过阈值——<b>每次连接都只回 <code>resume_gap</code>、等不到 <code>resume_ok</code></b>，客户端顶栏停在"连接中"而那条连接活得好好的（真服务体检 ② 抓到）。REST 那侧的 <code>latest_seq</code> 仍是全局值，因为 <code>after_seq</code> 本来就是全局游标。</li>
-    <li>这里有个真实踩过的坑：早先的实现<b>只发一批</b>。落后条数落在"一批"与 2000 之间的设备<b>既收不满、也收不到 <code>resume_gap</code></b>，客户端把"这批发完"当成"已经追平"，剩下的消息要等下次断线重连才有机会补上——<b>不重连就永久静默</b>。现在补拉是循环到取空，并由验收探针 ㉑ 用"501 条落后"这一档把回归锁住。</li>
-    <li>发送失败（对端已断）就中断循环，剩下的等它下次重连。</li>
-    <li>这一圈取出来的消息<b>要过一遍逐设备的订阅过滤器</b>：那台设备开着「只接收已接入的频道」、而这条频道它没接入，就不发。<b>实时下发、WS 补拉、REST 历史、搜索这四条路共用同一个判定</b>，所以不会出现"历史上拉得到、实时收不到"这种自相矛盾；它只是投递过滤，<b>不是权限边界</b>（<code>subscribed_only</code> 默认关，见<a href="usage.html#join">使用说明</a>）。</li>
+    <li>每批 <code>pb.ws.replay-batch</code>（默认 500）条，<b>循环发到取空为止</b>；整个循环跑完才发一条 <code>resume_ok</code>。</li>
+    <li>补拉帧一律 <code>notify=false</code>：已有同样内容不该重复弹通知。</li>
+    <li>落后超过 <b>2000</b> 条时不发逐条重放，改回 <code>resume_gap{missing_from, latest_seq}</code>，客户端走 REST 分页拉。</li>
+    <li>这个阈值里的 <code>latest</code> 是<b>本 Space 的最大 seq</b>，不是全局 <code>MAX(seq)</code>：seq 全局单调，别的 Space 的量不该把新建的 Space 顶过阈值、永远只回 <code>resume_gap</code>。</li>
+    <li>REST 那侧的 <code>latest_seq</code> 仍是全局值，因为 <code>after_seq</code> 本来就是全局游标。</li>
+    <li>发送失败（对端已断）就中断循环，剩下的等下次重连。</li>
+    <li>补拉与实时下发、REST 历史、搜索共用同一个订阅过滤器，不会出现「历史上拉得到、实时收不到」。<code>subscribed_only</code> 默认关，见 <a href="usage.html#join">使用说明</a>。</li>
   </ul>
 
-  <h2 id="heartbeat">心跳与判死</h2>
+  <h2 id="heartbeat">心跳、判死与重连</h2>
   <ul>
-    <li><code>hello</code> 里的 <code>heartbeat</code> 就是节奏（<code>pb.ws.heartbeat-sec</code>，默认 <b>25s</b>）：服务端巡检（每 10s 一轮）发现某条连接超过 25s 没有上行，就发 <code>ping</code>；客户端应当回 <code>pong</code>。</li>
-    <li>超过 <b>heartbeat + 15s</b>（默认 <b>40s</b>）仍无任何上行，服务端直接关闭连接，原因 <code>heartbeat_timeout</code>。</li>
-    <li>这条线也解释了移动端为什么需要前台服务：系统冻结后台 → 无法回 <code>pong</code> → 服务端判死，重连之后才能补拉。所以 Android 的「后台常驻」不是锦上添花，见<a href="usage.html#keepalive">使用说明</a>。</li>
+    <li>服务端巡检每 10s 一轮：某条连接超过 25s 没有上行就发 <code>ping</code>，客户端应当回 <code>pong</code>。</li>
+    <li>超过 <b>heartbeat + 15s</b>（默认 40s）仍无任何上行，服务端直接关闭连接，原因 <code>heartbeat_timeout</code>。</li>
+    <li>重连退避（两端一致）：1s 起指数翻倍、封顶 60s；<b>本次连接活过 2 × 当前退避，退避重置回 1s</b>。少了这条，一次长时间掉线会把之后所有重连都拖到 60s 节奏上。</li>
+    <li>系统冻结后台 → 回不了 <code>pong</code> → 被判死，重连之后才能补拉。所以 Android 的「后台常驻」不是锦上添花，见 <a href="usage.html#keepalive">使用说明</a>。</li>
   </ul>
-
-  <h3>重连退避（两端一致）</h3>
-  <p>1s 起指数翻倍、封顶 60s；<b>但如果这次连接活过了 <code>2 × 当前退避</code>，退避就重置回 1s</b>。少了这条，一次长时间掉线会把之后所有重连都拖到 60s 节奏上。</p>
 
   <h2 id="trunc">单帧截断</h2>
-  <p>单帧上限 <code>pb.ws.frame-max-bytes</code>（默认 <b>32768 字节</b>）。正文超出时<b>不是整条丢掉，也不是一刀切字节</b>：</p>
+  <p>单帧上限 <code>pb.ws.frame-max-bytes</code>（默认 32768 字节）。正文超出时不整条丢掉，也不按字节一刀切。</p>
   <ul>
-    <li>按 <code>content_code_points</code> 的<b>码点</b>裁剪（不是 UTF-16 码元），所以永远截不出半个汉字，也修掉了代理对越界的异常；</li>
-    <li>超出的部分写进 <code>content_truncated_at</code>，帧里 <code>truncated: true</code>；</li>
-    <li>客户端要全文时按 id 取：<code>GET /api/v1/messages/{id}</code>（对话页的「展开全文」就是这个）。</li>
+    <li>按<b>码点</b>裁剪（不是 UTF-16 码元），永远截不出半个汉字。</li>
+    <li>超出的部分写进 <code>content_truncated_at</code>，帧里 <code>truncated: true</code>。</li>
+    <li>要全文就按 id 取：<code>GET /api/v1/messages/{id}</code>（对话页的「展开全文」就是这个）。</li>
+    <li>实时下发与断线补拉走同一个裁剪规则：同一条消息「在线收到」和「重连补到」内容一致。</li>
   </ul>
-  <p><b>实时下发与断线补拉走同一个裁剪规则</b>——否则同一条消息"在线收到"和"重连补到"长度不一致，客户端缓存会打架。</p>
-  <div class="callout">
-    <p><b>这个开关不存在，是有意的</b></p>
-    <p>削正文是<b>字节驱动、永远开着</b>的：关掉它等于允许无界大帧。要拿全文走接口，不要走"把帧开大"。</p>
-  </div>
 
   <h2 id="config">config 帧：让在线的那一端即刻知道</h2>
-  <p><code>config</code> 帧<b>不带 seq</b>，所以断线期间的这类帧会丢。这是可接受的：<b>客户端每次建连都会重新拉频道面</b>，config 只负责"在线的这一刻即刻知道"，<b>不承担可靠性</b>。</p>
-  <p>反过来说，<b>接入与取消接入不发 config 帧</b>：它只改<b>这台设备</b>的订阅集，别的设备既不需要知道、也不该因此改变自己的收件范围——所以那两发的结果只回给发起方自己（见<a href="client-api.html">客户端 API</a>的频道面）。</p>
+  <p><code>config</code> 帧<b>不带 seq</b>，断线期间的这类帧会丢，这是可接受的：客户端每次建连都会重新拉频道面。接入与取消接入也不发 config，结果只回给发起方（见 <a href="client-api.html">客户端 API</a>）。</p>
   <table>
     <thead><tr><th><code>reason</code></th><th>附带</th><th>客户端该做什么</th></tr></thead>
     <tbody>
-      <tr><td><code>secret_rotated</code></td><td><code>channel_no</code></td><td>提示"旧密钥已作废"（新 secret 不会再下发到别的端）</td></tr>
-      <tr><td><code>channel_updated</code></td><td><code>channel_no</code></td><td>重拉频道面（治理位变了）</td></tr>
+      <tr><td><code>secret_rotated</code></td><td><code>channel_no</code></td><td>提示「旧密钥已作废」</td></tr>
+      <tr><td><code>channel_updated</code></td><td><code>channel_no</code></td><td>重拉频道面</td></tr>
       <tr><td><code>channel_archived</code></td><td><code>channel_no</code></td><td>标记归档态</td></tr>
-      <tr><td><code>channel_no_reset</code></td><td><code>channel_no</code>（<b>新号</b>）</td><td>本地会话仍以旧号存着，收到这条只需重拉频道面把新号显示出来</td></tr>
+      <tr><td><code>channel_no_reset</code></td><td><code>channel_no</code>（新号）</td><td>重拉频道面把新号显示出来</td></tr>
       <tr><td><code>senders_updated</code></td><td><code>channel_no</code></td><td>重拉白名单</td></tr>
-      <tr><td><code>recovery_code_rotated</code></td><td>—</td><td>别再展示那个已经失效的旧码</td></tr>
-      <tr><td><code>device_revoked</code></td><td><code>device_id</code></td><td>设备名单即刻对上，不用等下次进设置页</td></tr>
+      <tr><td><code>recovery_code_rotated</code></td><td>—</td><td>停掉旧码的展示</td></tr>
+      <tr><td><code>device_revoked</code></td><td><code>device_id</code></td><td>设备名单即刻对上</td></tr>
     </tbody>
   </table>
-  <p><code>channel_no</code> 与 <code>device_id</code> 都可能为 null（组级变更两者都空）。<b>按"整面刷新"处理最省事，也最不容易漏。</b></p>
+  <p><code>channel_no</code> 与 <code>device_id</code> 都可能为 null（组级变更两者都空）。<b>按「整面刷新」处理最省事，也最不容易漏。</b></p>
 
   <h2 id="rotate">密钥轮换</h2>
   <ul>
-    <li>触发条件（任一）：连接跨 <b>24 小时</b>，或本 epoch 已发 <b>2³²</b> 帧。前者是常态，后者防的是"长连接跨年"算崩 AES-GCM 计数器。</li>
-    <li>做法：拿设备静态 <code>enc</code> 公钥<b>重做一次 X25519</b>，明文下发新 <code>kx</code>（<code>epoch</code> 递增、签名覆盖 <code>eph_pub‖nonce</code>），之后继续走原 <code>since_seq</code> 语义。</li>
-    <li>GCM 单密钥有安全帧数上限，2³² 这个数是照着上限留了大余量挑的。</li>
+    <li>触发条件（任一）：连接跨 <b>24 小时</b>，或本 epoch 已发 <b>2³²</b> 帧。</li>
+    <li>做法：拿设备静态 <code>enc</code> 公钥重做一次 X25519，明文下发新 <code>kx</code>（<code>epoch</code> 递增），之后继续走原 <code>since_seq</code> 语义。</li>
+    <li>客户端发现 <code>n</code> 不连续（跳号或回退）就<b>断开重连带 <code>since_seq</code></b>，不要试图「补一帧」——那意味着连接被复用或有人在重放。</li>
   </ul>
-  <p>序号还能当<b>完整性检查</b>用：<b>客户端发现 <code>n</code> 不连续（跳号或回退）就该断开重连带 <code>since_seq</code></b>，而不是试图"补一帧"——那意味着连接被复用或有人在重放。</p>
 
   <h2 id="client">实现清单</h2>
   <div class="grid c2">
-    <div class="card"><h4 style="margin-top:0">必须做的</h4>
-      <p style="margin:0;font-size:13.5px">① 首连固定指纹、之后比对；② <code>n</code> 严格递增否则断连；③ 未知 <code>t</code> 忽略；④ <code>notify=false</code> 的补拉帧不出通知；⑤ <code>read</code> 游标<b>只增不减</b>；⑥ 收到 <code>resume_ok</code> 才认为追平；⑦ 重连带 <code>since_seq</code>；⑧ 退避要能重置</p></div>
-    <div class="card"><h4 style="margin-top:0">容易多做的</h4>
-      <p style="margin:0;font-size:13.5px">① 等 <code>auth_ok</code>（服务端不发）；② 把 <code>media_ready</code> 当新消息再通知一次；③ 收到 <code>resume_gap</code> 还在等重放；④ 对 <code>truncated</code> 帧直接显示省略号而不回捞；⑤ 把 config 帧当可靠通道（它不带 seq）</p></div>
+    <div class="card">
+      <b>必须做的</b>
+      <p>① 首连固定指纹、之后比对；② <code>n</code> 严格递增否则断连；③ 未知 <code>t</code> 忽略；④ <code>notify=false</code> 的补拉帧不出通知；⑤ <code>read</code> 游标只增不减；⑥ 收到 <code>resume_ok</code> 才认为追平；⑦ 重连带 <code>since_seq</code>；⑧ 退避要能重置。</p>
+    </div>
+    <div class="card">
+      <b>容易多做的</b>
+      <p>① 等 <code>auth_ok</code>（服务端不发）；② 把 <code>media_ready</code> 当新消息再通知一次；③ 收到 <code>resume_gap</code> 还在等重放；④ 对 <code>truncated</code> 帧直接显示省略号而不回捞；⑤ 把 config 帧当可靠通道（它不带 seq）。</p>
+    </div>
   </div>
-  <p>离线期间的可靠性另有两条兜底：Android 的 WorkManager 约<b>每 15 分钟</b>跑一次 REST 补拉（也是"极致省电轮询"那档），Windows 的删除/已读上报有自己的攒批与退避队列（<code>DeleteReporter</code>，故意只放内存，不承诺跨进程重启不丢）。</p>
+  <p>离线兜底：Android 的 WorkManager 约每 15 分钟走一次 REST 补拉（省电/轮询档）；Windows 只有退避重连这一条路，已读与删除上报走内存态攒批队列，不承诺跨进程重启不丢。</p>
 
   <h2 id="debug">联调时怎么看</h2>
   <pre class="code" data-code="bash"><code># 连接数 / 各 Space 水位：判断"是没发还是没收到"的第一现场
 PB_TOKEN=&lt;设备令牌&gt; bash deploy/run-dev.sh metrics
 
-# 服务端日志按设备过滤（正文与凭据不会出现在日志里，见服务端 README 的日志节）
+# 服务端日志按设备过滤
 grep -F "&lt;deviceId&gt;" ~/Library/Logs/pushbox/server.log      # 本机在 C:\Users\&lt;name&gt;\logs\pushbox\server.log
 
-# 补拉行为：把批次调到很小，观察是否循环发完才回一个 resume_ok
+# 把补拉批次调到很小，观察是否循环发完才回一个 resume_ok
 --pb.ws.replay-batch=200</code></pre>
-  <p>探针 ㉑ 覆盖的正是"落后 501 条 → 逐条收满 → 末尾恰好一个 <code>resume_ok</code>"这条判据；改补拉逻辑一定要跑它。</p>
 
-  <div class="foot">读侧接口见 <a href="client-api.html">客户端 API</a>；写入侧见 <a href="api.html">入站 API</a>。</div>
+  <div class="foot">读侧接口见 <a href="client-api.html">客户端 API</a>；写入侧见 <a href="api.html">入站 API</a>；日常使用与保活见 <a href="usage.html">使用说明</a>。</div>
 </div>
 </main>
 </div>
