@@ -7,6 +7,19 @@
 
 ---
 
+## 未发布（下一版）—— Windows 那次查不到名字的红，修的是"红因有没有出口"（第二十九轮）
+
+> 起点是 `v1.1.0` 发出去之后紧接着的一笔：`main` 上 `ci.yml` 的 Windows job 红了一次，而这一轮改的既不是 C# 也不是构建脚本——是"红了以后能不能知道红在哪一条"。
+
+- **事实摆全**：head `7b148ea`（内容只有文档 + 两个 Release NOTE 模板，一个 C# 字节都没动）上，`ci.yml`（run `39725750003`）的「Windows 端测试」第 4 步 `dotnet test PushBox.Crypto.Tests` 跑 99 秒后失败，同一 run 的另外三个 job（管理台、服务端、Android）全 success。**第 5 步「断言 C# 用例数没有被静默裁剪」被 skip**——它没写 `if:`，默认继承 `success()`，于是唯一能回答"哪几条红了"的那一步在最需要它的时候不执行；匿名能读到的 annotation 只有两条：一条 Node 20 弃用告警和一条 `Process completed with exit code 1`。
+- **本机复现不出，也不像时区**：同一条命令（连 CI 那几个参数一起：`--results-directory TestResults --logger "trx;…"`）**554/554 全绿**；考虑到 runner 当时是 05:02 UTC 而本机是 UTC+8，再带 `TZ=UTC` 跑一次，仍然 554/554。下一笔 `f9b1c67` 的同一个 job 又绿（run `39727438065`，第 4、5 步都 success）。所以这一句只写到"一次红、两次绿、红因未知"，**没写到"确认是 runner 抖动"**——那需要名字。
+- **修的是出口**：第 5 步加 `if: always()`，并把每条非 Passed 的用例名 + 断言首行写成 `::error::` annotation（同时进 `$GITHUB_STEP_SUMMARY`）。annotation 走 check-run 那条端点，**匿名可读**，等于把红因发到公开面上，不用再靠"登录了才能看日志"。
+- **顺手补的两条边界**：① trx 半路损坏时 `[xml]` 转换会把变量留成空，下面那句属性访问会数出"1 条用例、没通过"，把解析故障报成用例红——现在先判 `$report.TestRun` 是否存在；② 用例全绿但 `dotnet test` 退出码非 0（还原/编译/工具链）要单独报一条，不能跟着落一句"✅ 全部执行"。
+- **判据是四种输入各跑一遍，不是"看着改对了"**（把 `run` 块从 YAML 里原样抽出来，在本地 PowerShell 上喂不同 trx）：干净 trx 退 0；`DOTNET_OUTCOME=failure` + 全绿退 1 且报工具链那一族；截断 5KB 的坏 trx 报"解析失败"而不是"1 条用例红"；**字节级变异过的 trx**（自关闭的 `outcome="Passed"` 挑两条改成 `Failed` 并塞进带 `
+` 的多行 `ErrorInfo`，第三条改 `NotExecuted`）逐条出 annotation。变异脚本自带"变异必须真生效"的断言（`Failed`=2、`NotExecuted`=1、`Passed`=551，且输出里必须出现 `Assert.Equal() Failure`）——**这条断言这一轮真抓到东西**：第一版把断言文本取成 `$r.errorInfo`，PowerShell 的 XmlDocument 适配器只按子元素层级出属性，正确路径是 `Output/ErrorInfo/Message`，取错时 annotation 里只剩用例名、那句话整个丢掉，而上一版负测就是这么"绿"过去的。
+- **顺带订正一条写过头的话**：上面"复现路径"那条原来写"runner 日志与 surefire artifact 匿名都是 401，读不到"，容易被读成"CI 的一切匿名都读不到"。实测边界是：**日志与 artifact 要登录**（401/403），**`GET /repos/<仓库>/check-runs/<job id>/annotations` 匿名 200 可读**，`…/check-runs/<id>` 本体同样 200。这一句现在也写进了 `ci.yml` 那步的注释里，因为下一步的红因就靠这条通道出。
+- **仍然没有答案的两件**：`7b148ea` 那一次到底红在哪几条（那一步当时被 skip，事后补不出来，trx 也不在手上）；`v1.1.0` 的 Release 页首行仍是 `push-box:v1.1.0`（本机无 `gh`、无 token，改不掉），正确文案从下一个 tag 起生效。
+
 ## v1.1.0（2026-10-22）—— 本机起步那条路第一次真跑通（第二十八轮）
 
 > 技术决策见 [软件设计方案](docs/软件设计方案.md) §11.1.2 / §11.2.1；这一轮的起点是"发布前还有哪些可优化项"那张清单里的第 1、2、3、5 项加计数闸。
@@ -67,7 +80,7 @@
 - **首跑结论（`ab5c9fb7` 推成 `main`，2026-10-22）**：`docker-publish.yml` 真推 `main`/`sha-*`、`build-apk.yml`、`build-msi.yml`、`update-dockerhub-description.yml`（历史首跑）、`site-deploy.yml`（首推 `gh-pages`，Pages 构建绿，站点实测 200）五个 success；`ci.yml` 的 `server` job 红在 `mvn -B -pl server -am test`，1m14s 就退，另外三个 job 都绿。
 - **根因**：`MediaSsePipelineTest` 那 7 条 `@Autowired S3Client`，而这一轮把 dev 的默认存储类型改成了 `local`（"本机起步只要一个口令"那次），`local` 下 `S3Config` 根本不建这个 bean——于是 `UnsatisfiedDependencyException`，7 条一起 ERROR。这条组合只有 CI 会撞到：本机没有 `PB_S3_ACCESS_KEY` 时这 7 条整类跳过，CI 里凭据齐了门放开、跑法却还是 `local`。**同一天新加的 `DevCredentialsGuard` 反向 WARN 其实一直在日志里说这件事**（"配了 `PB_S3_*` 但走 local，一个字都不读"），但它只 WARN、不判红，所以拦不住。
 - **修法改测试自己，不改 CI 的环境**：`@SpringBootTest(properties = …)` 里补 `"pb.storage.type=s3"`——这个类要的是真桶，前提就该由它自己声明，而不是指望 runner 恰好把默认值设成 s3。CI 的 env 一个字没动，任何带 `PB_S3_*` 但没有 `PB_STORAGE_TYPE` 的开发机也从此跑出同一份判据。
-- **复现路径**（runner 日志与 surefire artifact 匿名都是 401，读不到）：WSL 里起 CI 同款 `mysql:8.4 --ngram_token_size=2`（实测 `@@version=8.4.11`、`@@ngram_token_size=2`）+ `rustfs` + aws-cli 建桶 `pushbox`，端口发到宿主，Windows 侧用本机那份热 `~/.m2` 跑 `mvn -B -pl server -am test`。**先在 WSL 里跑失败过一次**：容器内现下依赖实测 2.6 kB/s，等不起，所以换成宿主跑 mvn。复现结果与 CI 同形（`Tests run: 263, Errors: 7`），修完这 7 条变 7/7 绿（单类 20.8s）。
+- **复现路径**（当时手上只有匿名 HTTP：runner 日志与 surefire artifact 都 401/403 取不到，`check-runs/<id>/annotations` 那一路后来实测是 200 可读，但那次它只给得出"exit code 1"，见下面第二十九轮）：WSL 里起 CI 同款 `mysql:8.4 --ngram_token_size=2`（实测 `@@version=8.4.11`、`@@ngram_token_size=2`）+ `rustfs` + aws-cli 建桶 `pushbox`，端口发到宿主，Windows 侧用本机那份热 `~/.m2` 跑 `mvn -B -pl server -am test`。**先在 WSL 里跑失败过一次**：容器内现下依赖实测 2.6 kB/s，等不起，所以换成宿主跑 mvn。复现结果与 CI 同形（`Tests run: 263, Errors: 7`），修完这 7 条变 7/7 绿（单类 20.8s）。
 - **修完全量复跑是 `core 43 + server 263 = 306、跳过 0`，但仍有 3 条红，全在这台机器的出网**：`error=unreachable host=picsum.photos`（`MediaSsePipelineTest` 两条）与 `http_404 host=httpbin.org`（`MediaFetchServiceTest.generatesThumbnail`），断言都是 `expected: "ready" but was: "failed"`——抓取侧到不了那两台公共图床，不是装配问题。**这类"用例依赖公网图床"的脆弱面本条只登记、没改**：CI runner 那边一直够得着，所以历史上绿过；真要钉死得把那几条换成本机起的测试图片服务，那是另一件事。
 - **`v1.1.0` 标签在这条转绿之前不打**：Docker Hub 的版本标签按本仓口径不可变（`1.1.0`/`1.1`/`latest` 一旦推错只能换个号重来），而 `v*` 事件同时开 GitHub Release。**这条规矩当天就兑现了**——先等 `main` 上 `ci.yml` 绿（head `f86eeac` run `39722819597` 四 job 全 success，第 8 步 `skipped == 0` 且用例数 ≥ 306 第一次在 `main` 上跑到），再把只剩文档改动的 `4e2fd71` 推成 tip、在它上面打 tag，见下面「发出去」那一节。
 
