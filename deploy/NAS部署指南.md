@@ -230,7 +230,9 @@ docker network inspect <项目名>_default -f '{{range .IPAM.Config}}{{.Subnet}}
 每条都对上了预期的输出与退出码。
 
 **没有实测过的**：飞牛/群晖/1Panel 的图形界面本身——按钮的确切位置、"Compose 项目"表单怎么吃这本
-YAML、镜像拉取要不要先在 Docker 设置里配国内加速源、ARM 机型（见第 0 节架构那条）。
+YAML、镜像拉取要不要先在 Docker 设置里配国内加速源、ARM 机型（见第 0 节架构那条）。v1.1.3 的
+`VOLUME` 只验到镜像元数据（`docker image inspect` 与 Hub config blob 都是
+`{"/app/data/media":{},"/app/logs":{}}`），**飞牛表单是否真的把这两行渲染出来仍没有实机截图**。
 第 5 节里"绑定挂载到 NAS 共享文件夹 → uid 10001 写不动"那条是按容器内运行用户推出来的判据，
 判据代码在镜像里跑过（给一个 root 属主的空目录能稳定复现那句报错），但**没有在飞牛的共享文件夹上复现过**。
 上面第 4 节那句 `Started PushboxServerApplication in 7.163 seconds` 是这台开发机的耗时，

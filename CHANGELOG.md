@@ -25,7 +25,11 @@
 
 ### 发布（2026-10-22）
 
-- 版本号 `1.1.2 → 1.1.3`（`--only=server`），只打 `server-v1.1.3`，Android / Windows 两条链不触发。
+- 版本号 `1.1.2 → 1.1.3`（`--only=server`），只打 `server-v1.1.3`。标签事件只触发服务端链（run `39767681288`，`Validate Docker Hub credentials` → 版本闸门 → `Build and push` 全 success），Android / Windows 两条标签链没有被触发。
+- **Hub 上的镜像复核到的是元数据，不是 CI 退出码**：`1.1.3` / `1.1` / `latest` / `sha-d8c1486` 四枚指向同一 digest `sha256:1d021fd0e796caafdc0febaad5943671bcca7548a7f83efb3cd348bc445fb8d8`；从 registry 取 `1.1.3` 的 config blob，`Volumes={'/app/data/media': {}, '/app/logs': {}}`、`User=pushbox`，ENV 仍只有 v1.1.2 那 10 项，没有多出 `PB_S3_*` 或口令键。`main` 是同一 commit 上的另一次构建（digest `sha256:3c954e77…`），不冒充版本标签。
+- 旧的 `1.1.2` 与 `sha-9f8e201` 已从 Hub 删除，当前只剩 `1.1.3` / `1.1` / `latest` / `main` / `sha-d8c1486` 五枚。
+- **`main` 上的连带 run**：这次 push 改了 `core/pom.xml` 的 parent 版本，所以 `ci.yml`、`site-deploy.yml`、`docker-publish.yml`（main 镜像）与 `build-apk.yml`（只构建、不发 Release）都跑了；Windows 链没跑。六条 run 全部 success。`build-apk.yml` 被 `core/**` 路径过滤带起来是分端过滤的已知边界，不是又回到了"改服务端全套重发"——它没有标签、没有 Release。
+- 发布前 `bash scripts/release-verify.sh` 是 **67 通过 / 0 失败 / 2 警告**（警告是工作区未提交与本机无 docker CLI 判镜像体积）；新增的 VOLUME 闸门也在这 67 条里。
 
 ---
 
