@@ -12,8 +12,10 @@ spring:
     username: ${PB_DB_USERNAME:pushbox}
     # 留空时进程并不会当场拒绝启动：口令这类占位符是惰性替换的，而 Hikari 首用才连库，
     # 于是症状是 /healthz 报 db=down、每条入站 500，容器却看起来一切正常（healthcheck 只探 TCP）。
-    # 真正把这道关守住的是 compose 里的 ${PB_DB_PASSWORD:?}；绕过 compose 直接跑 jar 的人得自己
-    # 确认 PB_DB_URL / PB_DB_PASSWORD / PB_S3_ENDPOINT / PB_S3_ACCESS_KEY / PB_S3_SECRET_KEY 都在。
+    # 真正把这道关守住的是容器 entrypoint（deploy/Dockerfile 第 1 段）：它对着 NAS 图形界面那种
+    # "只有环境变量表格、没有 .env" 的形态判死，compose 侧刻意不再用 ${VAR:?} 拦（D76）。
+    # 绕过镜像直接跑 jar 的人得自己确认 PB_DB_URL / PB_DB_PASSWORD /
+    # PB_S3_ENDPOINT / PB_S3_ACCESS_KEY / PB_S3_SECRET_KEY 都在。
     password: ${PB_DB_PASSWORD}
 
 server:
@@ -52,9 +54,12 @@ pb:
     # none|sse-c。sse-c 时 PB_S3_MASTER_KEY 必须是 base64 的 32 字节；缺失或长度不对
     # 会在 MediaObjects 构造期抛异常让进程起不来（绝不静默写明文）。
     # 主钥一旦用过就不可轮换：换了旧封装钥再也解不开。
-    # 这一行的默认值 none 在 prod 不再是不用管的选项：明文存媒体会让图片/头像在桶里裸奔，
-    # 而 PB_S3_OBJECT_ENCRYPT 带默认值、compose 的 ${VAR:?} 卡不住它，所以由 ProdPlaintextMediaGuard
-    # 在启动时拒绝——要么配 sse-c，要么显式打开迁移期逃生阀 PB_ALLOW_PLAINTEXT_MEDIA=1。
+    # 这一行的默认值 none 在 prod 不再是"用不管的选项"，但判据分两档（D76）：
+    #   · type=s3   —— 明文桶会让图片/头像被同一把 AK/SK 的任何读者读走，ProdPlaintextMediaGuard 直接拒绝启动。
+    #   · type=local —— 对象在部署者自己的盘上、逐文件 600 权限，守卫只出声；逼人为了过检查去配一个桶，
+    #                    换来的正是这套守卫想消灭的那种"为一个开关而存在的凭据"。
+    # 两条路都可以显式 PB_ALLOW_PLAINTEXT_MEDIA=1 表态，也可以设 sse-c 真加密。
+    # PB_S3_OBJECT_ENCRYPT 带默认值、compose 的插值闸卡不住它，所以判据落在守卫与 entrypoint 两处，必须同进同退。
     object-encrypt: ${PB_S3_OBJECT_ENCRYPT:none}
     master-key: ${PB_S3_MASTER_KEY:}
   admin:

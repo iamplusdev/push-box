@@ -67,6 +67,8 @@ android/.kotlin/
 
 # 真机截图与验收现场，每次跑都换一批名字；留本机当证据，不入库
 /.tmp-shot/
+# 容器 entrypoint 的本机跑法（按 BuildKit 规则还原脚本 + 25 条场景矩阵），同样是每次重生的现场
+/.tmp-deploy/
 /verify/
 # ci.yml 的 windows job 用它做 trx 计数闸的输入，本机复跑同一命令就会生成
 windows/TestResults/

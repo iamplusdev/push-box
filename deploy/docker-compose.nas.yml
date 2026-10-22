@@ -1,0 +1,93 @@
+# 给"没有 .env、只能在图形界面里逐条填变量"的机器：飞牛 FNOS、群晖 Container Manager、1Panel 的
+# Compose 项目都可以直接把这一本贴进去。与 docker-compose.yml 的分工写在 docs/软件设计方案.md D76：
+#   · docker-compose.yml —— 有 .env、有 Caddy 反代、外接对象存储的生产拓扑。
+#   · 本文件 —— 一台 NAS、一个 MySQL、图片落在卷里的自用拓扑。
+# 两条铁律：
+#   1) 本文件刻意不使用任何 ${VAR} 插值。图形界面里没有文件可编辑，解析阶段的
+#      "required variable ... is missing a value" 既读不懂也改不动——那正是 2026-10-22 有人
+#      在飞牛上撞到的那条。要改的值一律写成字面量。
+#   2) 需要人填的只有两处：库地址 PB_DB_HOST 与库口令 PB_DB_PASSWORD。其余项镜像自带默认值
+#      （deploy/Dockerfile 的 ENV 段），列在这里只是为了让人看得见它们存在。
+#      口令一律不要提交回仓库：这份文件贴进 NAS 之后就留在那台机器上，不要反过来把填好值的它 push 上去。
+
+name: pushbox-nas
+
+services:
+  pushbox:
+    # CI 按 semver 去掉 git tag 的 v 推标签，所以 Hub 上是 <主.次.补丁> / <主.次> / latest 三种写法指向
+    # 同一个镜像；带 v 的形式（v1.2.0 这样）在 Hub 上不存在，别照抄。
+    # 想用自己现场出的镜像（ARM 机型，或不想等发版），把下面这行换成 pushbox:local：
+    #   docker build -f deploy/Dockerfile -t pushbox:local .
+    image: docker.io/iamplusdev/push-box:latest
+    environment:
+      # ==== 只有这两项必须改 ====
+      # 库在哪。⚠ 不要写 127.0.0.1 或 localhost：容器里那个环回是它自己，不是 NAS。
+      # 飞牛上装的 MySQL（应用中心或自己起的容器）就填 NAS 的局域网 IP，例如 192.0.2.20。
+      # 用下面那段自带 mysql 的走法时，这里填服务名 mysql。
+      PB_DB_HOST: 192.0.2.20
+      PB_DB_PASSWORD: 把库口令填在这里
+      # ==== 以下都有默认值，按需再看 ====
+      PB_DB_PORT: "3306"
+      PB_DB_NAME: pushbox
+      PB_DB_USERNAME: pushbox
+      # 镜像里跑的是 uid 10001，对象与日志都落在下面这两个 named volume 里。
+      # 别改成"挂一个 NAS 共享文件夹进来"：绑定挂载会把宿主目录的属主带进容器，而图形界面建出来的
+      # 目录属 root，uid 10001 写不动。那种配法不会让容器起不来，只会让每条带图的消息停在 failed。
+      # 真要用共享文件夹，先在 NAS 上把它交给 10001：sudo chown -R 10001:10001 <那个目录>
+      PB_STORAGE_TYPE: local
+      PB_STORAGE_LOCAL_PATH: /app/data/media
+      PB_LOG_DIR: /app/logs
+      # 明文落在自己的盘上（逐文件 600 权限）。想连本地盘也加密就改成：
+      #   PB_S3_OBJECT_ENCRYPT: sse-c
+      #   PB_S3_MASTER_KEY: 一个 base64 的 32 字节（openssl rand -base64 32）——用过就不可轮换，
+      #   换了它旧图片再也解不开，所以先把这句读第二遍再动手。
+      PB_S3_OBJECT_ENCRYPT: none
+      # 管理台：两把都留空 = 整个管理台不开放（客户端收发消息、建频道照常在 Android/PC 里做）。
+      # 要用浏览器管理就同时填两项，各生成一把、不许相同：openssl rand -base64 32
+      # 只填口令不填签名钥、或两把同值，容器会在启动前点名拒绝，不会静默降级。
+      PB_ADMIN_SECRET: ""
+      PB_ADMIN_JWT_SECRET: ""
+      PB_SERVER_PORT: "7404"
+    ports:
+      # 局域网内手机/PC 直连这个端口就够（注册时填 http://<NAS_IP>:7404）。
+      # 要暴露到公网就得自己上 HTTPS 反代：明文链路上跑的是消息正文与管理台口令。
+      - "7404:7404"
+    volumes:
+      - server_media:/app/data/media
+      - server_logs:/app/logs
+    healthcheck:
+      # 只做 TCP 探活：`/healthz` 会真连库，用业务探活做 healthcheck 等于让一次数据库抖动就把容器判死
+      # （镜像里有 curl，选 TCP 是因为判据不同，不是因为缺工具）。
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7404"]
+      interval: 10s
+      timeout: 3s
+      start_period: 60s
+      retries: 6
+    restart: unless-stopped
+
+  # ---- 想在同一个项目里顺带起一个 MySQL（NAS 上还没有库时）----
+  # 取消注释后：上面的 PB_DB_HOST 改成 mysql，PB_DB_PASSWORD 与这里的 MYSQL_PASSWORD 填同一个值
+  # （compose 没法在一个文件里引用自己写过的值，两处同值是这套写法的代价）。
+  # 首启 Flyway 要建九张表，慢个几十秒是正常的；entrypoint 会先把库等到可达才交给 Java。
+  #
+  # mysql:
+  #   image: docker.io/library/mysql:8.4
+  #   # ngram_token_size=2 是中文全文搜索的前提（V1 迁移里的 FULLTEXT ... WITH PARSER ngram）。
+  #   command: --ngram_token_size=2
+  #   environment:
+  #     MYSQL_ROOT_PASSWORD: 另一个强口令
+  #     MYSQL_DATABASE: pushbox
+  #     MYSQL_USER: pushbox
+  #     MYSQL_PASSWORD: 把库口令填在这里
+  #   volumes:
+  #     - db_data:/var/lib/mysql
+  #   restart: unless-stopped
+  #
+  # 不发布 3306 端口是刻意的：pushbox 容器与它在同一个默认网络上，按服务名就能连，
+  # 而把一个能读写 pushbox 库的端口摆到局域网里没有任何收益。
+
+volumes:
+  server_media: {}
+  server_logs: {}
+  # 用了上面那段 mysql 才需要：
+  # db_data: {}

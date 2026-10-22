@@ -8,12 +8,17 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: pushbox/server:1.1.0
+    image: pushbox/server:1.1.1
     environment:
       SPRING_PROFILES_ACTIVE: prod
-      PB_DB_URL: ${PB_DB_URL:?PB_DB_URL 未设置}
+      # 与主文件同口径（D76）：一项 :? 都没有，必填判据在容器 entrypoint 里。
+      # 库地址两种写法：只给 PB_DB_HOST（镜像默认 mysql），或给完整 PB_DB_URL（两者都给时 URL 赢）。
+      PB_DB_URL: ${PB_DB_URL:-}
+      PB_DB_HOST: ${PB_DB_HOST:-mysql}
+      PB_DB_PORT: ${PB_DB_PORT:-3306}
+      PB_DB_NAME: ${PB_DB_NAME:-pushbox}
       PB_DB_USERNAME: ${PB_DB_USERNAME:-pushbox}
-      PB_DB_PASSWORD: ${PB_DB_PASSWORD:?PB_DB_PASSWORD 未设置}
+      PB_DB_PASSWORD: ${PB_DB_PASSWORD:-}
       # 与主文件同口径：这三项用 :-（可空）而不是 :?（必填）。PB_STORAGE_TYPE=local 时它们本来就不该有值，
       # 而必填会把"顺手起一个不带 RustFS 的测试栈"这条路堵死；真走 s3 时缺值由 S3Config 与镜像入口脚本点名拒绝启动。
       PB_S3_ENDPOINT: ${PB_S3_ENDPOINT:-}
@@ -28,8 +33,10 @@ services:
       PB_S3_OBJECT_ENCRYPT: ${PB_S3_OBJECT_ENCRYPT:-none}
       PB_S3_MASTER_KEY: ${PB_S3_MASTER_KEY:-}
       PB_ALLOW_PLAINTEXT_MEDIA: ${PB_ALLOW_PLAINTEXT_MEDIA:-}
-      PB_ADMIN_SECRET: ${PB_ADMIN_SECRET:?PB_ADMIN_SECRET 未设置}
-      PB_ADMIN_JWT_SECRET: ${PB_ADMIN_JWT_SECRET:?PB_ADMIN_JWT_SECRET 未设置}
+      # 与主文件同口径：留空 = 管理台禁用（一个安全状态），要开就得两把钥都配；
+      # 只配一把、两把同值、短于下限都由 entrypoint 在启动 Java 之前点名拒绝。
+      PB_ADMIN_SECRET: ${PB_ADMIN_SECRET:-}
+      PB_ADMIN_JWT_SECRET: ${PB_ADMIN_JWT_SECRET:-}
       # 默认留空（只放行环回），跟主文件一个口径。测试机要宿主/模拟器直连 /healthz 与 /actuator，
       # 靠 wsl-test.env 里那行显式的 172.16.0.0/12,127.0.0.0/8 放行；写进 compose 默认值的话，
       # 谁照着这份文件抄一个生产栈就顺手把整段私有网段放进去了。

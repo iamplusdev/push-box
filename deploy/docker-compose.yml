@@ -9,6 +9,8 @@
 #      同一段里桶 pushbox 也不会自动出现，需要建一次：mc mb local/pushbox，没有 mc 时用
 #      aws s3api create-bucket（两种命令都写在 deploy/部署快速参考.md「桶要建一次」）。
 #   具体主机名与 TLS 口径写在 deploy/env/prod.env.example（模板里不放任何真实地址）。
+#   第三种走法不在这里：没有 .env、只能在图形界面里逐条填变量的机器（飞牛/群晖 NAS、1Panel）
+#   用 deploy/docker-compose.nas.yml，取值口径由镜像烘焙的默认值 + entrypoint 兜住。
 # 监控栈（prometheus + grafana）单独一本文件，想要监控时才多传一个 -f：
 #   docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
 # 为什么不留在本文件里挂 profile：见 docker-compose.monitoring.yml 顶部说明。
@@ -24,17 +26,27 @@ services:
     # 引用 CI 推到 Docker Hub 的那个名字，本文件同时留 build: 段：镜像在远端存在就拉，
     # 拉不到（自己 fork、离线、改了代码）才本地编。写成本地名 pushbox/server 的话，
     # 用户 clone 下来 up 的一定是自己编译的产物，CI 打的 latest/semver/sha 标签对使用者毫无意义。
-    image: docker.io/iamplusdev/push-box:1.1.0
+    image: docker.io/iamplusdev/push-box:1.1.1
     environment:
       SPRING_PROFILES_ACTIVE: prod
       # 这里只透传 PB_* 名字，映射到 spring.datasource.* 的唯一地点是 application-prod.yml。
       # 写成 SPRING_DATASOURCE_PASSWORD 也能跑，但环境变量优先级压过 yml，等于两个地方各声称
       # 拥有同一个键；排查时盯 yml 会看不出真实取值来自哪。
-      # 地址不给默认值：内置任何一套拓扑的地址，另一套就要等到 JDBC/SDK 超时才发现配漏，
-      # 而在 compose 解析阶段报错是免费的。两套拓扑的取值写在上面和第 1 节的注释里。
-      PB_DB_URL: ${PB_DB_URL:?PB_DB_URL 未设置}
+      #
+      # 本文件不再用 ${VAR:?} 拦任何一项（D76）。判据全在容器的 entrypoint 里，理由不是"早期失败
+      # 不好"，而是那一层报错只有 compose 自己看得懂：2026-10-22 有人把镜像装进飞牛 NAS 的图形界面，
+      # 那里根本没有 .env 这一层，得到的是一整段
+      #   services.pushbox-server.environment.PB_ADMIN_JWT_SECRET: required variable ... is missing a value
+      # ——既改不动（没有文件可编辑）也读不出"我该填什么"。entrypoint 的同一条判据会指名变量、给出
+      # 生成命令、并在 local 拓扑下跳过用不到的必填项。
+      # 库地址有两种写法：只填 PB_DB_HOST（NAS 表单里最省事，端口/库名用下面的默认），
+      # 或者填完整的 PB_DB_URL（两种都给时 URL 赢）。留空即由镜像默认 mysql 拼出。
+      PB_DB_URL: ${PB_DB_URL:-}
+      PB_DB_HOST: ${PB_DB_HOST:-mysql}
+      PB_DB_PORT: ${PB_DB_PORT:-3306}
+      PB_DB_NAME: ${PB_DB_NAME:-pushbox}
       PB_DB_USERNAME: ${PB_DB_USERNAME:-pushbox}
-      PB_DB_PASSWORD: ${PB_DB_PASSWORD:?PB_DB_PASSWORD 未设置}
+      PB_DB_PASSWORD: ${PB_DB_PASSWORD:-}
       # 这三项从 ${VAR:?} 改成可空：PB_STORAGE_TYPE=local（拓扑 C，不配对象存储）时它们本来就不该有值，
       # 而解析阶段的硬拦会把这条拓扑直接堵死。空值不会静默——S3Config 在 s3 模式下逐个点名
       # "pb.s3.endpoint 不能为空"并拒绝启动，只是从 compose 解析挪到了进程启动，仍然早于第一条消息。
@@ -43,26 +55,29 @@ services:
       PB_S3_BUCKET: ${PB_S3_BUCKET:-pushbox}
       PB_S3_ACCESS_KEY: ${PB_S3_ACCESS_KEY:-}
       PB_S3_SECRET_KEY: ${PB_S3_SECRET_KEY:-}
-      # 存储拓扑开关：s3（默认，用上面那组 PB_S3_*）| local（用下面的目录，不碰对象存储）。
+      # 存储拓扑开关：s3（本文件的默认，用上面那组 PB_S3_*）| local（用下面的目录，不碰对象存储）。
+      # 注意镜像自己的默认是 local（服务于"图形界面里拉一个容器填两个框"），这两套默认各对一种人，
+      # 别当成不一致去统一：这本文件描述的是有反代、有桶的生产拓扑。
       # local 模式忘了把 type 改成 s3 不会报错，只会静默落本地盘——entrypoint 里那条 WARN 专门喊这件事。
       PB_STORAGE_TYPE: ${PB_STORAGE_TYPE:-s3}
       PB_STORAGE_LOCAL_PATH: ${PB_STORAGE_LOCAL_PATH:-/app/data/media}
       PB_S3_PATH_STYLE: ${PB_S3_PATH_STYLE:-true}
       # none|sse-c；填 sse-c 时 PB_S3_MASTER_KEY 必须是 base64 的 32 字节，缺失/长度不对进程拒绝启动。
-      # 这一项带默认值，所以 ${VAR:?} 卡不住"忘配加密"——prod 里 object-encrypt=none 会由
-      # ProdPlaintextMediaGuard 在启动时拒绝：要么填 sse-c，要么显式打开下面的迁移期逃生阀。
+      # 明文判据按拓扑分档（D76）：s3 里 object-encrypt=none 由 ProdPlaintextMediaGuard 与 entrypoint
+      # 各拒一次；local 只出声（对象在自己盘上、逐文件 600 权限，硬拦只会逼人配一个用不到的桶）。
       PB_S3_OBJECT_ENCRYPT: ${PB_S3_OBJECT_ENCRYPT:-none}
       PB_S3_MASTER_KEY: ${PB_S3_MASTER_KEY:-}
-      # 只在迁移期用：承认"新对象继续按明文写"。留空（默认）即明文配置直接启动失败，
-      # 因为明文桶不会报错、健康检查照过，唯一的后果是图片/头像在对象存储里裸奔。
+      # 逃生阀：承认"新对象继续按明文写"。s3 下留空即启动失败，因为明文桶不会报错、健康检查照过，
+      # 唯一的后果是图片/头像在对象存储里裸奔；local 下它只是把那条 WARN 换成显式表态。
       PB_ALLOW_PLAINTEXT_MEDIA: ${PB_ALLOW_PLAINTEXT_MEDIA:-}
-      # Web 管理台登录口令：生产环境必须设置强随机值（openssl rand -base64 32），留空则禁用管理台。
-      # 管理台经 Caddy 公网可达，弱口令等于裸奔；口令错到阈值会按来源 IP 锁定（返回 429）。
-      PB_ADMIN_SECRET: ${PB_ADMIN_SECRET:?PB_ADMIN_SECRET 未设置，请使用 openssl rand -base64 32 生成强随机值并填入 .env 文件}
+      # Web 管理台登录口令：留空 = 整个管理台不开放（AdminAuthController 回 403「管理台未启用」），
+      # 这本身是一个安全状态——日常收发与管理频道在 Android/PC 客户端里也做。要开管理台就同时设两项，
+      # 各用 openssl rand -base64 32 生成；只设口令不设签名钥、两把同值、短于下限，entrypoint 都会
+      # 在启动 Java 之前点名拒绝（弱口令等于裸奔：口令错到阈值只会按来源 IP 锁定返回 429，挡不住猜）。
+      PB_ADMIN_SECRET: ${PB_ADMIN_SECRET:-}
       # JWT 的 HS256 签名钥：与 PB_ADMIN_SECRET 必须是两个不同的值，否则改口令等于作废全部 token、
-      # 换签名钥等于改口令，两边都轮换不动。至少 32 字节；短了或留空都拒绝启动。
-      # 生成：openssl rand -base64 32
-      PB_ADMIN_JWT_SECRET: ${PB_ADMIN_JWT_SECRET:?PB_ADMIN_JWT_SECRET 未设置，请使用 openssl rand -base64 32 生成（必须与 PB_ADMIN_SECRET 不同）}
+      # 换签名钥等于改口令，两边都轮换不动。至少 32 字节。生成：openssl rand -base64 32
+      PB_ADMIN_JWT_SECRET: ${PB_ADMIN_JWT_SECRET:-}
       # §5.2 运维端点准入的额外网段（逗号分隔 CIDR）。默认口径是"只放行环回"，所以这里的默认值是空。
       # 以前它默认 172.16.0.0/12，代价是"留空 = 把 172.16~172.31 整整 100 万个地址放进门"：
       # ${VAR:-default} 在变量为空串时也会用上默认值，所以在 .env 里写 PB_SECURITY_INTERNAL_CIDRS=
@@ -96,8 +111,10 @@ services:
       # 而不是 ./data/media。
       - server_media:/app/data/media
     healthcheck:
-      # 只做 TCP 探活：JRE 镜像里没有 curl/wget，而 /healthz 会真连库，
-      # 用业务探活做 healthcheck 等于让一次数据库抖动就把容器判死。
+      # 只做 TCP 探活：`/healthz` 会真连库，用业务探活做 healthcheck 等于让一次数据库抖动就把容器判死。
+      # 别把这条改回 curl 的理由找错了——镜像里确实有 curl（`eclipse-temurin:21-jre` 自带，
+      # 本轮实测 `command -v curl` → /usr/bin/curl，2026-10-22 之前这里写的"JRE 镜像没有 curl"是假的），
+      # 选 TCP 是因为判据不同，不是因为缺工具。
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${PB_SERVER_PORT:-7404}"]
       interval: 10s
       timeout: 3s
@@ -105,8 +122,10 @@ services:
       retries: 6
     restart: unless-stopped
     # 业务流量只经 Caddy：反代在同网桥按服务名访问 pushbox-server:${PB_SERVER_PORT}，公网侧看不到 ${PB_SERVER_PORT}。
-    # 这里把 ${PB_SERVER_PORT} 绑到环回，是为了让文档里的 `curl http://localhost:${PB_SERVER_PORT}/healthz` 真的能通
-    # （机器外仍然打不开，TLS/Caddy 的那三道门一个没绕）。
+    # 7404 绑在宿主环回上是"只给这台机器留一条直连调试口子"，注意它并**不**让 /healthz 变可读：
+    # 经过端口映射的连接在容器里看到的源地址是网桥网关（172.x.0.1），不是 127.0.0.1，
+    # InternalAccessFilter 照样回 404。要从宿主读 /healthz 只有两条路：exec 进容器用 /dev/tcp，
+    # 或把那段子网写进 PB_SECURITY_INTERNAL_CIDRS（判据与命令见 deploy/部署快速参考.md「验收」）。
     # 需要"手机直连明文 ${PB_SERVER_PORT}"调试时再放开下面那行，代价很清楚：明文链路 + 绕过 Caddy 的证书、
     # /actuator 屏蔽与请求体上限，用完记得注释回去。
     ports:
@@ -132,6 +151,8 @@ services:
     restart: unless-stopped
 
   # ---- 拓扑 B 才需要：独立 MySQL / RustFS ----
+  # 这一段整体是注释，取消注释才生效，所以里面保留 ${VAR:?}：会取消它的人一定在有 .env 的机器上
+  # （用命令行 compose 才会走到拓扑 B）。零 .env 的图形界面部署走 deploy/docker-compose.nas.yml。
   # mysql:
   #   image: mysql:8.4
   #   # ngram_token_size=2 是 §3.2 中文全文索引的前提，必须在初始化时就带上。
@@ -159,7 +180,8 @@ services:
   # grafana 那句 GRAFANA_ADMIN_PASSWORD:? 会把"没开监控"的常规部署也一起卡死 ——
   # docker compose up -d pushbox-server 在解析阶段就报 "required variable ... is missing"，
   # 而按本文件顶部与 prod.env.example 的口径，这个变量只在跑监控时才需要。
-  # 把监控两个服务挪到单独一本文件，主文件的必填项就只剩"真的必填"的那七个。
+  # 主文件现在一项 ${VAR:?} 都没有（必填判据在容器 entrypoint 里），监控那本文件却仍然用它自己的
+  # 那条 :? 插值：只有显式多传一个 -f 的人才受它管，这正好是想要的边界。
 
 volumes:
   caddy_data: {}

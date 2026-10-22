@@ -70,7 +70,33 @@ class ProdPlaintextMediaGuardTest {
   }
 
   @Test
-  @DisplayName("⑤ sse-c 却解不出 32 字节主钥：构造期就停住，静默退回明文是最坏的结果")
+  @DisplayName("⑤ 本地盘（拓扑 C）明文只出声：拒绝启动只会逼人为了过检查去配一个桶")
+  void localStorageWarnsWithoutRefusingStartup() {
+    for (String mode : new String[] {null, "", "none"}) {
+      assertThatCode(() -> refreshWithStorage("prod", mode, null, "local")).doesNotThrowAnyException();
+    }
+    // 逃生阀在 local 也一样有效：显式表态和默认落到 local 是两件事，但两条都不该判死
+    assertThatCode(() -> refreshWithStorage("prod", "none", "1", "local")).doesNotThrowAnyException();
+    assertThat(ProdPlaintextMediaGuard.isLocalStorage("local")).isTrue();
+    assertThat(ProdPlaintextMediaGuard.isLocalStorage(" LOCAL ")).isTrue();
+    assertThat(ProdPlaintextMediaGuard.isLocalStorage("s3")).isFalse();
+    assertThat(ProdPlaintextMediaGuard.isLocalStorage(null)).isFalse();
+  }
+
+  @Test
+  @DisplayName("⑥ 判据只认 local：其余取值（含没映射到的旧配置）一律按最严的桶形态判")
+  void onlyLocalGetsTheWarningTrack() {
+    for (String type : new String[] {"s3", "", null, "S3", "filesystem"}) {
+      assertThatThrownBy(() -> refreshWithStorage("prod", "none", null, type))
+          .isInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("PB_S3_OBJECT_ENCRYPT")
+          // 主钥的值任何情况下都不进报错
+          .hasMessageNotContaining(MASTER_KEY_SENTINEL);
+    }
+  }
+
+  @Test
+  @DisplayName("⑦ sse-c 却解不出 32 字节主钥：构造期就停住，静默退回明文是最坏的结果")
   void sseCWithoutUsableMasterKeyStillFailsStartup() {
     PbProperties props = new PbProperties();
     PbProperties.S3 s3 = new PbProperties.S3();
@@ -88,6 +114,11 @@ class ProdPlaintextMediaGuardTest {
   }
 
   private static void refresh(String profile, String objectEncrypt, String allowPlaintext) {
+    refreshWithStorage(profile, objectEncrypt, allowPlaintext, null);
+  }
+
+  private static void refreshWithStorage(String profile, String objectEncrypt, String allowPlaintext,
+      String storageType) {
     GenericApplicationContext ctx = new GenericApplicationContext();
     // 摘掉进程环境：本机常常 source 过 local.env，留着就造不出"没配"的那个状态
     ctx.getEnvironment().getPropertySources().remove("systemEnvironment");
@@ -97,9 +128,13 @@ class ProdPlaintextMediaGuardTest {
     if (objectEncrypt != null) {
       props.put("pb.s3.object-encrypt", objectEncrypt);
     }
+    if (storageType != null) {
+      props.put("pb.storage.type", storageType);
+    }
     if (allowPlaintext != null) {
       props.put(ProdPlaintextMediaGuard.ALLOW_PLAINTEXT_ENV, allowPlaintext);
     }
+    props.put("pb.storage.local-path", "/srv/pushbox/media");
     // 主钥放进来只为了证明报错与日志不会把它写出去
     props.put("pb.s3.master-key", MASTER_KEY_SENTINEL);
     ctx.getEnvironment().getPropertySources().addFirst(new MapPropertySource("test", props));

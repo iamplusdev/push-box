@@ -13,12 +13,20 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 /**
- * §11.2 prod 的沉默不安全默认值：图片与头像在桶里到底是明文还是密文。
+ * §11.2 prod 的沉默不安全默认值：图片与头像在存储里到底是明文还是密文。
  *
  * <p>{@code application-prod.yml} 里写的是 {@code object-encrypt: ${PB_S3_OBJECT_ENCRYPT:none}}，
- * 也就是说忘了配就等于"媒体的字节原样躺在桶里"——而 {@code PB_S3_OBJECT_ENCRYPT} 又不是 compose 的
- * 必填项（它带默认值），{@code ${VAR:?}} 那套 fail-fast 一条都管不到它。空桶不会报错、健康检查会过、
- * 消息也发得出去，唯一的表现是"图片存进去了"，所以必须在这里停住。
+ * 也就是说忘了配就等于"媒体的字节原样躺着"——而 {@code PB_S3_OBJECT_ENCRYPT} 又不是必填项（它带默认值），
+ * 任何 {@code ${VAR:?}} 那套 fail-fast 都管不到它。空桶不会报错、健康检查会过、消息也发得出去，
+ * 唯一的表现是"图片存进去了"，所以必须在这里停住。
+ *
+ * <p><b>判据按存储拓扑分档</b>（D76，与容器 entrypoint 同步改）：{@code pb.storage.type=s3} 时拒绝启动，
+ * {@code local} 时只出声。理由是两个"明文"不是同一件事——桶那侧的明文，任何拿到同一组 AK/SK 的读者
+ * （对象存储的管理台、备份工具、被误授权的第三方应用）都直接读得走；local 那侧的对象在部署者自己的
+ * 那块盘上，{@code LocalFileStorage} 已经给每个对象设了 600 权限，剩下的暴露面就是"谁能读到这台 NAS 的盘"，
+ * 那一层归磁盘与备份策略，不归这里的开关。把桶形态的门槛原样压到 local，代价是"拉一个镜像填两个框"
+ * 这条起步路径必须凭空多配一个 {@code PB_ALLOW_PLAINTEXT_MEDIA}——一个只为通过检查而写的值，
+ * 正是这套守卫想消灭的那种默认。
  *
  * <p>只管 prod：dev 联调就是明文桶，把同一个门槛压到 dev 只会让人绕过检查。
  */
@@ -49,10 +57,22 @@ public class ProdPlaintextMediaGuard implements BeanFactoryPostProcessor, Enviro
     }
     String mode = normalize(environment.getProperty("pb.s3.object-encrypt", "none"));
     String allowPlaintext = environment.getProperty(ALLOW_PLAINTEXT_ENV);
+    // 默认按 s3 判：这一项没映射的旧配置就该走最严的那条路，别把"读不到配置"当成"选了本地盘"。
+    String storageType = normalize(environment.getProperty("pb.storage.type", "s3"));
     if (mode.isEmpty()) {
-      log.warn("pb.s3.object-encrypt 留空，按 none 处理：新写入的图片与头像在桶里是可读字节");
+      log.warn("pb.s3.object-encrypt 留空，按 none 处理：新写入的图片与头像是可读字节");
     }
     if (mustRefusePlaintext(mode, allowPlaintext)) {
+      if (isLocalStorage(storageType)) {
+        log.warn("""
+            图片与头像将明文落在本地目录 {}（pb.s3.object-encrypt={}）。
+                这里只出声不拒绝启动：本地盘的暴露面是"谁能读到这块盘"，对象已经按 600 权限写。
+                要密文就设 PB_S3_OBJECT_ENCRYPT=sse-c 并给 PB_S3_MASTER_KEY（openssl rand -base64 32，
+                注意主钥一旦用过就不可轮换）。""",
+            environment.getProperty("pb.storage.local-path", "/app/data/media"),
+            mode.isEmpty() ? "未配置（按 none）" : mode);
+        return;
+      }
       throw new IllegalStateException(checkFailureMessage(mode));
     }
     if (isNoneMode(mode)) {
@@ -62,9 +82,13 @@ public class ProdPlaintextMediaGuard implements BeanFactoryPostProcessor, Enviro
     }
   }
 
-  /** prod 且模式是明文（none/留空），而逃生阀没打开 ⇒ 拒绝启动。 */
+  /** prod 且模式是明文（none/留空），而逃生阀没打开 ⇒ 该停。是否真停由存储拓扑决定。 */
   static boolean mustRefusePlaintext(String objectEncrypt, String allowPlaintextEnv) {
     return isNoneMode(objectEncrypt) && !isTruthly(allowPlaintextEnv);
+  }
+
+  static boolean isLocalStorage(String storageType) {
+    return "local".equals(normalize(storageType));
   }
 
   private static boolean isNoneMode(String objectEncrypt) {

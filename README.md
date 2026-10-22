@@ -9,7 +9,9 @@
 ### 用户
 
 - 📖 [用户使用手册](docs/用户使用手册.md) - 安装、配置、使用流程、常见问题
-- 🌐 [官网](site/index.html) - 项目介绍与下载链接
+- 🐳 [Docker 部署](#-docker-部署) - 一个容器起步只要库地址和库口令；[deploy/部署快速参考.md](deploy/部署快速参考.md) 是同一套口径的速查
+- 🗄️ [NAS 部署指南](deploy/NAS部署指南.md) - 飞牛 / 群晖 / 1Panel 的图形界面里逐条填变量那种装法
+- 🌐 [官网](https://iamplusdev.github.io/push-box/) - 项目介绍与下载链接（站点源码在仓库的 `site/`）
 
 ### 开发者
 
@@ -21,17 +23,109 @@
 
 ---
 
-## 🐳 Docker 一键部署（推荐）
+## 🐳 Docker 部署
 
-最简单的生产部署方式，5 分钟即可上线。
+### 形态一：单容器起步（推荐，两个变量）
 
-### 前置条件
+镜像自己把拓扑默认值烘焙好了（[deploy/Dockerfile](deploy/Dockerfile) 的 `ENV` 段），所以起步只需要
+**数据库地址**和**库口令**这两样只有你自己知道的东西——不需要克隆仓库，也不需要 `.env`：
+
+```bash
+docker run -d --name pushbox \
+  -p 7404:7404 \
+  -e PB_DB_HOST=192.0.2.20 -e PB_DB_PASSWORD='<强口令>' \
+  -v pushbox-media:/app/data/media -v pushbox-logs:/app/logs \
+  docker.io/iamplusdev/push-box:latest
+```
+
+`192.0.2.20` 是 RFC 5737 的文档保留地址，**照抄一定连不上**——换成你那台库的局域网 IP 或服务名。
+
+**镜像之外只有一件事要做**：那个库和那个用户得先存在，服务端不会替你建库（Flyway 只建表）。
+在库所在那台机器上跑一次就够了——NAS 上装的 MySQL 就填它的局域网 IP，别填 `127.0.0.1`（容器里的环回是它自己）：
+
+```sql
+CREATE DATABASE IF NOT EXISTS pushbox
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER IF NOT EXISTS 'pushbox'@'%' IDENTIFIED BY '<强口令>';   -- 必须是 '%'：另一个容器连过来的来源不是 localhost
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES
+  ON pushbox.* TO 'pushbox'@'%';
+FLUSH PRIVILEGES;
+
+SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句
+```
+
+另外两条边界，别在起容器之后才发现：**库只能是 MySQL 8.0/8.4**（`V1__init.sql` 用了
+`utf8mb4_0900_ai_ci` 与 `FULLTEXT … WITH PARSER ngram`，MariaDB 与 MySQL 5.7 过不去），
+而 **Hub 上那份镜像只有 linux/amd64**（发布工作流没传 `platforms`），ARM 机型要自己 `docker build`。
+
+其余一个都不给时的样子：端口 7404、本地文件存储（图片落 `pushbox-media` 卷里，明文 + 每文件 600 权限，
+entrypoint 出声提醒一次）、管理台**关闭**、库名与库用户名都是 `pushbox`、Flyway 首次启动自动建表。
+想换形态就在那条命令后面追加同名变量，别去改镜像：
+
+| 想要的形态 | 追加 |
+|------|------|
+| 开管理台 | `-e PB_ADMIN_SECRET='<openssl rand -base64 32>' -e PB_ADMIN_JWT_SECRET='<另一个不同的强随机值>'`（两项都要、互不相同、各 ≥32 字节；**都留空 = 管理台不开放**，客户端收发不受影响，这是安全状态不是漏配） |
+| 外接桶 | `-e PB_STORAGE_TYPE=s3 -e PB_S3_ENDPOINT -e PB_S3_ACCESS_KEY -e PB_S3_SECRET_KEY`，再加 `-e PB_S3_OBJECT_ENCRYPT=sse-c -e PB_S3_MASTER_KEY='<openssl rand -base64 32>'` |
+| 本地图片也要加密 | `-e PB_S3_OBJECT_ENCRYPT=sse-c -e PB_S3_MASTER_KEY='<openssl rand -base64 32>'`（主钥一旦有对象落库就**不可轮换**） |
+| 改端口 | `-e PB_SERVER_PORT=8081` 并把 `-p` 的右侧同步成 8081 |
+| 库地址只写完整串 | 用 `-e PB_DB_URL='jdbc:mysql://…'` 替代 `PB_DB_HOST`（两个都给时以 `PB_DB_URL` 为准） |
+
+**手上已经有一个桶**的话，整条 s3 版命令长这样——还是同一个容器，只是把对象落到桶里：
+
+```bash
+docker run -d --name pushbox \
+  -p 7404:7404 \
+  -e PB_DB_HOST=192.0.2.20 -e PB_DB_PASSWORD='<强口令>' \
+  -e PB_STORAGE_TYPE=s3 \
+  -e PB_S3_ENDPOINT=http://192.0.2.30:7101 \
+  -e PB_S3_ACCESS_KEY='<AK>' -e PB_S3_SECRET_KEY='<SK>' \
+  -e PB_S3_BUCKET=pushbox \
+  -e PB_S3_OBJECT_ENCRYPT=sse-c -e PB_S3_MASTER_KEY='<openssl rand -base64 32>' \
+  -v pushbox-logs:/app/logs \
+  docker.io/iamplusdev/push-box:latest
+```
+
+四件事在这一条上跟本地存储不一样，都会实跑撞：
+
+- **`PB_STORAGE_TYPE=s3` 省不得**。镜像烘焙的默认是 `local`，只给 `PB_S3_*` 而不给这个开关，那几项
+  一个字都不读——entrypoint 会点名 WARN「配了但读不到」，进程照旧把图片落本地目录。
+- **`pushbox-media` 那个卷去掉了**：对象落桶，挂着也没用；日志卷还是要。桶本身**要你先建好**，
+  镜像不建桶。桶可以跟别的系统共用，但 PushBox 只读写自己那套对象键，读不到别人写进去的东西。
+- **明文在 s3 这档是拒启的**，不像 local 只出声：默认 `PB_S3_OBJECT_ENCRYPT=none`，而桶侧任何拿到
+  同一组 AK/SK 的读者都能直接把图片读走。所以要么像上面那样 `sse-c` + 主钥（**主钥一旦有对象落库就
+  不可轮换**，换了旧对象再也解不开），要么显式 `-e PB_ALLOW_PLAINTEXT_MEDIA=1` 表态。
+- **`PB_S3_PATH_STYLE` 默认烘焙成 `true`**，MinIO / RustFS 是对的；接阿里云 OSS 或 AWS 时按服务商文档，
+  必要时 `-e PB_S3_PATH_STYLE=false`。桶名不是 `pushbox`、区域不是 `us-east-1` 就改上面那两行。
+
+三条不能省的：
+
+- **图片与日志那两个卷要挂**。`PB_STORAGE_TYPE=local` 时对象字节落在 `PB_STORAGE_LOCAL_PATH`（镜像内默认
+  `/app/data/media`），不挂卷等于写在容器可写层里，`docker rm` 之后全没。
+- **端口以 `PB_SERVER_PORT` 为准**，默认 7404；`EXPOSE` 只是元数据，真正生效的是 `-p` 和这一个变量。
+- **`/app/data` 归 uid 10001**。绑定挂载会把宿主目录的属主带进容器，宿主目录不是它可写时，
+  entrypoint 的写入探针当场拒绝启动并把两种修法打出来（改用 named volume，或 `chown -R 10001:10001`）。
+
+> 想自己出一份（比如机器在 ARM 上）：`docker build -f deploy/Dockerfile -t pushbox:local .`
+> ——这条要克隆仓库，构建读的是仓库里的 `Dockerfile`，跟"跑起来"要的东西不是一回事。
+
+**只在 NAS 的图形界面里装（飞牛 / 群晖 / 1Panel，没有 `.env` 那一层）？**
+走 **[deploy/NAS部署指南.md](deploy/NAS部署指南.md)** + **[deploy/docker-compose.nas.yml](deploy/docker-compose.nas.yml)**：
+那本文件里没有任何解析阶段的必填插值，改两行就能起，填表格里也就是同样那两个变量。
+
+### 形态二：compose 完整生产形态（要反代 / 监控 / 自带桶时）
+
+**为什么这一条要 `git clone` 而上面不用**：`docker-compose.yml`、`Caddyfile` 和那几段 sidecar 定义都是
+**文件**，装不进 `pushbox` 镜像里；`.env` 只是这些文件取值的那层记账。只要一个容器时这些都用不到，
+所以形态一既不克隆仓库也不碰 `.env`。要 Caddy 反代 + HTTPS、要 Prometheus/Grafana、或者想让 compose
+顺手把 MySQL 与 RustFS 一起起来，才需要形态二。
+
+#### 前置条件
 
 - Docker 20.10+ 和 Docker Compose v2+
 - 至少 2GB 内存 + 10GB 磁盘空间
 - 一个域名（可选，用于 HTTPS）
 
-### 步骤 1: 克隆仓库并准备配置
+#### 步骤 1: 克隆仓库并准备配置
 
 ```bash
 # 克隆代码
@@ -42,7 +136,7 @@ cd push-box/deploy
 cp env/prod.env.example .env
 ```
 
-### 步骤 2: 生成密钥
+#### 步骤 2: 生成密钥
 
 ```bash
 # 生成并直接写入 .env：值只在生成时落在变量里，不打印到终端（滚存/日志会留痕）
@@ -63,9 +157,9 @@ sed -i \
   .env
 ```
 
-`PB_ADMIN_SECRET` 是登录口令，`PB_ADMIN_JWT_SECRET` 是签 JWT 的密钥，两个都必须填且不能相同；只需单独记牢口令那一个（登录用），签名钥换掉等于作废全部已登录会话。
+`PB_ADMIN_SECRET` 是登录口令，`PB_ADMIN_JWT_SECRET` 是签 JWT 的密钥，用管理台就两个都要填且不能相同；只需单独记牢口令那一个（登录用），签名钥换掉等于作废全部已登录会话。**两项都留空 = 管理台整个不开放**（登录回 403「管理台未启用」），收发消息不受影响——这是一个安全状态，不是漏配；只填一个则由 entrypoint 判死。
 
-### 步骤 3: 确认地址与存储加密
+#### 步骤 3: 确认地址与存储加密
 
 模板里除密钥外的占位还需要按你的拓扑确认一次（`deploy/.env`）：
 
@@ -78,28 +172,30 @@ PB_S3_REGION=us-east-1
 PB_S3_BUCKET=pushbox
 PB_S3_PATH_STYLE=true
 
-# 对象存储加密：prod 只认两种显式表态
+# 对象存储加密：prod 只认两种显式表态（这条只卡 s3 拓扑，见下面拓扑 C）
 PB_S3_OBJECT_ENCRYPT=sse-c        # 配 PB_S3_MASTER_KEY（base64 的 32 字节，落库后不可轮换）
-# PB_S3_OBJECT_ENCRYPT=none       # 明文：必须同时打开下面的逃生阀，否则进程拒绝启动
+# PB_S3_OBJECT_ENCRYPT=none       # 明文桶：必须同时打开下面的逃生阀，否则 entrypoint 拒绝启动
 # PB_ALLOW_PLAINTEXT_MEDIA=1
 
 # ---- 拓扑 B：完全独立部署（取消注释，主机改成服务名）----
 # PB_DB_URL=jdbc:mysql://mysql:3306/pushbox?...同上...
-# PB_S3_ENDPOINT=http://rustfs:7101
+# PB_S3_ENDPOINT=http://rustfs:9000
 # 还需要 MYSQL_ROOT_PASSWORD=<只在初始化用>（mysql / rustfs 服务段见 docker-compose.yml）
 
 # ---- 拓扑 C：本地文件系统存储（零依赖单机部署）----
 PB_STORAGE_TYPE=local
 PB_STORAGE_LOCAL_PATH=/app/data/media
-# PB_S3_OBJECT_ENCRYPT=none 或 sse-c + PB_S3_MASTER_KEY（与 S3 模式相同）
+# PB_S3_OBJECT_ENCRYPT=none 或 sse-c + PB_S3_MASTER_KEY。
+# local + none 只打一条 WARN 就启动，不需要 PB_ALLOW_PLAINTEXT_MEDIA——
+# 对象就在部署者自己的盘上（逐文件 600 权限），硬拦只会逼人为了过检查去配一个用不到的桶。
 
 # ---- 监控（可选，多传一个 -f docker-compose.monitoring.yml）----
 GRAFANA_ADMIN_PASSWORD=<改掉默认 admin 密码>
 ```
 
-`useSSL=false` / `http://` 意味着 SQL 与对象字节在链路上明文可听：同机或同一容器网络内通常只能如此，跨主机请改成 `useSSL=true` 与 `https://`（模板注释里写了口径）。**本地存储模式**（`PB_STORAGE_TYPE=local`）无需配置任何 S3/MinIO/RustFS 服务，图片直接落盘到宿主目录，适合轻量级部署。
+`useSSL=false` / `http://` 意味着 SQL 与对象字节在链路上明文可听：同机或同一容器网络内通常只能如此，跨主机请改成 `useSSL=true` 与 `https://`（模板注释里写了口径）。**本地存储模式**（`PB_STORAGE_TYPE=local`）无需配置任何 S3/MinIO/RustFS 服务，图片落在容器内的 `PB_STORAGE_LOCAL_PATH`，`docker-compose.yml` 已把那里挂成 named volume `pushbox_server_media`（备份时用 `docker volume inspect` 取挂载点，见 [deploy/部署快速参考.md](deploy/部署快速参考.md)）。
 
-### 步骤 4: 启动服务
+#### 步骤 4: 启动服务
 
 ```bash
 # 基础部署（仅 PushBox + Caddy 反代）
@@ -114,21 +210,25 @@ docker compose logs -f pushbox-server
 
 首次启动需要 1-2 分钟（Flyway 数据库迁移 + Spring Boot 初始化）。
 
-### 步骤 5: 验证部署
+#### 步骤 5: 验证部署
 
 ```bash
-# 健康检查
-curl http://localhost:7404/healthz
+# 健康检查：在容器里取（/healthz 只认容器环回，从宿主打过去是 404，见下面那条说明）
+docker compose exec pushbox-server curl -s http://127.0.0.1:7404/healthz
 
-# 预期输出：
-# {"status":"UP","db":"up","storage":"up"}
+# 预期最后一段：
+# {"ok":true,"db":"up","storage":"up","uptime_ms":...}
 ```
 
-访问浏览器：
-- **Web 管理台**: `https://<PB_CADDY_HOST>/`——注意是**根路径**，不是 `/admin`。管理台 SPA 与 API 打在同一个镜像、由同一个进程在同一个端口上吐出来（`deploy/Dockerfile` 的 node 阶段把 `web-admin/dist` 拷进 jar 的 `classpath:/static/`，`SpaWebConfig` 负责 history 路由的深链回退），所以没有第二个端口、也没有独立的 nginx。用 `PB_ADMIN_SECRET` 登录；自签证书要先信任 `deploy/ca` 里那根 CA，或直接改用 `http://<服务器IP>:7404` 走内网明文——服务端只在环回/`PB_SECURITY_INTERNAL_CIDRS` 段放行 `/actuator`，公网打不开它。
-- **健康检查**: 在服务端机器上 `curl http://127.0.0.1:7404/healthz`
+`curl http://localhost:7404/healthz` 在**宿主上**拿不到这个结果：`InternalAccessFilter` 只看 `getRemoteAddr()`，
+经端口映射进来的连接在容器里是网桥网关地址，会被回 **404**（拒绝时刻意不用 403，免得扫描器确认这里有个运维端点）。
+要让宿主或监控直接读到它，就把这套 compose 网络分到的子网写进 `PB_SECURITY_INTERNAL_CIDRS`。
 
-### 步骤 6: 换成自己的域名 / 证书（可选）
+访问浏览器：
+- **Web 管理台**: `https://<PB_CADDY_HOST>/`——注意是**根路径**，不是 `/admin`。管理台 SPA 与 API 打在同一个镜像、由同一个进程在同一个端口上吐出来（`deploy/Dockerfile` 的 node 阶段把 `web-admin/dist` 拷进 jar 的 `classpath:/static/`，`SpaWebConfig` 负责 history 路由的深链回退），所以没有第二个端口、也没有独立的 nginx。用 `PB_ADMIN_SECRET` 登录；自签证书要先信任 `deploy/ca` 里那根 CA，或改用 `docker-compose.nas.yml` 那条直连 7404 的内网明文路径。
+- **运维端点**: `/healthz` 与 `/actuator/**` 只在容器环回、以及显式写进 `PB_SECURITY_INTERNAL_CIDRS` 的网段可读；Caddy 另外只 403 掉 `/actuator/*`。
+
+#### 步骤 6: 换成自己的域名 / 证书（可选）
 
 主机名只在 `.env` 里改一处：
 
@@ -149,6 +249,8 @@ docker compose logs --tail=50 caddy
 ```
 
 ### 常用运维命令
+
+形态二（compose）：
 
 ```bash
 # 查看服务状态
@@ -172,32 +274,53 @@ docker compose down
 docker compose down -v
 ```
 
+形态一（单容器）只有那一个容器，命令换成 `docker` 那套；**`docker rm` 不会带走 named volume**，
+图片与日志都还在，别用 `docker rm -v`：
+
+```bash
+docker logs -f pushbox
+docker restart pushbox
+docker volume ls | grep pushbox-          # 那两个 named volume（图片与日志），docker rm 不会带走它们
+
+# 升级：先取新镜像，删容器不会删卷，再用同一条 docker run 起一次
+docker pull docker.io/iamplusdev/push-box:latest
+docker rm -f pushbox
+```
+
 ### 故障排查
 
 **问题 1: 容器启动后立即退出**
 
 ```bash
-# 查看错误日志
-docker compose logs pushbox-server
+docker compose logs pushbox-server    # 形态一用 docker logs pushbox
 
-# 常见原因：
-# - 环境变量未设置（检查 .env 文件）
-# - 数据库连接失败（检查 PB_DB_URL 和密码）
-# - S3 存储不可达（检查 PB_S3_ENDPOINT 和网络）
+# entrypoint 的报错自己就带修法，照着那几行读比这一节全。四条最常见的：
+# - PB_DB_HOST 填成 127.0.0.1（容器里的环回是它自己，不是宿主）
+# - 库那层没发布端口 / 库容器自己在崩溃循环（docker logs <库容器> --tail 20 会明说）/ 防火墙拦了入站
+# - 第一次起空库撞超时不算故障：库的初始化在 NAS 上普遍要 1～2 分钟，把 PB_DB_WAIT_SECONDS 调大（默认 60）
+# - 本地存储目录不可写 → 改用 named volume，或把宿主目录 chown -R 10001:10001
 ```
 
 **问题 2: 健康检查一直显示 db=down**
 
+`db=down` 是 `/healthz` 真去借了一条连接、那条连接没起来。先在容器里取一次（`/healthz` 只认容器环回，
+从宿主打过去是 **404**——`InternalAccessFilter` 只看 `getRemoteAddr()`，经端口映射进来的连接在容器里
+看到的是网桥网关；拒绝时刻意不用 403，免得扫描器确认这里有个运维端点）：
+
 ```bash
-# 进入容器检查数据库连接
-docker compose exec pushbox-server bash
-# 在容器内执行：
-java -jar /app/app.jar --debug | grep "HikariPool"
+docker compose exec pushbox-server curl -s http://127.0.0.1:7404/healthz    # 形态一：docker exec pushbox curl -s …
+docker compose logs pushbox-server | grep -iE 'HikariPool|Access denied|Communications link|to database' | head
 ```
+
+那两条已经能把"口令错 / 地址错 / 库名错"分开；**别在容器里现装 mysql 客户端**（容器跑 uid 10001，
+`apt-get update` 直接 `Permission denied`）。要手工敲 SQL 就去库所在那台机器上，详见
+[deploy/部署快速参考.md](deploy/部署快速参考.md) 的排查段。
 
 **问题 3: Web 管理台返回 403**
 
-检查 `PB_ADMIN_SECRET` 是否正确设置且非空。
+先看是不是根本没开：`PB_ADMIN_SECRET` 与 `PB_ADMIN_JWT_SECRET` **两项都留空是合法状态**，管理台整个不开放，
+一律回 403「管理台未启用」，客户端收发照旧。要开就把两项都配上（互不相同、各 ≥32 字节）。
+口令本身不对时同理——403 不代表服务坏了。
 
 ---
 
@@ -227,7 +350,7 @@ curl -sS http://127.0.0.1:7404/message -H 'Content-Type: application/json' \
   --data-binary @payload.json
 ```
 
-接口参考按鉴权分成三页，别混用（[入站 API](site/api.html) 写消息进来 / [客户端 API](site/client-api.html) 设备读自己的 Space / [管理台 API](site/admin-api.html) 一条口令换 24h JWT、跨 Space 运维）；协议与数据模型的权威描述在 [软件设计方案](docs/软件设计方案.md)。
+接口参考按鉴权分成三页，别混用（[入站 API](https://iamplusdev.github.io/push-box/api.html) 写消息进来 / [客户端 API](https://iamplusdev.github.io/push-box/client-api.html) 设备读自己的 Space / [管理台 API](https://iamplusdev.github.io/push-box/admin-api.html) 一条口令换 24h JWT、跨 Space 运维）；协议与数据模型的权威描述在 [软件设计方案](docs/软件设计方案.md)。页面源码在仓库的 `site/`，线上地址是 [官网](https://iamplusdev.github.io/push-box/)。
 
 ---
 
@@ -240,7 +363,7 @@ android/    Android 客户端（Kotlin + Compose），Gradle 工程
 windows/    Windows 客户端（.NET 8 + WPF）
 deploy/     探针、Dockerfile、compose、Caddyfile、自签 CA、备份脚本
 docs/       设计文档、用户指南、开发指南
-site/       官网静态站点（零构建，可直接 file:// 打开）
+site/       官网静态站点源码（零构建，可直接 file:// 打开；线上地址 https://iamplusdev.github.io/push-box/）
 testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 ```
 
@@ -265,7 +388,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 | 跑法 | 判什么 |
 |------|--------|
-| `JAVA_HOME=… mvn -B -pl core,server test` | 服务端与加密库（**306/306**，core 43 + server 263）。要先 `set -a && . deploy/env/local.env && set +a`：114 条挂 `PB_S3_ACCESS_KEY` 门控，缺凭据时是 192 执行 + 114 静默 skip，而 `mvn test` 的退出码仍然是 0 |
+| `JAVA_HOME=… mvn -B -pl core,server test` | 服务端与加密库（**308/308**，core 43 + server 265）。要先 `set -a && . deploy/env/local.env && set +a`：114 条挂 `PB_S3_ACCESS_KEY` 门控，缺凭据时是 194 执行 + 114 静默 skip，而 `mvn test` 的退出码仍然是 0 |
 | `node deploy/probe/p0-e2e.mjs` | 端到端协议（**0 失败**；条数以脚本末行的 `N/N` 为准） |
 | `cd android && ./gradlew :app:assembleDebug` | Android 编译通过 |
 | `cd web-admin && npm ci && npm run build` | 管理台 `vue-tsc` 类型检查与 `dist/` 产物 |
@@ -300,12 +423,12 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 ## 持续集成（GitHub Actions）
 
 推到 `main` 自动出各端产物、推 Docker Hub；打 `v*` 标签额外发布 GitHub Release；改动含 `site/**` 的
-`main` 推送还会把官网发到 GitHub Pages。六个工作流都在
+`main` 推送还会把官网发到 GitHub Pages（线上地址 <https://iamplusdev.github.io/push-box/>）。六个工作流都在
 `.github/workflows/`，其中 `ci.yml` 是 PR 门禁（真 MySQL + 真对象存储，末尾断言"闸门用例一条都没被跳过"）。
 
 | 工作流 | 触发 | 产出 |
 |--------|------|------|
-| `docker-publish.yml` | push main / `v*` 标签 / 手动 | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`：标签上打 `1.1.0`/`1.1`/`latest`，main 上只打 `main`/`sha-*`（版本标签必须不可变）。构建前先跑版本闸门——tag、`pom.xml`、compose 三者版本号不一致就直接红，不会推出去一个自称某版、里面跑着另一版的镜像。手动触发默认是 **dry-run**（只构建不推），用它可以在不碰 Hub 的前提下验 `DOCKERHUB_*` 这对 secrets。**`v*` 标签事件首跑 2026-10-22 绿**（run `39724347017`，tag `v1.1.0`）：「版本号一致性闸门」「Docker metadata」「Build and push」「本次的标签清单」四步全 success，即 `1.1.0`/`1.1`/`latest` 三个标签随 buildx 一起推出。Hub 上的实际标签本机复核不到（`hub.docker.com`、`registry-1.docker.io` 都是 `http=000` 超时），这三枚标签存在只由那两步的退出码背书 |
+| `docker-publish.yml` | push main / `v*` 标签 / 手动 | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`：标签上打本次的 `X.Y.Z` / `X.Y` / `latest`，main 上只打 `main`/`sha-*`（版本标签必须不可变）。构建前先跑版本闸门——tag、`pom.xml`、compose 三者版本号不一致就直接红，不会推出去一个自称某版、里面跑着另一版的镜像。手动触发默认是 **dry-run**（只构建不推），用它可以在不碰 Hub 的前提下验 `DOCKERHUB_*` 这对 secrets。**`v*` 标签事件首跑 2026-10-22 绿**（run `39724347017`，tag `v1.1.0`）：「版本号一致性闸门」「Docker metadata」「Build and push」「本次的标签清单」四步全 success，即 `1.1.0`/`1.1`/`latest` 三个标签随 buildx 一起推出。Hub 上的实际标签本机复核不到（`hub.docker.com`、`registry-1.docker.io` 都是 `http=000` 超时），这三枚标签存在只由那两步的退出码背书 |
 | `build-apk.yml` | push main / `v*` 标签 | 只出 `assembleRelease`（R8 + 签名），用 `apksigner verify` 把关后上传 `pushbox-release-*.apk`；标签时发 Release。没配 keystore 时构建直接失败，不再退化成"发一只 debug 包"。**标签发 Release 首跑 2026-10-22 绿**（run `39724346953`）：`Verify release APK signature` 与 `Publish to GitHub Release` 两步 success，资产 `pushbox-release-v1.1.0.apk`（12.8 MB）已挂到 Release 页 |
 | `build-msi.yml` | push main / `v*` 标签 | `windows-latest` 上 `dotnet publish self-contained win-x64` + Inno Setup 出 `setup.exe`，上传 artifact；标签时发 Release。**标签首跑 2026-10-22 绿**（run `39724347008`），资产 `PushBox-Setup-1.1.0-win-x64.exe`（58.7 MB）；`Sign installer` 仍 skipped——**安装包未签名**（`CODESIGN_*` 那对 secrets 未配） |
 | `update-dockerhub-description.yml` | push main 且改动含 `README.md`（带 `paths:` 过滤的两个之一，另一个是 `site-deploy.yml`） | 把 `README.md` 同步为 Docker Hub 仓库说明。**2026-10-22 第一次跑绿**（run `39720441754`，push `main`、head `ab5c9fb7`，改动含 `README.md`）。此前它空了一整版：唯一那次 `main` 推送是"新建分支"（`before` 是全零），GitHub 算不出改动文件集，带 `paths:` 的它被跳过、另外四个照跑；因为从没被登记过，连网页上的「Run workflow」都不存在，只能等一次改到 `README.md` 的常规推送（排查过程与四条证据见 `发布检查清单.md`「Hub 仓库说明」）。**Hub 上的说明正文本机没复核到**——`hub.docker.com` 从这台机器三条路都是超时，这一句只有 CI 那一步的退出码背书 |
@@ -349,7 +472,8 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 ---
 
-**文档版本**：v1.1.0  
-**最后更新**：2026-10-20  
+**文档版本**：v1.1.1  
+**最后更新**：2026-10-22  
 **主分支**：main  
+**官网**：<https://iamplusdev.github.io/push-box/>（源码在 `site/`，改 `site/**` 推到 `main` 就自动发布）  
 **仓库**：[GitHub](https://github.com/iamplusdev/push-box.git)（主仓，Issue 与 CI 都在这边）| [Gitee](https://gitee.com/iamplus/push-box.git)（手动同步的国内镜像，可能落后主仓）

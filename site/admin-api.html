@@ -19,7 +19,7 @@
 <nav class="side">
   <a class="brand" href="index.html">
     <span class="mark"><img src="assets/img/icon-192.png" alt=""></span>
-    <span><b>PushBox</b><span>1.1.0 · 自托管推送</span></span>
+    <span><b>PushBox</b><span>1.1.1 · 自托管推送</span></span>
   </a>
   <h3>文档</h3>
   <ul>
@@ -74,7 +74,7 @@
       <b>生成两把密钥，写进部署配置</b>
       <pre class="code" data-code="bash"><code>export PB_ADMIN_SECRET=$(openssl rand -base64 32)       # 登录口令
 export PB_ADMIN_JWT_SECRET=$(openssl rand -base64 32)   # token 签名钥</code></pre>
-      <span class="sub">两个值必须不同、各自至少 32 字节，否则服务端直接拒绝启动。容器部署时写进 <code>.env</code>。管理台只认 <code>PB_ADMIN_SECRET</code> 这一份口令，不是某个频道的密钥。</span>
+      <span class="sub"><b>要用管理台</b>这两个值就必须都有、互不相同、各自至少 32 字节，只填一个或填弱值容器会直接拒绝启动。两个都留空是一个合法状态：管理台整个关闭，下面这些接口一律回 403「管理台未启用」。容器部署时写进 <code>.env</code>（NAS 图形界面里就是那两行变量）。管理台只认 <code>PB_ADMIN_SECRET</code> 这一份口令，不是某个频道的密钥。</span>
     </li>
     <li>
       <b>用口令换 token</b>

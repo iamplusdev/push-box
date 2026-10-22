@@ -3,6 +3,9 @@ contact_links:
   - name: 报告安全问题（不要开公开 issue）
     url: https://github.com/iamplusdev/push-box/security/advisories/new
     about: 漏洞请走 GitHub 私密安全报告，先读 SECURITY.md 里"不属于漏洞的设计取舍"。
+  - name: 文档与安装（官网）
+    url: https://iamplusdev.github.io/push-box/
+    about: 概览、安装与部署、三本 API 参考、协议与加密都在站点上；站点源码在本仓库 site/。
   - name: 部署与联调口径
     url: https://github.com/iamplusdev/push-box/blob/main/deploy/部署快速参考.md
-    about: 端口、建桶、环境变量这些坑大多已有成文判据，先对着排查再开 issue。
+    about: 端口、建库建桶、环境变量这些坑大多已有成文判据，先对着排查再开 issue。

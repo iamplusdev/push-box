@@ -51,7 +51,7 @@ public class DevCredentialsGuard implements BeanFactoryPostProcessor, Environmen
   @Override
   public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) throws BeansException {
     if (environment == null || !List.of(environment.getActiveProfiles()).contains("dev")) {
-      // 只管 dev：prod 由容器里的 ${VAR:?} 与 S3Config 守，不在这儿重复一套口径
+      // 只管 dev：prod 由容器 entrypoint 与 S3Config 守，不在这儿重复一套口径
       return;
     }
     if (beanFactory.getBeanNamesForType(DataSource.class, true, false).length == 0) {

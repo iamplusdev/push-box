@@ -103,6 +103,16 @@ for COMPOSE in "$ROOT_DIR/deploy/docker-compose.yml" "$ROOT_DIR/deploy/docker-co
     fi
 done
 
+# 同一份本地镜像标签还抄在排障文档里（那条 `buildx --load` 命令必须产出 compose-wsl 期望的同一个 tag，
+# 否则照文档构建完 compose 还是找不到镜像）。它不归 compose 那个循环管，所以单独覆盖这一种写法。
+for DOC in "$ROOT_DIR/deploy/WSL测试速查.md"; do
+    if [ -f "$DOC" ]; then
+        sed -i.bak -E "s#pushbox/server:[0-9]+\.[0-9]+\.[0-9]+#pushbox/server:$VERSION#g" "$DOC"
+        rm -f "${DOC}.bak"
+        echo "✅ $(basename "$DOC"): pushbox/server:$VERSION"
+    fi
+done
+
 # 8. 更新官网 site/ 页面里写死的版本
 #    站点的顶栏徽章、产物文件名都是手写的 X.Y.Z，不归本脚本管时每次发版都会留一处假数字
 #    （1.1.0 这轮就漂成了：构建配置全对，site 七个页面还挂着 1.0.0）。
@@ -124,5 +134,5 @@ echo "🎉 版本号已同步到所有平台: $VERSION"
 echo "   - Android: versionCode=$VERSION_CODE, versionName=$VERSION"
 echo "   - Windows: Version=$VERSION"
 echo "   - Maven: pushbox-parent=$VERSION（root/core/server）"
-echo "   - Docker: docker.io/iamplusdev/push-box:$VERSION（生产 compose）/ pushbox/server:$VERSION（WSL 本地构建）"
+echo "   - Docker: docker.io/iamplusdev/push-box:$VERSION（生产 compose）/ pushbox/server:$VERSION（WSL 本地构建与排障文档）"
 echo "   - 官网: site/*.html 徽章与产物文件名"

@@ -71,7 +71,7 @@ class DevCredentialsGuardTest {
   }
 
   @Test
-  @DisplayName("⑤ prod 不归这里管：容器里必填项由 compose 的 ${VAR:?} 与 S3Config 守")
+  @DisplayName("⑤ prod 不归这里管：容器里必填项由 entrypoint 与 S3Config 守")
   void prodIsLeftToTheContainerGuards() {
     assertThatCode(() -> refresh("prod", Map.of(), true)).doesNotThrowAnyException();
   }

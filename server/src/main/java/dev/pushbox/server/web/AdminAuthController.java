@@ -123,7 +123,8 @@ public class AdminAuthController {
     if (jwtSecret == null || jwtSecret.isBlank()) {
       throw new IllegalStateException("""
           管理台已启用（pb.admin.secret 非空）但缺少 JWT 签名钥：pb.admin.jwt-secret 为空。
-              容器里它是 PB_ADMIN_JWT_SECRET（compose 已用 ${VAR:?} 卡住），生成方式：openssl rand -base64 32。
+              容器里它是 PB_ADMIN_JWT_SECRET（entrypoint 在启动 Java 之前就会挡住并给出这条），
+              生成方式：openssl rand -base64 32。
               签名钥与登录口令必须是两个不同的值：同一个值既当口令又当 HMAC 钥时，谁都轮换不了。""");
     }
     byte[] key = jwtSecret.getBytes(StandardCharsets.UTF_8);

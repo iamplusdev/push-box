@@ -183,18 +183,87 @@ fi
 # ========================================
 section "检查生产环境密钥配置"
 
-# 检查 docker-compose.yml 中的强制验证
-if grep -q 'PB_ADMIN_SECRET:.*:?' "$ROOT_DIR/deploy/docker-compose.yml"; then
-    pass "PB_ADMIN_SECRET 已设置为必填项"
+# D76 之后，主 compose 不再用 ${VAR:?} 卡解析阶段：NAS 的图形界面（飞牛/群晖/1Panel）没有 .env 这一层，
+# 那一层的报错既读不懂（"required variable PB_ADMIN_JWT_SECRET is missing a value"）也改不动（没有文件可编辑）。
+# 所以判据搬进了容器 entrypoint。这里因此不再断言"compose 里有 :?"，改成断言三件事：
+#   ① 主文件的环境块里一项插值硬拦都没有（只看 `PB_XXX:` 开头的行，注释里解释这段历史的 ${VAR:?} 不算）；
+#   ② entrypoint 该判死的还在判死（库口令、管理台两把钥的完整性、明文桶）；
+#   ③ 拓扑默认值真的烘焙进了镜像，所以"只填两个变量"不是一句口号。
+if grep -qE '^[[:space:]]*PB_[A-Z0-9_]+:[^#]*\?\}' "$ROOT_DIR/deploy/docker-compose.yml"; then
+    fail "主 compose 又出现解析阶段的 \${VAR:?} 硬拦：图形界面部署（没有 .env）会在 up 之前就失败，且那句报错读不出该填什么"
 else
-    fail "PB_ADMIN_SECRET 未强制要求"
+    pass "主 compose 环境块无解析阶段硬拦（必填判据在容器 entrypoint 里）"
 fi
 
-# 登录口令与 JWT 签名钥拆成两把，两把都必须在 compose 解析阶段就要到人
-if grep -q 'PB_ADMIN_JWT_SECRET:.*:?' "$ROOT_DIR/deploy/docker-compose.yml"; then
-    pass "PB_ADMIN_JWT_SECRET 已设置为必填项"
+for needle in 'PB_DB_PASSWORD 未设置' 'PB_ADMIN_JWT_SECRET 不能与 PB_ADMIN_SECRET 同值' '启用 Web 管理台必须另设 PB_ADMIN_JWT_SECRET'; do
+    if grep -q "$needle" "$ROOT_DIR/deploy/Dockerfile"; then
+        pass "entrypoint 仍守着：$needle"
+    else
+        fail "entrypoint 丢了这条判据：$needle ——搬离 compose 插值不等于可以少守一项"
+    fi
+done
+
+# 镜像里那份 /app/entrypoint.sh 和仓库里这段 heredoc **不是同一份文本**：BuildKit 对未加引号的
+# heredoc 会展开 `$` 并吃掉**所有**反斜杠（不止 `\$` 那一种）。这条差别在 2026-10-22 抓到一个真缺陷：
+# 源码里 case 模式写的"转义括号字符类"落进镜像变成裸括号，容器起来 1 秒就 `syntax error near
+# unexpected token`，而当时手上那 25 条场景矩阵全绿——因为矩阵跑的是"只把 \$ 换成 $"的渲染副本，
+# 恰好把出错的那一行还原成了源码里的合法写法。**本地渲染 != 构建产物**这件事，只靠人记住一定会漏。
+# 所以这里用两步静态判据把同一类错挡在构建之前（不需要 docker）：
+#   ① heredoc 里除 `\$` 之外不许出现任何反斜杠——出现即语义会被构建改掉；
+#   ② 按 BuildKit 规则还原（去掉全部反斜杠）之后必须过 `bash -n`。
+EP_HEREDOC=$(awk '/^COPY <<EOF \/app\/entrypoint.sh$/{f=1;next} f && /^EOF$/{exit} f' "$ROOT_DIR/deploy/Dockerfile")
+if [ -z "$EP_HEREDOC" ]; then
+    fail "没从 deploy/Dockerfile 里取出 entrypoint 的 heredoc（那段的路径标记变了，这条闸和镜像一起失守）"
 else
-    fail "PB_ADMIN_JWT_SECRET 未强制要求（管理台会拿它签 JWT，缺了只能等到登录才炸）"
+    EP_STRAY_BS=$(printf '%s' "$EP_HEREDOC" | sed 's/[\\][$]//g' | grep -c '[\\]' || true)
+    if [ "$EP_STRAY_BS" != "0" ]; then
+        fail "entrypoint heredoc 里有 $EP_STRAY_BS 行带多余的反斜杠：BuildKit 会把它们吃掉，镜像里的脚本与仓库里读到的不是同一份（现场见那段 case 模式）"
+    else
+        pass "entrypoint heredoc 只用了转义美元符这一种反斜杠（构建后与仓库内容逐字对应）"
+    fi
+    EP_TMP=$(mktemp)
+    printf '%s\n' "$EP_HEREDOC" | sed 's/[\\][$]/$/g; s/[\\]//g' > "$EP_TMP"
+    if bash -n "$EP_TMP" 2>/dev/null; then
+        pass "按 BuildKit 规则还原出来的 entrypoint 过 bash -n（容器不会 1 秒退出）"
+    else
+        fail "还原后的 entrypoint 语法就不对：镜像里的 /app/entrypoint.sh 会让容器启动即退出。差异行：$(bash -n "$EP_TMP" 2>&1 | head -2 | tr '\n' ' ')"
+    fi
+    rm -f "$EP_TMP"
+fi
+
+# 镜像默认值：单容器（NAS 图形界面）不填 PB_STORAGE_TYPE 也要能自包含跑起来。
+if grep -qE '^[[:space:]]*PB_STORAGE_TYPE=local' "$ROOT_DIR/deploy/Dockerfile"; then
+    pass "镜像烘焙了 PB_STORAGE_TYPE=local（单容器起步不依赖对象存储）"
+else
+    fail "镜像没烘焙 PB_STORAGE_TYPE=local：\"只填库地址与口令两个变量\"会变成\"起来才发现要配桶\""
+fi
+
+# 口令类一律不给默认值（这条是"容易上手"与"裸奔"之间的界线）。
+if grep -qE '^[[:space:]]*PB_DB_PASSWORD=[^[:space:]]' "$ROOT_DIR/deploy/Dockerfile"; then
+    fail "Dockerfile 给 PB_DB_PASSWORD 烘焙了默认值：凭据绝不进镜像层，任何镜像读者都能拿到"
+else
+    pass "PB_DB_PASSWORD 在镜像里没有默认值（凭据只走环境变量）"
+fi
+
+# PB_DB_HOST 是"最省事写法"的入口，但它只被 entrypoint 消费（拼成 PB_DB_URL 再给 yml），
+# 所以这两处必须同进同退：删掉派生那一步，compose 与 NAS 文件里的 PB_DB_HOST 就全成了死开关。
+if grep -q 'PB_DB_HOST: ${PB_DB_HOST' "$ROOT_DIR/deploy/docker-compose.yml" \
+  && grep -q 'export PB_DB_URL="jdbc:mysql' "$ROOT_DIR/deploy/Dockerfile"; then
+    pass "PB_DB_HOST 有人消费（compose 透传 + entrypoint 派生出 PB_DB_URL）"
+else
+    fail "PB_DB_HOST 成了死开关：只填库地址会得到\"连不上默认 mysql\"，而不是明确的报错"
+fi
+
+if [ -f "$ROOT_DIR/deploy/docker-compose.nas.yml" ]; then
+    # 只看值那一侧：注释里提到这种写法是解释"为什么不用它"，不该把自己判红（第一版没剥注释，
+    # 结果被文件头那段说明触发了一条假 FAIL）。
+    if sed 's/#.*//' "$ROOT_DIR/deploy/docker-compose.nas.yml" | grep -q '\${'; then
+        fail "docker-compose.nas.yml 的**取值行**里出现插值：这本文件存在的意义就是\"没有 .env 也能 up\""
+    else
+        pass "docker-compose.nas.yml 零插值（改字面值就能在 NAS 上 up）"
+    fi
+else
+    fail "缺 deploy/docker-compose.nas.yml：图形界面部署又只剩那套 \${VAR:?}"
 fi
 
 if grep -q 'PB_ADMIN_JWT_SECRET=<必填' "$ROOT_DIR/deploy/env/prod.env.example"; then
@@ -284,6 +353,8 @@ done
 SCAN_TARGETS=(
     "$ROOT_DIR/deploy/env/prod.env.example"
     "$ROOT_DIR/deploy/部署快速参考.md"
+    "$ROOT_DIR/deploy/docker-compose.nas.yml"
+    "$ROOT_DIR/deploy/NAS部署指南.md"
     "$ROOT_DIR/deploy/docker-compose.yml"
     "$ROOT_DIR/deploy/Caddyfile"
     "$ROOT_DIR/deploy/backup/backup.sh"

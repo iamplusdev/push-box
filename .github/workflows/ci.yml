@@ -111,7 +111,7 @@ jobs:
 
       # 闸门用例的存在性证明：skipped 必须为 0，且执行总数不低于实测基线。
       # 只判"mvn 退出码 0"是不够的 —— 凭据没传进去时它同样退 0。
-      # 基线是 2026-10-22 用 JDK 21 实跑出来的 surefire 汇总：server 263（其中 114 条是闸门类）+ core 43 = 306。
+      # 基线是 2026-10-22 用 JDK 21 实跑出来的 surefire 汇总：server 265（其中 114 条是闸门类）+ core 43 = 308。
       # 这个数字只许涨不许跌；跌了说明有人删了测试或改了 include 规则，而不是"环境不一样"。
       # 223 → 227 是 AdminControllerBodyTest 那 4 条（管理台坏请求体返 400 的收口用例）；
       # 227 → 232 是 DeviceControllerBodyTest 那 5 条（设备侧同一收口），两次都是同版本 JDK 实跑抬的。
@@ -134,7 +134,10 @@ jobs:
       # 只会让整轮测试静默跑在本地目录上，所以反向那条判据也得有用例兜着。
       # 260 → 263 是 StorageWiringTest 那 3 条：它跑真 AnnotationConfigApplicationContext 而不是手工 new，
       # 因为 local 模式起不来那条缺陷（`@Bean` 返回 null = NullBean = "没有这个 bean"）只有容器才照得出来。
-      # 总基线 292 → 301 → 303 → 306。
+      # 263 → 265 是 ProdPlaintextMediaGuardTest 的 ⑤⑥ 两条：本地盘明文只出声不拒启（D76 把门槛按存储拓扑分档，
+      # 拒启只会逼人为了过检查去配一个用不到的桶）、反向那条确认判据只认 local——其余取值（含没映射到的旧配置）
+      # 一律按最严的桶形态判，别让"读不到配置"被当成"选了本地盘"。
+      # 总基线 292 → 301 → 303 → 306 → 308。
       - name: 断言 DB 闸门用例真的执行了
         run: |
           set -euo pipefail
@@ -152,8 +155,8 @@ jobs:
           if skipped != 0:
               print("::error::有 %d 条用例被跳过：DB/S3 凭据没传到位（见本 job 顶部说明），全绿不代表测过" % skipped)
               sys.exit(1)
-          if tests < 306:
-              print("::error::用例总数 %d 低于基线 306，测试被静默裁剪了" % tests); sys.exit(1)
+          if tests < 308:
+              print("::error::用例总数 %d 低于基线 308，测试被静默裁剪了" % tests); sys.exit(1)
           print("✅ 闸门用例全部执行")
           PY
 
