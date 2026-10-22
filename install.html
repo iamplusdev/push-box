@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>安装与部署 · PushBox</title>
+<meta name="description" content="PushBox 安装说明：本机起服务端、Docker 单镜像部署、HTTPS 证书、备份，以及 Android 与 Windows 两端的安装。">
+<link rel="stylesheet" href="assets/site.css">
+<link rel="icon" href="assets/img/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32x32.png">
+<link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<div class="scrim"></div>
+<div class="shell">
+
+<nav class="side">
+  <a class="brand" href="index.html">
+    <span class="mark"><img src="assets/img/icon-192.png" alt=""></span>
+    <span><b>PushBox</b><span>1.1.0 · 自托管推送</span></span>
+  </a>
+  <h3>文档</h3>
+  <ul>
+    <li><a href="index.html">首页</a></li>
+    <li><a href="overview.html">概览</a></li>
+    <li><a href="install.html" aria-current="page">安装与部署</a></li>
+    <li><a href="usage.html">使用说明</a></li>
+    <li><a href="api.html">入站 API（写入）</a></li>
+    <li><a href="client-api.html">客户端 API（读取）</a></li>
+    <li><a href="admin-api.html">管理台 API</a></li>
+    <li><a href="protocol.html">长连接与加密</a></li>
+  </ul>
+  <h3>仓库</h3>
+  <ul>
+    <li><a href="https://github.com/iamplusdev/push-box">GitHub</a></li>
+    <li><a href="https://gitee.com/iamplus/push-box">Gitee</a></li>
+  </ul>
+  <h3>本页</h3>
+  <div id="toc"></div>
+  <button class="theme-toggle" id="themeBtn" type="button">☾ 深色</button>
+</nav>
+
+<main id="main">
+<div class="wrap">
+
+  <div class="topbar">
+    <button id="navBtn" type="button" aria-label="打开菜单">☰</button>
+    <b>安装与部署</b>
+  </div>
+
+  <h1>安装与部署</h1>
+  <p class="lede">先起服务端，再装两端。服务端与 Android、Windows 之间没有构建依赖，只有协议依赖，所以三端可以各装各的。</p>
+
+  <h2 id="prereq">前置要求</h2>
+  <table>
+    <thead><tr><th>组件</th><th>要求</th></tr></thead>
+    <tbody>
+      <tr><td>MySQL</td><td>8.0 / 8.4，且 <code>ngram_token_size=2</code></td></tr>
+      <tr><td>图片存储</td><td>本地一个目录，或任意 S3 兼容桶（可选项）</td></tr>
+      <tr><td>JDK / Maven</td><td>自己构建服务端时才需要：JDK 21、Maven 3.9+</td></tr>
+      <tr><td>Docker</td><td>容器部署时唯一需要的一项</td></tr>
+      <tr><td>Android</td><td>8.0 起；直接装发布的 APK</td></tr>
+      <tr><td>Windows</td><td>Windows 10 19041 起，安装包自带运行时</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="server">本机起服务端</h2>
+  <p>这条路径不需要桶、不需要 Docker，只要本机有一个 MySQL 8。</p>
+  <ol class="steps">
+    <li>
+      <b>建库和账号；表结构不用管，首次启动会自动建</b>
+      <pre class="code" data-code="sql"><code>CREATE DATABASE IF NOT EXISTS pushbox
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER IF NOT EXISTS 'pushbox'@'localhost' IDENTIFIED BY '&lt;强口令&gt;';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES
+  ON pushbox.* TO 'pushbox'@'localhost';
+FLUSH PRIVILEGES;
+
+SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句</code></pre>
+      <span class="sub">JDBC 走 TCP 到 127.0.0.1 时 MySQL 认的主机名是 <code>localhost</code>；连不上的话把同一个账号再建一份 <code>'pushbox'@'127.0.0.1'</code>。</span>
+    </li>
+    <li>
+      <b>把口令放进环境变量，别写进配置文件</b>
+      <pre class="code" data-code="bash"><code>cp deploy/env/local.env.example deploy/env/local.env
+# 必填只有 PB_DB_PASSWORD 一项，其余按需改
+# local.env 已在 .gitignore 里，它不该出现在任何一次提交中</code></pre>
+      <span class="sub">配置文件里 <code>password: ${PB_DB_PASSWORD}</code> 故意不留默认值：忘了 source 就直接启动失败，而不是拿空口令去连库、把配置问题伪装成 <code>Access denied</code>。</span>
+    </li>
+    <li>
+      <b>构建并启动</b>
+      <pre class="code" data-code="bash"><code>export JAVA_HOME=/path/to/jdk-21    # 机器默认的 JAVA_HOME 常常还是 JDK 8
+mvn -B -DskipTests package
+bash deploy/run-dev.sh              # 监听 7404，自己 source deploy/env/local.env</code></pre>
+      <span class="sub">换端口、改配置一律往后加参数：<code>bash deploy/run-dev.sh --server.port=8081 --pb.s3.delete-grace=2s</code>。</span>
+    </li>
+    <li>
+      <b>确认它起来了</b>
+      <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:7404/healthz</code></pre>
+      <span class="sub">期望 <code>{"status":"UP","db":"up","storage":"up"}</code>。</span>
+    </li>
+    <li>
+      <b>登录管理台，建第一个频道</b>
+      <span class="sub">浏览器打开服务端根路径 <code>http://127.0.0.1:7404/</code>，口令就是 <code>PB_ADMIN_SECRET</code> 的值——dev 配置自带一个占位口令，本地起步直接用；对外部署必须自己换一个。然后「频道 → 新建」。频道号和密钥就是要填进推送工具的那一对；<b>密钥只在创建和重置的那一刻显示一次</b>。</span>
+    </li>
+    <li>
+      <b>可选：跑一次端到端自检</b>
+      <pre class="code" data-code="bash"><code>cd deploy/probe &amp;&amp; npm install      # 只需一次
+node p0-e2e.mjs                     # 默认打 127.0.0.1:7404
+PB_BASE=http://127.0.0.1:8081 node p0-e2e.mjs   # 端口不同时自己指</code></pre>
+      <span class="sub">它模拟一台设备走完整条链路：握手、注册、发消息、收帧、补拉、图片。末行 <b>N/N 且 0 失败</b> 才算这套装对了。它会在库里留下测试 Space 和设备，别对生产库跑。</span>
+    </li>
+  </ol>
+
+  <h2 id="storage">图片存在哪里</h2>
+  <table>
+    <thead><tr><th>后端</th><th>怎么开</th><th>适合</th></tr></thead>
+    <tbody>
+      <tr><td><code>local</code>（默认）</td><td>什么都不用配，图片落 <code>PB_STORAGE_LOCAL_PATH</code>，默认 <code>./data/media</code></td><td>本机起步、单机部署</td></tr>
+      <tr><td><code>s3</code></td><td><code>PB_STORAGE_TYPE=s3</code> 加 <code>PB_S3_ENDPOINT</code> / <code>PB_S3_ACCESS_KEY</code> / <code>PB_S3_SECRET_KEY</code>，桶名默认 <code>pushbox</code></td><td>要独立备份、要多机、要桶生命周期</td></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li>桶<b>不需要</b>匿名可读：图片字节由服务端取回后再发给设备，桶对客户端可以完全不可见。</li>
+    <li>endpoint 是 IP 或裸主机名时 <code>pb.s3.path-style</code> 保持 <code>true</code>，虚拟主机风格的域名解析不出来。</li>
+    <li>想让对象在桶里是密文：主钥 <code>PB_S3_MASTER_KEY=$(openssl rand -base64 32)</code>，再加 <code>--pb.s3.object-encrypt=sse-c</code>。开关只影响新写入的对象，历史对象按各自记录的形态读。</li>
+  </ul>
+  <div class="callout danger"><b>主钥一旦有对象落库就不能换</b><p>换主钥等于旧封装钥全部解不开，表现为图片集体不见了，而且不可恢复。请把它和数据库口令放在一起备份。</p></div>
+
+  <h2 id="prod">Docker 部署</h2>
+  <p>镜像在 Docker Hub 上，<b>里面同时装着服务端与 Web 管理台</b>：同一个进程、同一个端口吐 API、长连接和页面，同源，所以不需要 CORS，反代也只要一条规则。</p>
+  <ol class="steps">
+    <li>
+      <b>取 compose 与配置模板</b>
+      <pre class="code" data-code="bash"><code>git clone https://github.com/iamplusdev/push-box.git
+cd push-box/deploy
+cp env/prod.env.example .env        # .env 不提交</code></pre>
+      <span class="sub">仓库里只要这几本书，机器上不用装 JDK 和 Maven——跑起来的那份是 Hub 上的镜像。</span>
+    </li>
+    <li>
+      <b>生成口令填进 .env，不要手编弱值</b>
+      <pre class="code" data-code="bash"><code>PB_DB_PASSWORD=$(openssl rand -base64 24)
+PB_ADMIN_SECRET=$(openssl rand -base64 32)
+PB_ADMIN_JWT_SECRET=$(openssl rand -base64 32)
+sed -i "s|^PB_DB_PASSWORD=.*|PB_DB_PASSWORD=$PB_DB_PASSWORD|" .env
+sed -i "s|^PB_ADMIN_SECRET=.*|PB_ADMIN_SECRET=$PB_ADMIN_SECRET|" .env
+sed -i "s|^PB_ADMIN_JWT_SECRET=.*|PB_ADMIN_JWT_SECRET=$PB_ADMIN_JWT_SECRET|" .env</code></pre>
+      <span class="sub">管理台登录用 <code>PB_ADMIN_SECRET</code>；<code>PB_ADMIN_JWT_SECRET</code> 是签名钥，两个必须不同且各不短于 32 字节，否则容器直接拒绝启动。改口令不会作废已登录的会话，反之也一样。</span>
+    </li>
+    <li>
+      <b>按自己的情况选拓扑，然后起容器</b>
+      <pre class="code" data-code="bash"><code>docker compose pull           # 从 Docker Hub 取镜像
+docker compose up -d</code></pre>
+      <span class="sub">要监控再多加一本书：<code>docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d</code>。</span>
+    </li>
+    <li>
+      <b>验证</b>
+      <pre class="code" data-code="bash"><code>curl http://localhost/healthz       # 端口按 .env 里的 PB_HTTP_PORT 改</code></pre>
+    </li>
+  </ol>
+  <table>
+    <thead><tr><th>拓扑</th><th>起什么</th><th>改哪几行</th></tr></thead>
+    <tbody>
+      <tr><td>A：已有 MySQL 与桶（默认）</td><td>服务端 + Caddy</td><td><code>PB_DB_URL</code>、<code>PB_S3_ENDPOINT</code> 指到那台 MySQL 与那个桶</td></tr>
+      <tr><td>B：全都自己起</td><td>再加 <code>mysql:8.4</code> 与对象存储</td><td>取消 compose 里那两段的注释，地址写 service-name；嫌手写麻烦直接用 <code>docker-compose-wsl.yml</code></td></tr>
+      <tr><td>C：不用桶</td><td>服务端 + MySQL，图片落卷</td><td><code>PB_STORAGE_TYPE=local</code>，<code>PB_S3_*</code> 留空</td></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li>compose 只认 <code>PB_*</code> 这一套名字，不要再写 <code>SPRING_DATASOURCE_URL</code> 之类的别名——两个名字各声称拥有同一个键时，排查会看不出真实取值来自哪。</li>
+    <li>拓扑 C 的 <code>/app/data/media</code> <b>必须挂卷</b>，compose 里已经挂成 named volume <code>pushbox_server_media</code>。改成宿主目录时注意属主要能被容器里的账号写：目录挂错不会让启动失败，症状是每条带图的消息停在 <code>failed</code>。</li>
+    <li>本地模式同样受「不许静默写明文」这条约束：要么开 <code>sse-c</code> 并配主钥，要么显式 <code>PB_ALLOW_PLAINTEXT_MEDIA=1</code>，否则容器拒绝启动。</li>
+    <li>管理台在<b>根路径 <code>/</code></b>，不是 <code>/admin</code>；<code>/admin/*</code> 返回 404。</li>
+  </ul>
+
+  <h2 id="tls">HTTPS 与自签 CA</h2>
+  <p>内网裸 HTTP 可以跑，但接了公网就得上证书。两条路：Caddy 的 Let's Encrypt（有公网域名时最省事），或自建根 CA 签一张内部域名。</p>
+  <ol class="steps">
+    <li>
+      <b>签一套证书（在一台管理机上跑，不在部署机上）</b>
+      <pre class="code" data-code="bash"><code>PUSHBOX_HOST=pushbox.internal PUSHBOX_IP=&lt;部署机IP&gt; deploy/ca/gen-ca.sh
+# 只把 certs/pushbox.crt、pushbox.key、pushbox_ca.crt 拷到部署机的 deploy/certs/
+# 根 CA 私钥 pushbox_ca.key 离线保存：不进仓库、不上部署机</code></pre>
+    </li>
+    <li>
+      <b>服务端：把 Caddyfile 的 tls 指到那三本证书</b>
+      <span class="sub">主机名从 <code>PB_CADDY_HOST</code> 读，改一处即可。叶子证书到期用同一根 CA 重签，各端已信任的根不用动。</span>
+    </li>
+    <li>
+      <b>Windows：把根 CA 装进当前用户的根存储</b>
+      <pre class="code" data-code="powershell"><code>certutil -addstore -user Root pushbox_ca.cer</code></pre>
+      <span class="sub"><code>-user</code> 不需要管理员权限。已经跑着的程序不会回头重读根存储，换证书的动作是「退出再起一次」；撤销证书要按指纹删。</span>
+    </li>
+    <li>
+      <b>Android：根 CA 内置在 APK 里</b>
+      <span class="sub">用自签证书时要用带这份根的构建；系统根存储里的自签证书不会被接受。</span>
+    </li>
+  </ol>
+  <div class="callout"><b>两端都不跳过证书校验</b><p>帧加密补的是链路，TLS 补的是「服务端本身可信」，两者互不替代。</p></div>
+
+  <h2 id="backup">备份</h2>
+  <ol class="steps">
+    <li>
+      <b>一条命令把库和图都备走</b>
+      <pre class="code" data-code="bash"><code>MYSQL_HOST=&lt;DB_HOST&gt; PB_DB_PASSWORD=... PB_S3_ACCESS_KEY=... \
+AGE_RECIPIENT=&lt;age 或 ssh 公钥&gt; [RUSTFS_DATA_DIR=/path/to/data/rustfs] \
+  deploy/backup/backup.sh</code></pre>
+      <span class="sub">产物是 <code>pushbox-&lt;UTC&gt;.sql.gz.age</code> 与 <code>rustfs-&lt;UTC&gt;.tar.age</code>：库用一致性快照导出不锁表，导出后立刻加密。因为库里存的是明文，异地上传前必须加密；图片只有一份，在桶或那个目录里，丢了不可恢复。挂 cron 或 systemd timer 定时跑。</span>
+    </li>
+  </ol>
+
+  <h2 id="android">Android</h2>
+  <ol class="steps">
+    <li>
+      <b>装上 APK</b>
+      <span class="sub">安装包放在 <a href="https://github.com/iamplusdev/push-box/releases">GitHub Releases</a>，找 <code>app-release.apk</code>。还没有对应版本时先从源码编：<code>cd android &amp;&amp; ./gradlew :app:assembleDebug</code>，再 <code>adb install -r</code>。</span>
+    </li>
+    <li>
+      <b>首启填服务器地址</b>
+      <span class="sub">模拟器填 <code>http://10.0.2.2:7404</code>，真机填这台机器的局域网地址（须与服务器同网段）。上了 HTTPS 就填域名，端口省略。</span>
+    </li>
+    <li>
+      <b>注册新 Space，或用恢复码加入已有 Space</b>
+      <span class="sub">注册后会给出一个恢复码：把它抄在纸上。它是换机、重装、忘记设备密钥时唯一的找回途径。</span>
+    </li>
+    <li>
+      <b>立刻做完保活引导</b>
+      <span class="sub">见 <a href="usage.html#keepalive">使用说明 · 让它在国产 ROM 上活着</a>。不依赖厂商推送，就要付出让系统放行的代价，这一步决定体验成败。</span>
+    </li>
+  </ol>
+
+  <h2 id="windows">Windows</h2>
+  <ol class="steps">
+    <li>
+      <b>运行安装包</b>
+      <span class="sub">安装包同样在 <a href="https://github.com/iamplusdev/push-box/releases">GitHub Releases</a>，文件名 <code>PushBox-Setup-1.1.0-win-x64.exe</code>，装在当前用户的 <code>%LOCALAPPDATA%\Programs\PushBox</code>，不需要管理员权限，也不需要先装 .NET。第一次双击时 SmartScreen 会先挡一道「Windows 保护了你的电脑」，点<b>更多信息 → 仍要运行</b>即可。自己编译：<code>bash windows/installer/build-installer.sh</code>（需要 Inno Setup 6）。</span>
+    </li>
+    <li>
+      <b>首启填服务器地址并接入</b>
+      <span class="sub">和 Android 一样：注册新 Space 或用恢复码加入；频道可以在管理台建好后在设备上接入。</span>
+    </li>
+    <li>
+      <b>要知道的两件事</b>
+      <span class="sub">开机自启默认关闭，在设置里打开。卸载不会删 <code>%LOCALAPPDATA%\PushBox</code>：身份、历史库和日志都留着，重装后仍然认回同一个 Space。</span>
+    </li>
+  </ol>
+  <p>数据全在 <code>%LOCALAPPDATA%\PushBox\</code>：<code>identity.json</code>（设备身份与私钥）、<code>pushbox.db</code>（消息与会话）、<code>settings.json</code>（开关）、<code>logs\</code>。</p>
+
+  <h2 id="port">端口</h2>
+  <ul>
+    <li>服务端默认 <code>7404</code>；容器里对外由 <code>PB_HTTP_PORT</code>（默认 80）决定。</li>
+    <li>Caddy 在前面时对外 80/443；<code>/actuator</code> 与指标端口只绑 127.0.0.1，公网来源访问监控端点会得到 403。</li>
+    <li>服务端默认不去抓私网地址的图片。要让内网图片进消息，把主机名精确加进 <code>pb.media.allow-hosts</code>（写 <code>host</code> 或 <code>host:port</code>，不是前缀匹配）。</li>
+  </ul>
+
+  <div class="foot">下一步：<a href="usage.html">使用说明</a> —— 建频道、发第一条消息、通知与保活、换机找回。</div>
+</div>
+</main>
+</div>
+</body>
+</html>

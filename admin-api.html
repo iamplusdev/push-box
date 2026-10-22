@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理台 API · PushBox</title>
+<meta name="description" content="PushBox 管理台 API：用口令换 JWT，再用 16 个 /api/v1/admin 端点管频道、吊销设备、跨 Space 搜消息、建定时推送。每个端点给出命令、参数表与响应示例。">
+<link rel="stylesheet" href="assets/site.css">
+<link rel="icon" href="assets/img/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32x32.png">
+<link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<div class="scrim"></div>
+<div class="shell">
+
+<nav class="side">
+  <a class="brand" href="index.html">
+    <span class="mark"><img src="assets/img/icon-192.png" alt=""></span>
+    <span><b>PushBox</b><span>1.1.0 · 自托管推送</span></span>
+  </a>
+  <h3>文档</h3>
+  <ul>
+    <li><a href="index.html">首页</a></li>
+    <li><a href="overview.html">概览</a></li>
+    <li><a href="install.html">安装与部署</a></li>
+    <li><a href="usage.html">使用说明</a></li>
+    <li><a href="api.html">入站 API（写入）</a></li>
+    <li><a href="client-api.html">客户端 API（读取）</a></li>
+    <li><a href="admin-api.html" aria-current="page">管理台 API</a></li>
+    <li><a href="protocol.html">长连接与加密</a></li>
+  </ul>
+  <h3>仓库</h3>
+  <ul>
+    <li><a href="https://github.com/iamplusdev/push-box">GitHub</a></li>
+    <li><a href="https://gitee.com/iamplus/push-box">Gitee</a></li>
+  </ul>
+  <h3>本页</h3>
+  <div id="toc"></div>
+  <button class="theme-toggle" id="themeBtn" type="button">☾ 深色</button>
+</nav>
+
+<main id="main">
+<div class="wrap">
+
+  <div class="topbar">
+    <button id="navBtn" type="button" aria-label="打开菜单">☰</button>
+    <b>管理台 API</b>
+  </div>
+
+  <h1>管理台 API</h1>
+  <p class="lede">服务端自带 Web 控制台走的就是这一组接口。它用来管这台服务端：列所有频道、吊销设备、跨 Space 搜消息、建定时推送。</p>
+
+  <div class="keys">
+    <div><b>Bearer JWT</b><span>只用一个 <code>Authorization</code> 头，不需要设备签名头</span></div>
+    <div><b>24 小时</b><span>token 有效期；没有刷新接口，过期就重新登录</span></div>
+    <div><b>全局读写</b><span>一个 token 能看所有 Space，也能改所有 Space</span></div>
+  </div>
+
+  <div class="callout">
+    <p><b>先确认要用哪个口</b></p>
+    <ul>
+      <li>给第三方系统发通知 → <a href="api.html">入站 API</a> 的 <code>POST /message</code>，凭据只有频道号 + 密钥。</li>
+      <li>自己写 Android / Windows 客户端 → <a href="client-api.html">客户端 API</a>，只能看自己那个 Space。</li>
+      <li>管这台服务端 → 本页。</li>
+    </ul>
+  </div>
+
+  <h2 id="auth">登录拿 token</h2>
+  <ol class="steps">
+    <li>
+      <b>生成两把密钥，写进部署配置</b>
+      <pre class="code" data-code="bash"><code>export PB_ADMIN_SECRET=$(openssl rand -base64 32)       # 登录口令
+export PB_ADMIN_JWT_SECRET=$(openssl rand -base64 32)   # token 签名钥</code></pre>
+      <span class="sub">两个值必须不同、各自至少 32 字节，否则服务端直接拒绝启动。容器部署时写进 <code>.env</code>。管理台只认 <code>PB_ADMIN_SECRET</code> 这一份口令，不是某个频道的密钥。</span>
+    </li>
+    <li>
+      <b>用口令换 token</b>
+      <pre class="code" data-code="bash"><code>BASE=http://127.0.0.1:7404          # 换成你的服务端地址
+
+TOKEN=$(curl -sS -X POST "$BASE/api/v1/admin/login" \
+  -H 'Content-Type: application/json' \
+  --data-binary "$(jq -nc --arg s "$PB_ADMIN_SECRET" '{secret:$s}')" \
+  | jq -er .token)</code></pre>
+      <span class="sub">请求体字段名是 <code>secret</code>。成功是 200，响应形如 <code>{"ok":true,"token":"&lt;JWT&gt;","expires_in":86400}</code>。口令经 <code>jq</code> 现拼，不落进脚本正文。</span>
+    </li>
+    <li>
+      <b>之后每个请求都带上 Bearer 头</b>
+      <pre class="code" data-code="bash"><code>curl -sS "$BASE/api/v1/admin/channels" \
+  -H "Authorization: Bearer $TOKEN" | jq '.channels | length'</code></pre>
+      <span class="sub">成功是 200 且有 <code>"ok":true</code>。这一条通了，其余端点的鉴权就都通了。</span>
+    </li>
+  </ol>
+
+  <h3>登录这一发会出现的结果</h3>
+  <table>
+    <thead><tr><th>HTTP</th><th><code>error</code></th><th><code>hint</code></th><th>该怎么办</th></tr></thead>
+    <tbody>
+      <tr><td>200</td><td>—</td><td>—</td><td>取 <code>token</code>，24 小时内不用重复登录</td></tr>
+      <tr><td>401</td><td><code>unauthorized</code></td><td>密钥错误</td><td>口令不对；确认传的是 <code>PB_ADMIN_SECRET</code> 而不是频道密钥</td></tr>
+      <tr><td>401</td><td><code>unauthorized</code></td><td>缺少设备 token</td><td><code>Authorization</code> 头没带上，或缺了 <code>Bearer </code> 前缀</td></tr>
+      <tr><td>401</td><td><code>unauthorized</code></td><td>管理 token 无效或已过期</td><td>token 过期或被改动，重跑第 2 步</td></tr>
+      <tr><td>403</td><td><code>forbidden</code></td><td>管理台未启用</td><td><code>PB_ADMIN_SECRET</code> 是空的，整个管理台处于关闭状态</td></tr>
+      <tr><td>429</td><td><code>login_locked</code></td><td>失败次数过多，已临时锁定…</td><td>按响应头 <code>Retry-After</code> 的秒数等，锁定期内输对口令也是 429</td></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li>锁定按<b>来源 IP</b> 计：默认错满 <b>5</b> 次登记锁定，锁 <b>5 分钟</b>，就是 <code>pb.ingest.credential-fail-lock</code> 与 <code>pb.ingest.lock-window</code> 两个配置项。触发锁定那一次仍回 401，下一次才看到 429。</li>
+    <li>计数存在进程内存里：服务端重启即清零，多实例各自算各自的。</li>
+    <li>登录成功会清掉该来源 IP 的失败计数。</li>
+  </ul>
+
+  <div class="callout warn">
+    <p><b>token 泄露了只能换签名钥</b></p>
+    <p>服务端不存任何 token 记录，因此<b>没有"作废某一张 token"的接口</b>。唯一办法是换掉 <code>PB_ADMIN_JWT_SECRET</code> 并重启，这会连你自己手上那张一起作废。</p>
+  </div>
+
+  <h2 id="fields">请求与响应的约定</h2>
+  <ul>
+    <li><b>请求体字段是驼峰</b>：<code>channelNo</code>、<code>cronExpr</code>、<code>maxLevel</code>、<code>groupId</code>。</li>
+    <li><b>响应字段和查询参数是下划线</b>：<code>channel_no</code>、<code>next_fire_at</code>、<code>channel_no</code>。</li>
+    <li>请求体里写错键名<b>不报错、直接忽略</b>，然后按默认值走。报「<code>cron_expr</code> 必填」时先检查是不是写成了下划线。</li>
+    <li>成功响应没有统一包装，但都带 <code>"ok":true</code>。</li>
+    <li><b>值为 <code>null</code> 的键整个不出现</b>，不是回 <code>null</code>。判断"有没有值"要写 <code>'title' in m</code>，不能写 <code>=== null</code>。</li>
+    <li>错误响应恒为 <code>{"ok":false,"error":"&lt;code&gt;","hint":"&lt;string&gt;"}</code>；<code>hint</code> 没有提示时是空串 <code>""</code>，不会是 <code>null</code>。<code>Retry-After</code> 只在 429 出现。</li>
+    <li>时间字段一律 <b>epoch 毫秒</b>（只有 <code>/overview</code> 的 <code>trend[].day</code> 是 <code>yyyy-MM-dd</code> 字符串）。</li>
+    <li>请求体上限：建频道 <b>8192 字节</b>，定时任务 <b>65536 字节</b>，超限 400。</li>
+  </ul>
+
+  <h2 id="codes">错误码</h2>
+  <table>
+    <thead><tr><th>HTTP</th><th><code>error</code></th><th>什么时候出现</th></tr></thead>
+    <tbody>
+      <tr><td>400</td><td><code>invalid_param</code></td><td>必填字段缺失或非法、请求体过大、<code>q</code> 为空或超 100 字符</td></tr>
+      <tr><td>401</td><td><code>unauthorized</code></td><td>没带 <code>Authorization</code> 头、token 验不过或已过期、口令错</td></tr>
+      <tr><td>403</td><td><code>forbidden</code></td><td>管理台未启用（<code>PB_ADMIN_SECRET</code> 为空）</td></tr>
+      <tr><td>404</td><td><code>not_found</code></td><td>频道、设备、任务不存在；<code>hint</code> 是资源名，也可能是空串</td></tr>
+      <tr><td>429</td><td><code>login_locked</code></td><td>登录失败到阈值；带 <code>Retry-After</code></td></tr>
+    </tbody>
+  </table>
+  <p>超限、超配额这类拒绝，<code>hint</code> 里带数字，可以直接正则取出来：</p>
+  <pre class="code" data-code="text"><code>请求体过大
+请求体过大（上限 65536 字节）
+正文 40000 字节，超过该频道的 max_body_bytes 32768</code></pre>
+  <p>三种情况你拿到的<b>不是</b>上面那个错误体，脚本按 <code>.error</code> 取值会得到 <code>undefined</code>：</p>
+  <ul>
+    <li><code>GET /messages</code> 的 <code>since</code> / <code>limit</code> 传非数字 → 400，没有 <code>ok</code> / <code>hint</code>。</li>
+    <li>路径末段拼错，或该用 <code>PUT</code> 的地方发了 <code>POST</code> → 404 / 405，同样不是错误体。</li>
+    <li>漏掉 <code>admin</code> 那一段（写成 <code>/api/v1/channels</code>）→ 401 <code>hint:"缺少签名头 X-PB-Device/Ts/Nonce/Sig"</code>。那是设备接口在说话，你走错了门。</li>
+  </ul>
+
+  <h2 id="endpoint-table">端点总表</h2>
+  <p>16 个，全部在 <code>/api/v1/admin</code> 下，全部要带 Bearer 头。</p>
+  <table>
+    <thead><tr><th>方法 · 路径</th><th>用途</th><th>响应里的键</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag post">POST</span> <code>/login</code></td><td>口令换 JWT</td><td><code>token</code>、<code>expires_in</code></td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/channels</code></td><td>所有 Space 的频道（不含已归档）</td><td><code>channels[]</code></td></tr>
+      <tr><td><span class="tag post">POST</span> <code>/channels</code></td><td>建频道，回一次明文密钥</td><td><code>channel_no</code>、<code>secret</code>…</td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/channels/{channelNo}</code></td><td>频道详情 + 已接入设备</td><td><code>channel</code>、<code>devices[]</code></td></tr>
+      <tr><td><span class="tag post">POST</span> <code>/channels/{channelNo}/rotate-secret</code></td><td>换新密钥，顺带解除该频道的凭据锁定</td><td><code>secret</code>…</td></tr>
+      <tr><td><span class="tag del">DELETE</span> <code>/channels/{channelNo}</code></td><td>软归档，不是真删</td><td><code>archived_at</code></td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/devices</code></td><td>所有 Space 的设备</td><td><code>devices[]</code></td></tr>
+      <tr><td><span class="tag del">DELETE</span> <code>/devices/{deviceId}</code></td><td>吊销设备</td><td><code>device_id</code></td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/messages</code></td><td>跨 Space 消息搜索，只读</td><td><code>count</code>、<code>messages[]</code></td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/overview</code></td><td>全局计数 + 近 14 天趋势</td><td><code>stats</code>、<code>trend[]</code></td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/scheduled-tasks</code></td><td>所有任务，不含正文</td><td><code>tasks[]</code></td></tr>
+      <tr><td><span class="tag get">GET</span> <code>/scheduled-tasks/{taskId}</code></td><td>单条详情，含正文与图片</td><td><code>task</code></td></tr>
+      <tr><td><span class="tag post">POST</span> <code>/scheduled-tasks</code></td><td>建任务</td><td><code>task</code></td></tr>
+      <tr><td><span class="tag put">PUT</span> <code>/scheduled-tasks/{taskId}</code></td><td>整体覆盖载荷与调度</td><td><code>task</code></td></tr>
+      <tr><td><span class="tag post">POST</span> <code>/scheduled-tasks/{taskId}/enabled</code></td><td>启用 / 停用</td><td><code>task</code></td></tr>
+      <tr><td><span class="tag del">DELETE</span> <code>/scheduled-tasks/{taskId}</code></td><td>删任务</td><td><code>task_id</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="channels">频道</h2>
+
+  <h3>建一个频道</h3>
+  <ol class="steps">
+    <li>
+      <b>先拿到一个真实存在的 Space id</b>
+      <pre class="code" data-code="bash"><code>curl -sS "$BASE/api/v1/admin/devices" -H "Authorization: Bearer $TOKEN" \
+  | jq -r '.devices[] | .group_id' | sort -u</code></pre>
+      <span class="sub">频道必须建在<b>已经有设备注册过</b>的那个 Space 下，否则服务端回 400，设备也永远看不到这条频道。</span>
+    </li>
+    <li>
+      <b>建频道，密钥当场存下来</b>
+      <pre class="code" data-code="bash"><code>curl -sS -X POST "$BASE/api/v1/admin/channels" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  --data-binary "$(jq -nc --arg g "$GROUP" \
+    '{groupId:$g,name:"Grafana 告警",maxLevel:"warning",maxImages":4}')" | tee channel.json</code></pre>
+      <span class="sub">期望 200。<b><code>secret</code> 只在响应里出现这一次</b>，库里存的是它的哈希。丢了只能重置。</span>
+    </li>
+    <li>
+      <b>确认归属和接入设备</b>
+      <pre class="code" data-code="bash"><code>curl -sS "$BASE/api/v1/admin/channels/$(jq -r .channel_no channel.json)" \
+  -H "Authorization: Bearer $TOKEN" | jq '.channel.group_id, .devices'</code></pre>
+      <span class="sub">建频道与重置密钥的响应<b>不回显 <code>group_id</code></b>，要看落在哪个 Space 就查一次详情。</span>
+    </li>
+  </ol>
+
+  <h3>建频道的请求体</h3>
+  <table>
+    <thead><tr><th>字段（驼峰）</th><th>必填</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>groupId</code></td><td><span class="tag req">必填</span></td><td>目标 Space 的 id，必须是设备已注册过的那个</td></tr>
+      <tr><td><code>name</code></td><td><span class="tag opt">可选</span></td><td>频道名，去空白后最长 64 字符</td></tr>
+      <tr><td><code>maxLevel</code></td><td><span class="tag opt">可选</span></td><td><code>info</code> / <code>warning</code> / <code>error</code>；省略或写错都回落默认值 <code>error</code></td></tr>
+      <tr><td><code>maxImages</code></td><td><span class="tag opt">可选</span></td><td>取值 0~16，省略默认 4</td></tr>
+    </tbody>
+  </table>
+  <p>响应固定这 6 个键，<code>secret</code> 是 32 位小写十六进制：</p>
+  <pre class="code" data-code="json"><code>{
+  "ok": true,
+  "channel_no": "12345678",
+  "secret": "9f3c1e7ba20d4c6fe8510a9c73db2f14",
+  "name": "Grafana 告警",
+  "max_level": "warning",
+  "max_images": 4
+}</code></pre>
+
+  <h3>频道字段</h3>
+  <p>列表里每一项就是这张表，再加上 <code>group_id</code>；详情还会再带一份 <code>devices[]</code>。<b>任何读路径都不含 <code>secret</code></b>。</p>
+  <table>
+    <thead><tr><th>字段</th><th>类型</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td><code>channel_no</code></td><td>string</td><td>8 位数字频道号，服务端随机分配</td></tr>
+      <tr><td><code>name</code></td><td>string</td><td>频道名；未命名时是 <code>""</code></td></tr>
+      <tr><td><code>group_id</code></td><td>string</td><td>归属 Space；管理台是跨 Space 视图，靠它分辨频道是谁的</td></tr>
+      <tr><td><code>max_level</code></td><td>string</td><td>入站 <code>level</code> 会被向下截断到这个值</td></tr>
+      <tr><td><code>max_images</code></td><td>number</td><td>每条消息图片上限，默认 4</td></tr>
+      <tr><td><code>rate_limit</code></td><td>number</td><td>该频道每分钟条数，默认 60</td></tr>
+      <tr><td><code>max_body_bytes</code></td><td>number</td><td>正文上限，默认 32768 字节（UTF-8）</td></tr>
+      <tr><td><code>strict_auth</code></td><td>0/1</td><td>是否强制 <code>ts</code> / <code>nonce</code> / <code>sign</code> 三件套</td></tr>
+      <tr><td><code>muted</code></td><td>0/1</td><td>静音：照常入库下发，端上不出通知</td></tr>
+      <tr><td><code>daily_msg_limit</code> / <code>daily_image_limit</code> / <code>daily_bytes_limit</code></td><td>number</td><td>日配额，<b>0 = 不限</b></td></tr>
+      <tr><td><code>sender_whitelist_mode</code></td><td>0/1</td><td>1 = 只允许白名单里的 <code>sender_id</code> 写入</td></tr>
+      <tr><td><code>created_at</code></td><td>number</td><td>创建时间，epoch 毫秒</td></tr>
+      <tr><td><code>archived_at</code></td><td>number，或这个键不出现</td><td>归档时间；活频道里这个键整个不存在，判断"活着"写 <code>!("archived_at" in c)</code></td></tr>
+    </tbody>
+  </table>
+  <p>详情里的 <code>devices[]</code> 每项是 <code>device_id</code>、<code>name</code>、<code>platform</code>、<code>group_id</code>、<code>created_at</code>、<code>last_seen_at</code>，只列未吊销的设备。</p>
+
+  <h3>重置密钥与归档</h3>
+  <pre class="code" data-code="bash"><code>curl -sS -X POST "$BASE/api/v1/admin/channels/12345678/rotate-secret" \
+  -H "Authorization: Bearer $TOKEN" | jq .secret
+
+curl -sS -X DELETE "$BASE/api/v1/admin/channels/12345678" \
+  -H "Authorization: Bearer $TOKEN" | jq .archived_at</code></pre>
+  <ul>
+    <li><b>重置密钥</b>：无请求体，响应形状与建频道一样，新密钥又只出现这一次，旧密钥立刻失效。</li>
+    <li>重置<b>顺带清掉该频道的凭据错误锁定计数</b>：第三方刚改对密钥却被锁在窗口外，跑这一条就解开。</li>
+    <li>频道不存在 → 404，<code>hint:"channel"</code>。</li>
+    <li><b>归档是软归档</b>：入站立刻被拒，历史消息和媒体都还在，<code>GET /channels</code> 不再返回它。</li>
+    <li>归档后详情 <code>GET /channels/{channelNo}</code> 照样 200，<code>archived_at</code> 变成非空；搜索也照样命中它的历史。</li>
+    <li>已归档的频道<b>不能作定时推送目标</b>，也不能在管理台恢复。</li>
+    <li>治理位（静音、白名单、日配额、<code>strict_auth</code>）<b>不在这一组接口上改</b>：那几个键在 <a href="client-api.html">客户端 API</a> 的 <code>PUT /api/v1/channels/{channelNo}</code>，管理 token 用不了那个口。</li>
+  </ul>
+
+  <h2 id="devices">设备</h2>
+  <pre class="code" data-code="bash"><code>curl -sS "$BASE/api/v1/admin/devices" -H "Authorization: Bearer $TOKEN" \
+  | jq '.devices[] | {device_id, name, group_id, last_seen_at, revoked_at}'
+
+curl -sS -X DELETE "$BASE/api/v1/admin/devices/01J8ZK3Q7M2XW4V9HTNBSFY6PD" \
+  -H "Authorization: Bearer $TOKEN"</code></pre>
+  <ul>
+    <li><code>GET /devices</code> 跨所有 Space，每项：<code>device_id</code>、<code>name</code>、<code>platform</code>、<code>group_id</code>、<code>created_at</code>、<code>last_seen_at</code>、<code>revoked_at</code>。</li>
+    <li>没吊销过的设备<b>没有 <code>revoked_at</code> 这个键</b>；响应里也不含任何密钥、token 或公钥。</li>
+    <li><b>吊销不可逆</b>：该设备 token 即刻失效、在线连接当场被踢，同一 Space 的其余端会收到一条设备已吊销的通知帧。要回来只能重新注册或输恢复码。</li>
+    <li>设备号不存在 → 404，<code>hint</code> 为空串。</li>
+    <li>每个 Space 的设备上限（<code>pb.devices.max-per-group</code>，默认 5）是在注册侧卡的，这一组接口只能看不能改。</li>
+  </ul>
+
+  <h2 id="messages">消息搜索</h2>
+  <p>只读，跨 Space。路径就是 <code>/messages</code>，没有 <code>/search</code> 那一段。</p>
+  <pre class="code" data-code="bash"><code>curl -sS -G "$BASE/api/v1/admin/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  --data-urlencode 'q=构建失败' \
+  --data-urlencode 'channel_no=12345678' \
+  --data-urlencode 'type=markdown' \
+  --data-urlencode 'since=1760000000000' \
+  --data-urlencode 'limit=200' | jq '.count, .messages[0]'</code></pre>
+  <table>
+    <thead><tr><th>查询参数</th><th>必填</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>q</code></td><td><span class="tag req">必填</span></td><td>关键词，非空且不超过 100 个字符；命中正文、标题、摘要三者之一</td></tr>
+      <tr><td><code>channel_no</code></td><td><span class="tag opt">可选</span></td><td>精确频道号</td></tr>
+      <tr><td><code>type</code></td><td><span class="tag opt">可选</span></td><td><code>text</code> / <code>markdown</code> / <code>link</code> / <code>file</code></td></tr>
+      <tr><td><code>since</code></td><td><span class="tag opt">可选，默认 0</span></td><td>epoch 毫秒下限，只回这之后的消息</td></tr>
+      <tr><td><code>limit</code></td><td><span class="tag opt">可选，默认 50</span></td><td>取值 1~200；传 500 按 200 执行</td></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li><code>q</code> 的长度按<b>字符数</b>算，不是字节：101 个汉字会 400，60 个 emoji 不会。</li>
+    <li><code>q</code> 前后空白会被去掉，纯空白按"必填"处理，回 400 <code>hint:"q 不能为空"</code>；超长度回 <code>hint:"q 最长 100 字符"</code>。</li>
+    <li><code>%</code>、<code>_</code>、<code>\</code> 是<b>字面量</b>，不会被当通配符：搜 <code>100%</code> 找的就是 100%。</li>
+    <li><code>type</code> 是查询参数名，响应里对应字段叫 <code>msg_type</code>，照这个写。</li>
+  </ul>
+  <p>响应是 <code>{ok, count, messages}</code>，按 <code>seq</code> 倒序（新→旧）。下面这份样本有 14 个键，但别按固定键数写解析——没值的键整个不出现，一条没填标题的消息只有 13 个键。</p>
+  <pre class="code" data-code="json"><code>{
+  "seq": 1042,
+  "msg_id": "01J8ZK3Q7M2XW4V9HTNBSFY6PC",
+  "channel_no": "12345678",
+  "channel_name": "Grafana 告警",
+  "group_id": "01J8ZK3Q7M2XW4V9HTNBSFY6PA",
+  "sender_id": "ci",
+  "sender_name": "构建机",
+  "msg_type": "markdown",
+  "title": "unit-test 失败",
+  "summary": "order-svc 单测 3 个用例失败",
+  "body": "### unit-test 失败\n…",
+  "level": "error",
+  "media_status": "ready",
+  "created_at": 1760000000000
+}</code></pre>
+  <div class="callout warn">
+    <p><b>没有分页游标</b></p>
+    <p>一次最多 200 条，想看得更多只能<b>缩小时间窗或换关键词</b>。</p>
+    <p>它也不走全文索引，是大范围扫描。库里的消息到几十万行以后这个接口会明显变慢——它是给"运维查一条"用的，看趋势请走 <a href="#overview">概览统计</a>。</p>
+  </div>
+
+  <h2 id="overview">概览统计</h2>
+  <pre class="code" data-code="bash"><code>curl -sS "$BASE/api/v1/admin/overview" -H "Authorization: Bearer $TOKEN" | jq</code></pre>
+  <pre class="code" data-code="json"><code>{
+  "ok": true,
+  "stats": {
+    "total_channels": 7, "active_channels": 6,
+    "total_devices": 4, "active_devices": 3,
+    "live_messages": 51234, "messages_today": 187
+  },
+  "trend": [
+    { "day": "2026-10-07", "count": 233 },
+    { "day": "2026-10-08", "count": 401 }
+  ]
+}</code></pre>
+  <ul>
+    <li><code>*_channels</code> 的 active = 未归档；<code>*_devices</code> 的 active = 未吊销；<code>live_messages</code> = 未被删除的行。</li>
+    <li><code>messages_today</code> 的"今天"按<b>服务端所在机器的时区</b>零点起算，不是 UTC。</li>
+    <li><code>trend</code> 覆盖最近 14 天，<code>day</code> 按<b>数据库时区</b>格式化，逐日升序。</li>
+    <li><b>零消息的那几天不出现在数组里</b>：刚建起来的库可能数组长度只有 2。画图要么自己补零，要么接受断档。</li>
+  </ul>
+
+  <h2 id="scheduled">定时推送</h2>
+  <p>在服务端建任务：选频道、写正文、给 cron，服务端按时把消息灌进去。它走的是和外部 <code>POST /message</code> 完全同一条链路，发送者固定记作 <code>sender_id="scheduled"</code>。</p>
+
+  <ol class="steps">
+    <li>
+      <b>把任务写成 task.json</b>
+      <pre class="code" data-code="json"><code>{
+  "channelNo": "12345678",
+  "name": "每晚巡检提醒",
+  "category": "巡检",
+  "title": "该跑 nightly-check 了",
+  "content": "### 巡检\n1. 磁盘\n2. 证书",
+  "level": "info",
+  "senderName": "值守机器人",
+  "images": ["https://example.com/chart.png"],
+  "cronExpr": "0 30 21 * * *",
+  "enabled": 1
+}</code></pre>
+      <span class="sub"><code>cronExpr</code> 是 <b>6 段：秒 分 时 日 月 周</b>，不认 5 段 unix cron。"每天 21:30" 写 <code>0 30 21 * * *</code>。</span>
+    </li>
+    <li>
+      <b>提交</b>
+      <pre class="code" data-code="bash"><code>curl -sS -X POST "$BASE/api/v1/admin/scheduled-tasks" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  --data-binary @task.json | jq .task</code></pre>
+      <span class="sub">期望 200，<code>task.enabled</code> 是 <code>1</code>，<code>task.next_fire_at</code> 是未来某个时刻的毫秒时间戳。</span>
+    </li>
+    <li>
+      <b>看它到底发出去了没</b>
+      <pre class="code" data-code="bash"><code>curl -sS "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;" \
+  -H "Authorization: Bearer $TOKEN" | jq '.task | {last_result, last_msg_id, last_fire_at}'</code></pre>
+      <span class="sub">跑成功后 <code>last_result</code> 是 <code>"ok"</code>，<code>last_msg_id</code> 可以拿去 <a href="#messages">消息搜索</a> 里核对。</span>
+    </li>
+    <li>
+      <b>启停与删除</b>
+      <pre class="code" data-code="bash"><code>curl -sS -X POST "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;/enabled" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  --data-binary '{"enabled":0}' | jq '.task.enabled'
+
+curl -sS -X DELETE "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;" \
+  -H "Authorization: Bearer $TOKEN"</code></pre>
+      <span class="sub">只有 <code>1</code> 算启用，其余值一律当停用。停用期间不会发，也不会补跑；重新启用时 <code>next_fire_at</code> 从当下往后算。</span>
+    </li>
+  </ol>
+
+  <h3>请求体字段（驼峰）</h3>
+  <table>
+    <thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>channelNo</code></td><td><span class="tag req">必填</span></td><td>目标频道；不存在 404，已归档 400</td></tr>
+      <tr><td><code>content</code></td><td><span class="tag req">必填</span></td><td>正文，UTF-8 字节数不得超过该频道的 <code>max_body_bytes</code>（默认 32768）</td></tr>
+      <tr><td><code>cronExpr</code></td><td><span class="tag req">必填</span></td><td>6 段 cron；段数或取值非法、或已经没有下一次，都是 400</td></tr>
+      <tr><td><code>level</code></td><td><span class="tag opt">可选</span></td><td><code>info</code> / <code>warning</code> / <code>error</code>；写错会安静变成 <code>info</code>，不报错</td></tr>
+      <tr><td><code>name</code> / <code>title</code> / <code>senderName</code></td><td><span class="tag opt">可选</span></td><td>去空白后分别最长 64 / 512 / 64 字符</td></tr>
+      <tr><td><code>category</code></td><td><span class="tag opt">可选</span></td><td>列表用的自由标签，最长 32 字符，不校验取值</td></tr>
+      <tr><td><code>images</code></td><td><span class="tag opt">可选</span></td><td>外链数组，最多 4 条、单条不超过 1024 字符，只允许 http / https</td></tr>
+      <tr><td><code>enabled</code></td><td><span class="tag opt">可选</span></td><td>省略即 1（启用）</td></tr>
+    </tbody>
+  </table>
+
+  <h3>响应字段（下划线）</h3>
+  <table>
+    <thead><tr><th>字段</th><th>出现在</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>task_id</code>、<code>group_id</code>、<code>channel_no</code>、<code>name</code>、<code>category</code>、<code>title</code>、<code>level</code>、<code>sender_name</code>、<code>cron_expr</code>、<code>enabled</code>、<code>created_at</code>、<code>updated_at</code></td><td>列表、详情、写操作都有</td><td><code>enabled</code> 是 0/1 数字；没填的字符串字段回 <code>""</code>，不会缺键</td></tr>
+      <tr><td><code>channel_name</code></td><td>只有列表</td><td>详情和三个写操作的响应里都没有这个键</td></tr>
+      <tr><td><code>content_head</code></td><td>列表和写操作</td><td>正文前 80 个字符，这两种形状故意不回全文</td></tr>
+      <tr><td><code>content</code>、<code>images</code></td><td>只有详情</td><td>要完整载荷就读详情；详情里没有 <code>content_head</code></td></tr>
+      <tr><td><code>next_fire_at</code>、<code>last_fire_at</code>、<code>created_at</code>、<code>updated_at</code></td><td>都有</td><td>epoch 毫秒；没值回 <code>0</code>，不是 <code>null</code>，键也不会消失</td></tr>
+      <tr><td><code>last_result</code>、<code>last_error</code>、<code>last_msg_id</code></td><td>跑过之后才有</td><td>从没跑过的任务里这三个键都不存在；哪个出现由下面那条说明决定</td></tr>
+    </tbody>
+  </table>
+  <p><code>last_*</code> 三个键的组合会随执行结果变，用它们对账时两件事一起判：</p>
+  <ul>
+    <li>跑成功那一轮：出现 <code>last_result:"ok"</code> 和 <code>last_msg_id</code>，<code>last_error</code> 缺席。</li>
+    <li>跑失败那一轮：出现 <code>last_result:"failed"</code> 和 <code>last_error</code>，<code>last_msg_id</code> 反而被清掉。</li>
+    <li>所以 <code>last_msg_id</code> 是"最后一次尝试产生的消息 id"，不是"最后一条成功送达的消息"；<code>last_error</code> 最长 255 字符。</li>
+  </ul>
+
+  <h3>改一条任务</h3>
+  <div class="callout danger">
+    <p><b><code>PUT</code> 是整体覆盖，不是补丁</b></p>
+    <p>没在请求体里出现的字段会被清成默认值：<code>name</code>、<code>title</code>、<code>sender_name</code> 变 <code>""</code>，<code>images</code> 变空数组，<code>level</code> 回落到 <code>info</code>。<b>漏一个就静默清空一个</b>。</p>
+  </div>
+  <ol class="steps">
+    <li>
+      <b>先把详情整个读下来</b>
+      <pre class="code" data-code="bash"><code>curl -sS "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;" \
+  -H "Authorization: Bearer $TOKEN" | jq '.task' &gt; task.json</code></pre>
+    </li>
+    <li>
+      <b>把下划线键改成驼峰，只动你要改的值</b>
+      <pre class="code" data-code="bash"><code>jq '{channelNo:.channel_no, name, category, title, content, level,
+      senderName:.sender_name, images, cronExpr:.cron_expr, enabled}' task.json &gt; put.json</code></pre>
+      <span class="sub">详情读回来的键是下划线，PUT 要的键是驼峰，中间这一步不能省。</span>
+    </li>
+    <li>
+      <b>覆盖回去</b>
+      <pre class="code" data-code="bash"><code>curl -sS -X PUT "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  --data-binary @put.json | jq '.task | {cron_expr, next_fire_at}'</code></pre>
+      <span class="sub">改了 <code>cronExpr</code> 就按新表达式从当下重算 <code>next_fire_at</code>；已跑过的 <code>last_*</code> 结果原样保留。</span>
+    </li>
+  </ol>
+
+  <h3>执行口径</h3>
+  <ul>
+    <li><b>精度到分钟，不到秒。</b>亚分钟级的 cron 会被推迟到下一个扫描点，实际效果是<b>每分钟最多一条</b>；<code>0/5 * * * * *</code> 不会每 5 秒发一条。</li>
+    <li>扫描周期 <code>pb.scheduled.sweep-interval</code>（默认 15 秒），每轮最多处理 <code>pb.scheduled.batch-size</code>（默认 50）条。</li>
+    <li>宕机几小时后<b>只补当前这一次</b>，不逐分钟回补，之后回到正常节律。</li>
+    <li>投递失败会记下 <code>last_result:"failed"</code> 和 <code>last_error</code>，<b>但不会停任务</b>，下个时隙还会再失败一次。</li>
+    <li><b>唯一的例外</b>：目标频道中途被归档，下一轮会把任务 <code>enabled</code> 直接置成 0，<code>last_error</code> 是「频道已归档或不存在，任务已自动停用」。</li>
+    <li>任务的归属 Space 是<b>从目标频道反查</b>的，不用调用方给。</li>
+    <li><code>DELETE</code> 是真删任务，已经发出去的消息不受影响。</li>
+  </ul>
+
+  <h2 id="recipe">一次完整的运维流程</h2>
+  <p>从登录到建频道、验证入站、挂上每晚提醒，一份能直接跑的脚本。依赖 <code>curl</code> 与 <code>jq</code>。</p>
+  <pre class="code" data-code="bash"><code>#!/usr/bin/env bash
+set -euo pipefail
+BASE="${PB_BASE:?例 http://127.0.0.1:7404}"
+PB_ADMIN_SECRET="${PB_ADMIN_SECRET:?}"
+
+# 1) 口令换 token
+TOKEN=$(curl -sS -X POST "$BASE/api/v1/admin/login" \
+  -H 'Content-Type: application/json' \
+  --data-binary "$(jq -nc --arg s "$PB_ADMIN_SECRET" '{secret:$s}')" | jq -er .token)
+
+# 2) 从设备列表挑一个 group_id 作为目标 Space
+GROUP=$(curl -sS "$BASE/api/v1/admin/devices" -H "Authorization: Bearer $TOKEN" \
+  | jq -er '.devices[] | select(.revoked_at==null) | .group_id' | head -1)
+
+# 3) 建频道，频道号与密钥落到文件，不进终端历史
+curl -sS -X POST "$BASE/api/v1/admin/channels" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data-binary "$(jq -nc --arg g "$GROUP" '{groupId:$g,name:"nightly",maxLevel:"error",maxImages":4}')" \
+  | jq -r '[.channel_no,.secret] | @tsv' &gt; channel.tsv
+
+# 4) 从第三方那侧的入站口发一条，验证整条链路
+read -r NO SECRET &lt; channel.tsv
+curl -sS -X POST "$BASE/message" -H 'Content-Type: application/json' \
+  --data-binary "$(jq -nc --arg c "$NO" --arg s "$SECRET" \
+    '{channel:$c,secret:$s,content:"链路自测",level:"error",sender_id:"ops"}')"
+
+# 5) 搜到它，确认已经落库
+curl -sS -G "$BASE/api/v1/admin/messages" -H "Authorization: Bearer $TOKEN" \
+  --data-urlencode 'q=链路自测' | jq '.count, .messages[0].msg_id'
+
+# 6) 挂一个每晚 21:30 的任务
+curl -sS -X POST "$BASE/api/v1/admin/scheduled-tasks" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data-binary "$(jq -nc --arg c "$NO" \
+    '{channelNo:$c,name:"每晚提醒",title:"该跑巡检了",content:"见 cron",level:"info",cronExpr:"0 30 21 * * *"}') \
+  | jq -r '.task.task_id, (.task.next_fire_at|tostring)'</code></pre>
+  <ul>
+    <li>口令与请求体一律用 <code>jq -n</code> 现拼，密钥不写进脚本正文。</li>
+    <li><code>groupId</code> 从真实设备反查，避免建出设备永远看不见的频道。</li>
+    <li>第 5 步的 <code>count</code> 是 <code>1</code> 才算链路通；第 6 步回一个任务号和一个未来的毫秒时间戳才算排上。</li>
+  </ul>
+
+  <h2 id="limits">用之前要知道的四件事</h2>
+  <ul>
+    <li><b>权限是全局的，没有分级。</b>没有只读 token，也没有限定某个 Space 的 token，同样没有审计日志。</li>
+    <li><b>这一组接口默认公网可达。</b>全部防线就是那一条口令加 24 小时的 token。要按来源网段收口，得自己在前置的 Nginx / 防火墙加规则。</li>
+    <li><b>除登录锁定外没有独立限流。</b>滥用防线只有"token 得先拿到"这一条。</li>
+    <li><b>建频道与重置密钥没有控制台按钮</b>，只有 API 形态；正常建频道是在设备上做的。这两个端点是给脚本和救急留的。</li>
+  </ul>
+
+  <div class="foot">发进去看不到效果？按顺序排三件事：<a href="api.html">入站 API</a> 查凭据与限流，本页 <a href="#messages">消息搜索</a> 确认落库，<a href="client-api.html">客户端 API</a> 的增量拉取确认设备上读不读得到。三套鉴权互不相通，卡在哪一层就查哪一层。</div>
+</div>
+</main>
+</div>
+</body>
+</html>

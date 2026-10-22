@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>概览 · PushBox 文档</title>
+<meta name="description" content="PushBox 文档概览：链路怎么串起来、信任边界在哪、功能清单、验证到什么程度与常见问题。">
+<link rel="stylesheet" href="assets/site.css">
+<link rel="icon" href="assets/img/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32x32.png">
+<link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<div class="scrim"></div>
+<div class="shell">
+
+<nav class="side">
+  <a class="brand" href="index.html">
+    <span class="mark"><img src="assets/img/icon-192.png" alt=""></span>
+    <span><b>PushBox</b><span>1.1.0 · 自托管推送</span></span>
+  </a>
+  <h3>文档</h3>
+  <ul>
+    <li><a href="index.html">首页</a></li>
+    <li><a href="overview.html" aria-current="page">概览</a></li>
+    <li><a href="install.html">安装与部署</a></li>
+    <li><a href="usage.html">使用说明</a></li>
+    <li><a href="api.html">入站 API（写入）</a></li>
+    <li><a href="client-api.html">客户端 API（读取）</a></li>
+    <li><a href="admin-api.html">管理台 API</a></li>
+    <li><a href="protocol.html">长连接与加密</a></li>
+  </ul>
+  <h3>仓库</h3>
+  <ul>
+    <li><a href="https://github.com/iamplusdev/push-box">GitHub</a></li>
+    <li><a href="https://gitee.com/iamplus/push-box">Gitee</a></li>
+  </ul>
+  <h3>本页</h3>
+  <div id="toc"></div>
+  <button class="theme-toggle" id="themeBtn" type="button">☾ 深色</button>
+</nav>
+
+<main id="main">
+<div class="wrap">
+
+  <div class="topbar">
+    <button id="navBtn" type="button" aria-label="打开菜单">☰</button>
+    <b>概览</b>
+  </div>
+
+  <h1>把告警、CI、脚本的消息，推送到<b>你自己的</b>设备上</h1>
+  <p class="lede">一条 <code>POST /message</code> 投进服务端，PushBox 负责存下来、抓图转存、加密下发——你的 Android 手机与 Windows PC 几乎同时收到通知。不接厂商推送、不经第三方转发，消息与图片全在你自己的机器上。</p>
+
+  <div class="keys">
+    <div><b>约 50 ms</b><span>受理到通知到账（服务端与 MySQL 同机）</span></div>
+    <div><b>3 端</b><span>Java 服务端 · Android Compose · Windows WPF</span></div>
+    <div><b>0</b><span>需要额外账号的服务依赖：只要 MySQL 8，图片落本地目录或对象存储</span></div>
+  </div>
+
+  <h2 id="how">一条消息走过的路</h2>
+  <p>校验通过就立刻回执，抓图和下发都在回执之后——第三方等不起的那几秒不由它承担。</p>
+  <div class="pipe">
+    <div class="step d"><b>你的程序</b><span>Grafana、CI、cron、内网服务，只需一个频道号 + 密钥</span></div>
+    <div class="step a"><b>受理</b><span>校验凭据、幂等、分配 <code>seq</code>、生成摘要，立即 200</span></div>
+    <div class="step b"><b>抓图转存</b><span>外链图片并发抓取 → 缩略图 → 存进你的存储</span></div>
+    <div class="step a"><b>加密下发</b><span>每台设备自己的会话钥加密同一帧，多端同时到达</span></div>
+    <div class="step c"><b>客户端</b><span>入库、出通知；一端点进会话，另一端红点随即消失</span></div>
+  </div>
+
+  <h2 id="ends">三端各自是什么</h2>
+  <div class="grid c3">
+    <div class="card"><b>Java 服务端</b><p>收消息、存 MySQL、抓图转存、加密下发。管理台就在它的根路径 <code>/</code> 上。</p></div>
+    <div class="card"><b>Android</b><p>Compose 客户端：长连接接收、系统通知、多端已读同步。需要一次保活设置。</p></div>
+    <div class="card"><b>Windows</b><p>WPF 桌面客户端：托盘常驻，可选开机自启。数据与身份都在当前用户目录下。</p></div>
+  </div>
+
+  <h2 id="look">看起来是什么样</h2>
+  <div class="mocks">
+    <div class="phone">
+      <div class="bar"><span>消息</span><span>🔍 ＋</span></div>
+      <div class="chat-row">
+        <span class="av" style="background:#b06900">G</span>
+        <span class="tx"><b>Grafana 告警</b><span>[严重] CPU 使用率超过 90%</span></span>
+        <span class="meta">09:41<br><i class="dot">3</i></span>
+      </div>
+      <div class="chat-row">
+        <span class="av" style="background:#07c160">C</span>
+        <span class="tx"><b>CI 流水线</b><span>order-svc 发布成功，耗时 42s</span></span>
+        <span class="meta">昨天</span>
+      </div>
+      <div class="chat-row">
+        <span class="av" style="background:#8a8a8a">备</span>
+        <span class="tx"><b>备份任务</b><span>[图片] db 体积 2.1GB</span></span>
+        <span class="meta">周一</span>
+      </div>
+    </div>
+
+    <div class="timeline">
+      <div class="when">09:41</div>
+      <div class="row"><div class="bubble err"><span class="lv"></span><div class="t">[严重] CPU 使用率超过 90%</div><div>主机 prod-03 · 近 5 分钟均值 92.4%</div><div class="d">Grafana 告警</div>
+        <div class="strip">
+          <i style="background:linear-gradient(135deg,#4a6b52,#2f4a38)">监控图</i>
+          <i style="background:#8a8a8a">已失效</i>
+          <i style="background:linear-gradient(135deg,#3d5a80,#2b405c)">拓扑</i>
+          <i style="background:linear-gradient(135deg,#6b5a4a,#4a3d33)">日志</i>
+        </div>
+      </div></div>
+      <p class="sub">单向接收，气泡一律左对齐；级别只用气泡左侧一条色条表达。每格图片状态独立：抓取失败的那格单独重试，其余照常渲染。</p>
+    </div>
+  </div>
+
+  <h2 id="trust">信任边界：为什么服务端是明文</h2>
+  <p>服务端到设备这一跳是加密的；服务端库里存的是明文。这是唯一需要记住的边界。</p>
+  <div class="grid c3">
+    <div class="card"><b>明文换来了什么</b><p>全文索引能命中正文、服务端能生成摘要、能替你抓取外链图片。这三件事都要读得到内容。</p></div>
+    <div class="card"><b>到设备这一跳加密</b><p>每台设备一对 X25519 + Ed25519；帧走 HKDF 派生的 AES-256-GCM 通道，REST 响应走一次性 sealed-box。中间人拿不到正文。</p></div>
+    <div class="card"><b>密钥只能写不能读</b><p>拿到 <code>secret</code> 能往这个频道推，但读不到任何历史。读历史要设备密钥或恢复码。</p></div>
+  </div>
+  <p><b>生产环境请上 HTTPS。</b>帧加密补的是链路，TLS 补的是「服务端本身可信」，两者互不替代。证书做法见 <a href="install.html#tls">安装与部署</a>。</p>
+
+  <h2 id="features">功能</h2>
+  <div class="grid c3">
+    <div class="card"><b>图文同帧</b><p>外链图片由服务端抓取、转存，在合并窗口（默认 3s）内把图文并进同一条消息帧下发。</p></div>
+    <div class="card"><b>多端同时 + 已读同步</b><p>同一条消息给每台在线设备各封一份信封，手机与 PC 几乎同一秒到账。游标只增不减，一端已读不会把另一端的红点点亮回去。</p></div>
+    <div class="card"><b>全文搜索</b><p>MySQL ngram 全文索引加客户端本地索引两段合并，输入即查，命中可定位到那一条消息。</p></div>
+    <div class="card"><b>频道治理</b><p>按频道限级别、图片数、正文长度、频率与配额，支持白名单发送者。每台设备还能只接收自己接入的频道。</p></div>
+    <div class="card"><b>断线不丢</b><p>重连带 <code>since_seq</code>，服务端按游标循环补拉，追平才回 <code>resume_ok</code>；落后过多改走 REST 全量拉。</p></div>
+    <div class="card"><b>换机找回</b><p>一个恢复码加入同一个 Space 并回放全部历史。恢复码可随时轮换，旧码立即失效。</p></div>
+  </div>
+
+  <h2 id="quickstart">三分钟跑起来</h2>
+  <ol class="steps">
+    <li>
+      <b>起服务端：只要本机有一个 MySQL 8</b>
+      <pre class="code" data-code="bash"><code>cp deploy/env/local.env.example deploy/env/local.env   # 必填只有 PB_DB_PASSWORD
+JAVA_HOME=/path/to/jdk-21 mvn -B -DskipTests package
+bash deploy/run-dev.sh                                 # 监听 7404，自己 source local.env</code></pre>
+      <span class="sub">建库、Docker 部署、HTTPS 的完整步骤见 <a href="install.html">安装与部署</a>。</span>
+    </li>
+    <li>
+      <b>确认它起来了</b>
+      <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:7404/healthz</code></pre>
+      <span class="sub">期望 <code>{"status":"UP","db":"up","storage":"up"}</code>。</span>
+    </li>
+    <li>
+      <b>在管理台建频道，发第一条消息</b>
+      <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:7404/message \
+  -H 'Content-Type: application/json' \
+  --data-binary @payload.json</code></pre>
+      <span class="sub">入站接口是 <code>POST {base}/message</code>，<b>不在</b> <code>/api/v1</code> 下，凭据写在请求体里。payload 形状见 <a href="index.html">首页示例</a> 与 <a href="api.html">入站 API</a>。</span>
+    </li>
+    <li>
+      <b>回来看这一行的 code</b>
+      <span class="sub"><code>200</code> 表示已入库并排进下发，手机与 PC 同一秒出通知；<code>401</code> 是频道号或密钥不对；<code>429</code> 是超过了频道的限速。</span>
+    </li>
+  </ol>
+
+  <h2 id="faq">常见问题</h2>
+  <h3>能不能当个人聊天工具？</h3>
+  <p>不能。它是单向接收的：只有第三方 <code>POST /message</code> 写入，客户端没有发送框。</p>
+  <h3>手机和电脑能同时收到同一条推送吗？</h3>
+  <p>能，只要它们是同一个 Space 里的两台设备。身份文件不要互拷：同一个 <code>device_id</code> 的新连接会顶掉旧的，症状是只有一端收得到且全程不报错。细节见 <a href="usage.html#fanout">使用说明</a>。</p>
+  <h3>服务端挂了会丢消息吗？</h3>
+  <p>没拿到 200 的那次 <code>POST</code> 就是没受理，重试请用同一个 <code>msg_key</code>（服务端按它幂等）。已受理的消息永久保留在库里，设备重连后按游标补齐。</p>
+  <h3>为什么中文正文被截断了？</h3>
+  <p>单帧超过 32KB 时服务端按码点裁剪正文并置 <code>truncated:true</code>，客户端用 <code>GET /api/v1/messages/{id}</code> 回捞全文。</p>
+  <h3>能在公网上裸跑 HTTP 吗？</h3>
+  <p>不建议。帧加密保证链路读不到正文，但 <code>secret</code> 是在 body 里明文送的。请上 HTTPS，或把入站口只开在内网。</p>
+
+  <div class="foot">下一步：<a href="install.html">安装与部署</a> · <a href="usage.html">使用说明</a> · <a href="api.html">入站 API</a> · <a href="client-api.html">客户端 API</a> · <a href="admin-api.html">管理台 API</a> · <a href="protocol.html">长连接与加密</a></div>
+</div>
+</main>
+</div>
+</body>
+</html>

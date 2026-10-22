@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PushBox · 自托管消息推送系统</title>
+<meta name="description" content="PushBox：任何程序一条 POST /message 就能推送到你自己的 Android 与 Windows。服务端存明文可搜索，链路上加密下发，不接厂商推送、不经第三方转发。">
+<link rel="stylesheet" href="assets/site.css">
+<link rel="icon" href="assets/img/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32x32.png">
+<link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="site-header">
+  <div class="bar">
+    <a class="logo" href="index.html"><span class="mark"><img src="assets/img/icon-192.png" alt=""></span><b>PushBox</b><span class="ver">1.1.0</span></a>
+    <button id="navBtn" type="button" aria-label="打开菜单">☰</button>
+    <nav class="links">
+      <a href="overview.html">概览</a>
+      <a href="install.html">安装</a>
+      <a href="usage.html">使用</a>
+      <a href="api.html">入站 API</a>
+      <a href="client-api.html">客户端 API</a>
+      <a href="admin-api.html">管理台 API</a>
+      <a href="protocol.html">协议</a>
+      <a href="#repos">仓库</a>
+    </nav>
+    <button class="theme-toggle" id="themeBtn" type="button">☾ 深色</button>
+  </div>
+</header>
+<div class="scrim"></div>
+
+<main id="main">
+
+  <section class="hero">
+    <span class="eyebrow">自托管 · 单向消息推送</span>
+    <h1 class="display"><img src="assets/img/icon-512.png" alt="" width="512" height="512">PushBox</h1>
+    <p class="tagline">任何程序一条 <code>POST /message</code>，消息就推送到你自己的手机和电脑。服务端存下来、抓图转存、加密下发，多端几乎同时到账。</p>
+    <div class="cta">
+      <a class="btn primary" href="install.html">快速上手 <span aria-hidden="true">→</span></a>
+      <a class="btn ghost" href="overview.html">它怎么工作</a>
+    </div>
+    <ul class="facts">
+      <li>三端源码：Java 服务端 · Android · Windows</li>
+      <li>只要一个 MySQL 8，图片可以落本地目录</li>
+      <li>不接厂商推送，不经第三方转发</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <div class="head">
+      <h2>它做的三件事</h2>
+      <p>把"第三方产生的消息"送到"你人在的那块屏幕"上，中间不留别人的服务器。</p>
+    </div>
+    <div class="pillars">
+      <div class="card">
+        <span class="n">01</span>
+        <b>收得进来</b>
+        <p>一个频道号加一个密钥，脚本、Grafana、CI、cron 都能发。同一条消息带同一个 <code>msg_key</code> 重复提交只会入库一次。</p>
+      </div>
+      <div class="card">
+        <span class="n">02</span>
+        <b>存得明白</b>
+        <p>正文与图片都在你自己的机器上：MySQL 里全文可搜，摘要由服务端生成，外链图片抓回来转存。</p>
+      </div>
+      <div class="card">
+        <span class="n">03</span>
+        <b>送得到位</b>
+        <p>长连接加密下发到每台设备，手机与 PC 同时出通知；一边点开会话，另一边红点随即消失。断线后按游标补齐。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="head">
+      <h2>一条消息走过的路</h2>
+      <p>校验通过就立刻回执，抓图和下发都在回执之后——第三方等不起的那几秒不由它承担。</p>
+    </div>
+    <div class="pipe">
+      <div class="step d"><b>你的程序</b><span>Grafana、CI、cron、内网服务</span></div>
+      <div class="step a"><b>受理</b><span>校验凭据、幂等、分配 <code>seq</code>、生成摘要，立即 200</span></div>
+      <div class="step b"><b>抓图转存</b><span>外链图片并发抓取 → 缩略图 → 存进你的存储</span></div>
+      <div class="step a"><b>加密下发</b><span>每台设备自己的会话钥加密同一帧，多端同时到达</span></div>
+      <div class="step c"><b>客户端</b><span>入库、出通知；点进会话后别的端红点消失</span></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="head">
+      <h2>在你设备上长这样</h2>
+      <p>单向接收，所以气泡一律左对齐；告警级别用气泡左侧一条色条表达，不靠底色。</p>
+    </div>
+    <div class="mocks">
+      <div class="phone">
+        <div class="bar"><span>消息</span><span>🔍 ＋</span></div>
+        <div class="chat-row">
+          <span class="av" style="background:#b06900">G</span>
+          <span class="tx"><b>Grafana 告警</b><span>[严重] CPU 使用率超过 90%</span></span>
+          <span class="meta">09:41<br><i class="dot">3</i></span>
+        </div>
+        <div class="chat-row">
+          <span class="av" style="background:#07c160">C</span>
+          <span class="tx"><b>CI 流水线</b><span>order-svc 发布成功，耗时 42s</span></span>
+          <span class="meta">昨天</span>
+        </div>
+        <div class="chat-row">
+          <span class="av" style="background:#8a8a8a">备</span>
+          <span class="tx"><b>备份任务</b><span>[图片] db 体积 2.1GB</span></span>
+          <span class="meta">周一</span>
+        </div>
+      </div>
+
+      <div class="timeline">
+        <div class="when">09:41</div>
+        <div class="row"><div class="bubble err"><span class="lv"></span><div class="t">[严重] CPU 使用率超过 90%</div><div>主机 prod-03 · 近 5 分钟均值 92.4%</div><div class="d">Grafana 告警</div>
+          <div class="strip">
+            <i style="background:linear-gradient(135deg,#4a6b52,#2f4a38)">监控图</i>
+            <i style="background:#8a8a8a">已失效</i>
+            <i style="background:linear-gradient(135deg,#3d5a80,#2b405c)">拓扑</i>
+            <i style="background:linear-gradient(135deg,#6b5a4a,#4a3d33)">日志</i>
+          </div>
+        </div></div>
+        <p class="sub">九张图排成 2×2，每格状态独立：抓取失败的那格单独重试，其余照常渲染。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="head">
+      <h2>先发一条试试</h2>
+      <p>入站接口是 <code>POST {base}/message</code>，<b>不在</b> <code>/api/v1</code> 下，凭据写在请求体里。</p>
+    </div>
+    <ol class="steps">
+      <li>
+        <b>在管理台建一个频道，拿到频道号和密钥</b>
+        <span class="sub">浏览器打开服务端根路径 <code>/</code>，登录后「频道 → 新建」。密钥只显示一次。</span>
+      </li>
+      <li>
+        <b>把凭据写进 payload.json</b>
+        <pre class="code" data-code="json"><code>{
+  "channel": "12345678",
+  "secret": "&lt;频道密钥&gt;",
+  "type": "markdown",
+  "level": "error",
+  "sender_id": "grafana",
+  "sender_name": "Grafana 告警",
+  "title": "CPU 使用率超过 90%",
+  "content": "主机 prod-03 · 近 5 分钟均值 92.4%"
+}</code></pre>
+      </li>
+      <li>
+        <b>发出去</b>
+        <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:7404/message \
+  -H 'Content-Type: application/json' \
+  --data-binary @payload.json</code></pre>
+        <span class="sub">别用 <code>-d</code> 内联 JSON：Git Bash 会改动引号里的内容，服务端只会回「请求体必须是合法 JSON」。</span>
+      </li>
+      <li>
+        <b>回来看这一行的 code</b>
+        <span class="sub"><code>200</code> 表示已入库并排进下发；<code>401</code> 是频道号或密钥不对；<code>429</code> 是超过了频道的限速。</span>
+      </li>
+    </ol>
+    <div class="keys">
+      <div><b>约 50 ms</b><span>受理到通知到账（服务端与 MySQL 同机）</span></div>
+      <div><b>3 s</b><span>图文合并窗口：正文先到，抓好的图并进同一帧</span></div>
+    </div>
+    <p>三端各自的安装步骤见 <a href="install.html">安装与部署</a>；字段全表、响应形状与错误码见 <a href="api.html">入站 API</a>。</p>
+  </section>
+
+  <section class="section">
+    <div class="head">
+      <h2>一个要知道的取舍</h2>
+      <p>服务端到设备这一跳是加密的（X25519 + AES-256-GCM 帧通道）；服务端库里存的是明文。</p>
+    </div>
+    <div class="grid c3">
+      <div class="card"><b>明文换来了什么</b><p>全文索引能命中正文、服务端能生成摘要、能替你抓取外链图片。这三件事都要读得到内容。</p></div>
+      <div class="card"><b>密钥只能写不能读</b><p>拿到 <code>secret</code> 能往这个频道推，但读不到任何历史。读历史要设备密钥或恢复码。</p></div>
+      <div class="card"><b>请上 HTTPS</b><p>帧加密补的是链路，TLS 补的是「服务端本身可信」，两者互不替代。证书做法见 <a href="install.html#tls">安装与部署</a>。</p></div>
+    </div>
+    <p>展开版在 <a href="overview.html#trust">概览 · 信任边界</a>。</p>
+  </section>
+
+  <section class="section" id="repos">
+    <div class="head">
+      <h2>源码仓库</h2>
+      <p>三端与文档在同一个仓库里。地址只有两个：GitHub 是主仓，Gitee 是给国内网络准备的镜像。</p>
+    </div>
+    <div class="repo-grid">
+      <div class="repo-card">
+        <span class="top"><b>GitHub</b><span class="host">主仓</span></span>
+        <p>提交历史、Issue 与 CI 都在这边。安装包（APK / Windows Setup）与 Docker 镜像的版本号标签由 CI 在打 <code>v*</code> 标签时产出。</p>
+        <code class="cmd">git clone https://github.com/iamplusdev/push-box.git</code>
+        <a class="go" href="https://github.com/iamplusdev/push-box">github.com/iamplusdev/push-box ↗</a>
+      </div>
+      <div class="repo-card">
+        <span class="top"><b>Gitee</b><span class="host">国内镜像</span></span>
+        <p>国内拉取更快。同步是手动的，所以它可能落后主仓；提 Issue 请回 GitHub。</p>
+        <code class="cmd">git clone https://gitee.com/iamplus/push-box.git</code>
+        <a class="go" href="https://gitee.com/iamplus/push-box">gitee.com/iamplus/push-box ↗</a>
+      </div>
+    </div>
+    <p class="sub">服务端与管理台不用自己构建：一个镜像同时含两者，跑法见 <a href="install.html#prod">Docker 部署</a>。</p>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="bar">
+    <nav>
+      <b>文档</b>
+      <a href="overview.html">概览</a>
+      <a href="install.html">安装与部署</a>
+      <a href="usage.html">使用说明</a>
+      <a href="protocol.html">长连接与加密</a>
+    </nav>
+    <nav>
+      <b>接口</b>
+      <a href="api.html">入站 API</a>
+      <a href="client-api.html">客户端 API</a>
+      <a href="admin-api.html">管理台 API</a>
+    </nav>
+    <nav>
+      <b>仓库</b>
+      <a href="https://github.com/iamplusdev/push-box">GitHub</a>
+      <a href="https://gitee.com/iamplus/push-box">Gitee</a>
+    </nav>
+    <p class="note">PushBox · 自托管消息推送 · 1.1.0</p>
+  </div>
+</footer>
+</body>
+</html>
