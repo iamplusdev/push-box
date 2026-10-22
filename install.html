@@ -19,7 +19,7 @@
 <nav class="side">
   <a class="brand" href="index.html">
     <span class="mark"><img src="assets/img/icon-192.png" alt=""></span>
-    <span><b>PushBox</b><span>1.1.1 · 自托管推送</span></span>
+    <span><b>PushBox</b><span>1.1.2 · 自托管推送</span></span>
   </a>
   <h3>文档</h3>
   <ul>
@@ -179,7 +179,7 @@ SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句</co
       <span class="sub"><b>要用管理台</b>这两个值就必须都有、互不相同、各自至少 32 字节，只填一个或填弱值容器会直接拒绝启动。两个都留空是一个合法状态：管理台整个关闭，那些接口一律回 403「管理台未启用」，客户端收发不受影响。管理台在<b>根路径 <code>/</code></b>（不是 <code>/admin</code>），登录口令就是 <code>PB_ADMIN_SECRET</code>。然后「频道 → 新建」——频道号和密钥就是要填进推送工具的那一对，<b>密钥只在创建和重置的那一刻显示一次</b>。</span>
     </li>
   </ol>
-  <p>在 NAS 的图形界面（飞牛 / 群晖 / 1Panel）里装时没有 <code>.env</code> 这一层，只有"逐条加环境变量"的表格——填的还是同样那两个变量，配好的 compose 见仓库的 <code>deploy/docker-compose.nas.yml</code> 与 <code>deploy/NAS部署指南.md</code>。</p>
+  <p>在 NAS 的图形界面（飞牛 / 群晖 / 1Panel）里装时没有 <code>.env</code> 这一层。用「创建容器」表单的话，只有两处要自己动手：<b>存储位置加两行</b>——容器内 <code>/app/data/media</code> 与 <code>/app/logs</code> 各映射到 NAS 上一个文件夹（建好后先 <code>sudo chown -R 10001:10001 &lt;那个文件夹&gt;</code>；留空则删容器时图片一起没）；<b>环境变量只填两个</b>——<code>PB_DB_HOST</code> 与 <code>PB_DB_PASSWORD</code>，表单里显示出来的其余项都是默认值。要外接桶就把 <code>PB_STORAGE_TYPE=s3</code> 与 <code>PB_S3_*</code> 六行一次加齐。逐步说明见仓库的 <code>deploy/NAS部署指南.md</code> 路径 C，compose 版见 <code>deploy/docker-compose.nas.yml</code>。</p>
 
   <h2 id="prod-compose">要反代 / 监控 / 自带桶时：compose 形态</h2>
   <p><b>为什么这一条要克隆仓库而上面不用</b>：<code>docker-compose.yml</code>、<code>Caddyfile</code>、<code>docker-compose.monitoring.yml</code> 和那几段 sidecar 定义都是<b>文件</b>，它们装不进 <code>pushbox</code> 镜像里；<code>.env</code> 只是给这些文件记账的那一层。只要一个容器时用不到它们。</p>
@@ -267,7 +267,7 @@ AGE_RECIPIENT=&lt;age 或 ssh 公钥&gt; [RUSTFS_DATA_DIR=/path/to/data/rustfs] 
   <ol class="steps">
     <li>
       <b>装上 APK</b>
-      <span class="sub">安装包放在 <a href="https://github.com/iamplusdev/push-box/releases">GitHub Releases</a>，找 <code>app-release.apk</code>。还没有对应版本时先从源码编：<code>cd android &amp;&amp; ./gradlew :app:assembleDebug</code>，再 <code>adb install -r</code>。</span>
+      <span class="sub">安装包放在 <a href="https://github.com/iamplusdev/push-box/releases">GitHub Releases</a>，找 <code>pushbox-release-&lt;版本号&gt;.apk</code>。还没有对应版本时先从源码编：<code>cd android &amp;&amp; ./gradlew :app:assembleDebug</code>，再 <code>adb install -r</code>。</span>
     </li>
     <li>
       <b>首启填服务器地址</b>
