@@ -264,6 +264,14 @@ else
     fail "镜像没烘焙 PB_STORAGE_TYPE=local：\"只填库地址与口令两个变量\"会变成\"起来才发现要配桶\""
 fi
 
+# NAS 图形界面的「存储位置」直接由镜像的 VOLUME 渲染：少这一句，表单里一行都没有，
+# 用户只能靠读文档手动补两条。这条只查源码；发布后还要查 Hub 镜像的 config blob（见 CHANGELOG）。
+if grep -qE '^VOLUME \["/app/data/media", "/app/logs"\]' "$ROOT_DIR/deploy/Dockerfile"; then
+    pass "Dockerfile 声明了 /app/data/media 与 /app/logs 两个 VOLUME"
+else
+    fail "Dockerfile 没声明两个 VOLUME：飞牛/群晖的「存储位置」表单会是空的"
+fi
+
 # 口令类一律不给默认值（这条是"容易上手"与"裸奔"之间的界线）。
 if grep -qE '^[[:space:]]*PB_DB_PASSWORD=[^[:space:]]' "$ROOT_DIR/deploy/Dockerfile"; then
     fail "Dockerfile 给 PB_DB_PASSWORD 烘焙了默认值：凭据绝不进镜像层，任何镜像读者都能拿到"

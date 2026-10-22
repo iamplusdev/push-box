@@ -283,6 +283,12 @@ RUN chmod +x /app/entrypoint.sh
 # 完全不挂卷也能起（对象落容器可写层），但 docker rm 之后图片全没，这是 local 拓扑的代价不是缺陷。
 RUN useradd -r -u 10001 pushbox && mkdir -p /app/logs /app/data/media && chown -R pushbox:pushbox /app
 
+# 声明两个持久化目录。飞牛/群晖的「创建容器」表单是把镜像的 VOLUME 渲染成「存储位置」行的：
+# 没有这一句，那一栏根本没有行可填，只能靠用户读文档后自己想起来加两条；有了它，容器内路径
+# 会自动出现，宿主文件夹那一列仍需人来选（Docker 不会替人猜 NAS 上的路径，选不了就落匿名卷）。
+# 必须放在上面那条 mkdir/chown 之后：VOLUME 之后再改同一路径的 RUN 不会进镜像层。
+VOLUME ["/app/data/media", "/app/logs"]
+
 # ---- 烘焙的默认值：全是非凭据的拓扑参数，每一个都能被同名环境变量覆盖 ----
 # 这一段的用途是"让人只填真正只有他自己知道的东西"：库地址、库口令。其余项在 NAS 表单里
 # 根本不该出现，出现了也只会被填错。口令类一律不进这个 ENV 段，连空占位都不给：

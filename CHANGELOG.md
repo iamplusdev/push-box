@@ -7,15 +7,37 @@
 
 ---
 
+## v1.1.3（2026-10-22）—— 镜像声明两个持久化目录，NAS 表单不再从空挂载开始（第三十一轮）
+
+> 起点是 v1.1.2 发出去之后的一句追问：飞牛「创建容器」表单里的「存储位置」还是空的，S3 配置也看不到。
+
+### 挂载：把两个目录写进镜像元数据
+
+- **`deploy/Dockerfile` 增加 `VOLUME ["/app/data/media", "/app/logs"]`**。飞牛/群晖的「创建容器」表单是按镜像的 `VOLUME` 渲染「存储位置」行的：v1.1.2 没有这一句，所以那一栏一行都没有，指南里"自己加两行"只能靠人照着做。现在容器内路径会直接带出来；**宿主文件夹那一列仍要人选**——Docker 不会替人猜 NAS 上的路径，选不了就落匿名卷（`docker rm` 不再把图片一起删掉，但卷不会自动挂回下一次容器）。
+- 这句必须放在 `mkdir -p /app/logs /app/data/media && chown …` **之后**：`VOLUME` 之后再改同一路径的 `RUN` 不会进镜像层，目录与属主会变成镜像默认值。
+- **S3 默认不出现是刻意的**：表单只显示镜像烘焙的 `ENV`，而 `PB_S3_*` 一个都不烘焙——AK/SK 是凭据，按"凭据只走环境变量"的规则不能预置；只列 region/bucket 之类又会回到 v1.1.2 之前"桶看起来配了一半"的假象。要用桶就在表单里一次加七行（type / endpoint / AK / SK / bucket / object-encrypt / master-key），NAS 指南路径 C 与 compose 版都按这个数写。
+- **顺手订正一处数错的清单**：NAS 指南与 compose 注释原写"六行"，实际列了七行（漏数 `PB_S3_MASTER_KEY`）；这一版统一改成七行。
+
+### 验证
+
+- WSL 本地构建 `pushbox-server:voltest` 后 `docker image inspect`：`Config.Volumes` 为 `{"/app/data/media":{},"/app/logs":{}}`，`Config.User` 仍是 `pushbox`，`Config.Entrypoint` 仍是 `/app/entrypoint.sh`；ENV 与 v1.1.2 一致，没有多出任何 `PB_S3_*` 或口令键。
+- `release-verify.sh` 新增一条静态闸门：Dockerfile 必须声明这两个目录，删掉就红。**这条只证明源码里有这一句，不证明 Hub 上的镜像带上了它**——发布后再用 registry 的 config blob 复核（见下面「发布」）。
+
+### 发布（2026-10-22）
+
+- 版本号 `1.1.2 → 1.1.3`（`--only=server`），只打 `server-v1.1.3`，Android / Windows 两条链不触发。
+
+---
+
 ## v1.1.2（2026-10-22）—— 三条发布链解耦；NAS 表单不再露出半套 s3（第三十轮）
 
 > 起点是两张飞牛（FNOS）「创建容器」表单截图：**「存储位置」一栏是空的**，环境变量里只露出 4 个 s3 项（region / bucket / path-style / object-encrypt），看起来像"桶配了一半"；以及一句要求——只改服务端时不要把 APK、MSI 两条流水线一起拉起来跑。
 
-### NAS 图形界面：两个卷、两个变量、s3 六行
+### NAS 图形界面：两个卷、两个变量、s3 七行
 
 - **镜像 ENV 不再烘焙 s3 的四个默认值**（region / bucket / path-style / object-encrypt）：飞牛的容器表单会把 `ENV` 逐行铺成输入框，这四项露出来就自带"桶已经配了一半"的暗示，而实际起作用的默认值在 `application-prod.yml` 与 entrypoint 里各有一份。删掉之后 local 形态行为不变，表单里只剩真正该由你填的库口令两项。
 - **存储位置 = 两条挂载**：`deploy/docker-compose.nas.yml` 的头注释写明两个 named volume 的挂载点（`/app/data/media`、`/app/logs`）、用 `docker volume inspect <项目名>_server_media -f '{{.Mountpoint}}'` 查宿主路径、改绑宿主目录时必须 `sudo chown -R 10001:10001`；**不挂就是删容器即删图**。
-- **`deploy/NAS部署指南.md` 新增「路径 C：不建 Compose 项目，直接在表单里填」**：挂载两张表、只填 `PB_DB_HOST` + `PB_DB_PASSWORD`、要 s3 就六行（type / endpoint / AK / SK / bucket / 加密方式），判据与 Compose 那条路逐条相同。README、`deploy/部署快速参考.md`、`site/install.html` 各加一段指路。
+- **`deploy/NAS部署指南.md` 新增「路径 C：不建 Compose 项目，直接在表单里填」**：挂载两张表、只填 `PB_DB_HOST` + `PB_DB_PASSWORD`、要 s3 就七行（type / endpoint / AK / SK / bucket / 加密方式 / 主钥；原文误写六行，v1.1.3 订正），判据与 Compose 那条路逐条相同。README、`deploy/部署快速参考.md`、`site/install.html` 各加一段指路。
 
 ### 发布链解耦：只改服务端就只打 `server-v*`
 
