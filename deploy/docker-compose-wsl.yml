@@ -8,7 +8,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: pushbox/server:1.1.4
+    image: pushbox/server:1.1.5
     environment:
       SPRING_PROFILES_ACTIVE: prod
       # 与主文件同口径（D76）：一项 :? 都没有，必填判据在容器 entrypoint 里。

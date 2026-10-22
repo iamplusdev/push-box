@@ -7,6 +7,29 @@
 
 ---
 
+## v1.1.5（2026-10-22）—— 修主钥模式被镜像里的口令占位值误杀（第三十三轮）
+
+> 起点：v1.1.4 发布后复查 `docker run` 的主钥路径。镜像 ENV 里烘焙了 `PB_S3_MASTER_PASSPHRASE=__SET_ME__`，用户只传 `PB_S3_MASTER_KEY` 时这一行仍是非空字符串，entrypoint 的二选一检查把"主钥 + 占位口令"当成两个真实来源，直接拒绝启动。`prod.env.example` 与 README 都仍把主钥列为可用选项，这是 v1.1.4 带出去的兼容性回归。
+
+### 缺陷与修法
+
+- **占位值先归一成"没填"再做二选一**：entrypoint 在互斥检查之前识别 `PB_S3_MASTER_PASSPHRASE=__SET_ME__`，把本地变量清空并 **`unset PB_S3_MASTER_PASSPHRASE`**——只清 shell 变量不够，镜像 ENV 会原样传给 `java`，`MediaKeyService` 仍会把它当成真口令，再次触发"二选一"。
+- **占位值单独出现时仍点名**：没给主钥、口令又没替换时，报错仍写"PB_S3_MASTER_PASSPHRASE 还是镜像里的占位值"，并提示"改用主钥就把这一行清空"。`PB_S3_MASTER_KEY` 若被误填成占位值也按未设置处理。
+- **没有改 Java 侧判定**：`MediaKeyService` 的"两个真值同时出现就拒绝"保持原样；这次只在容器边界把假值清掉，口令/主钥语义与 v1.1.4 相同。
+
+### 验证
+
+- **entrypoint 占位值场景 7/7**（v1.1.4 时是 6/6，新增第 7 条）：只填主钥、口令仍是占位值时走主钥模式正常启动，且哨兵确认 `PB_S3_MASTER_PASSPHRASE` 已不在 Java 进程的环境里（`passphrase-in-env=no`）；其余六条与 v1.1.4 相同（库口令占位值判死、local 下 S3 占位值不影响、s3 端点占位值判死、口令占位值判死并点名、真口令通过、明文逃生阀通过）。
+- **entrypoint 口令场景 5/5**：12 字符通过、11 字符判死且不打印口令、4 个汉字按码点被判过短、主钥+口令同时给判死、两边都不给时点名两种来源。
+- **`docker buildx build --check`**：`Check complete, no warnings found.`（WSL Docker 29.9.1）。
+- **`scripts/release-verify.sh` 73 通过 / 0 失败 / 2 警告**：新增一条静态闸门，要求 entrypoint 既记住"口令占位值出现过"又真的 `unset PB_S3_MASTER_PASSPHRASE`；少任何一半就红。
+
+### 未做
+
+- 未实现 KEK 轮换或旧对象重封装；未开始管理台内配置 S3 的第二阶段。边界与 v1.1.4 相同。
+
+---
+
 ## v1.1.4（2026-10-22）—— 媒体 KEK 改由短口令派生；NAS 表单显示凭据占位行（第三十二轮）
 
 > 起点：`PB_S3_MASTER_KEY` 要求用户保管一段 44 字符的 base64 随机串。抄错一位、重装时重新生成一份，症状都是"图片打不开"。这一轮让 `sse-c` 可以只给一句至少 12 个字符的口令；原有主钥继续可用。
@@ -29,7 +52,7 @@
 ### 部署表单
 
 - **凭据行改成占位值显示**：`Dockerfile` 的 ENV 追加 `PB_DB_PASSWORD=__SET_ME__`、`PB_S3_ENDPOINT` / `PB_S3_ACCESS_KEY` / `PB_S3_SECRET_KEY` / `PB_S3_MASTER_PASSPHRASE` 四行 `__SET_ME__`，并显示 `PB_S3_BUCKET=pushbox`、`PB_S3_OBJECT_ENCRYPT=none`（与 yml 默认值相同）。飞牛/群晖的「创建容器」只渲染镜像 ENV，这样库口令、AK/SK、KEK 口令的输入行直接出现，用户是改值而不是逐条点「添加」。这些全是假值，不是凭据；跳过 `SecretsUsedInArgOrEnv` 的理由写在 Dockerfile 头注释里（那条 lint 只看键名、分不出占位值）。
-- **占位值按"没填"处理**：entrypoint 对 `PB_DB_PASSWORD`、S3 三项、`PB_S3_MASTER_PASSPHRASE` 都显式判 `__SET_ME__` 并拒绝启动，报错点名"还是镜像里的占位值"；`local` 模式不读 S3，那几行占位值原样留着不影响启动。`__SET_ME__` 只有 10 个字符，即使绕过 entrypoint，Java 侧的口令长度下限也会拒绝，不存在"用公开占位值派生 KEK"的路径。
+- **占位值按"没填"处理**：entrypoint 对 `PB_DB_PASSWORD`、S3 三项、`PB_S3_MASTER_PASSPHRASE` 都显式判 `__SET_ME__` 并拒绝启动，报错点名"还是镜像里的占位值"；`local` 模式不读 S3，那几行占位值原样留着不影响启动。`__SET_ME__` 只有 10 个字符，即使绕过 entrypoint，Java 侧的口令长度下限也会拒绝，不存在"用公开占位值派生 KEK"的路径。**v1.1.4 镜像漏了"口令占位值在二选一之前归一"这一步**，只配主钥时会被误判成两个来源同时存在；v1.1.5 修复，见上一节。
 - **文档**：NAS 指南路径 C、README、部署快速参考与 `site/install.html` 从"表单看不到 S3、手动加七行"改成"占位行直接改"；README 里同时保留 v1.1.3 及更早镜像仍是旧行为的说明。
 
 ### 验证
@@ -39,6 +62,12 @@
 - **entrypoint 口令场景 5/5**：12 字符通过、11 字符判死且不打印口令、4 个汉字按码点被判过短、主钥+口令同时给判死、两边都不给时点名两种来源。
 - **entrypoint 占位值场景 6/6**：库口令仍是 `__SET_ME__` 判死并点名占位值；`local` 下只留 S3 占位值正常启动；`s3` 下端点占位值判死；三件套改真、口令仍是占位值时点名口令占位值；全改真且 `sse-c` 真口令通过；全改真、明文带逃生阀通过。
 - **`scripts/release-verify.sh` 72 通过 / 0 失败 / 2 警告**（警告照旧是工作区未提交与本机无 docker CLI），新增五条静态闸门：prod yml 映射、entrypoint 认识口令、compose 透传、entrypoint 执行二选一、GUI 占位值与拒绝逻辑同进同退；原来"PB_DB_PASSWORD 绝不进镜像 ENV"那条改成"只允许 `__SET_ME__` 占位值"，任何真值仍然 FAIL。
+
+### 发布（2026-10-22）
+
+- 版本号 `1.1.3 → 1.1.4`（`--only=server`），提交 `2d8f3b0`，只打 `server-v1.1.4`；标签事件只触发服务端链（run `39779506621`，`Validate Docker Hub credentials` → 版本闸门 → `Build and push` 全 success），Android / Windows 两条标签链没有被触发。
+- **Hub 实查（WSL）**：`1.1.4` / `1.1` / `latest` 三枚指向同一 index digest `sha256:0645e2ea9322d40698bbec6708ed311211dc921191824c902434c0656bcacd22`；`main` 与 `sha-2d8f3b0` 是同一 commit 的另一次构建，digest `sha256:3062a00bb8a84b75fdff1eb1d5c7639d865adf53847ae7db31ea92bf58f0d0d8`；`1.1.3` / `sha-d8c1486` 与更早的 `sha-d4a889d` 仍在，没有删旧标签。
+- **已知缺陷（v1.1.5 修）**：镜像 ENV 里的 `PB_S3_MASTER_PASSPHRASE=__SET_ME__` 被 entrypoint 当成真口令，只配 `PB_S3_MASTER_KEY` 的用户会被"二选一"误杀。发布后复查主钥路径时发现，v1.1.5 把占位值从环境里清掉并补了第 7 条场景；`1.1.4` 镜像本身保留这一缺陷。
 
 ### 未做
 

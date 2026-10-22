@@ -494,7 +494,7 @@ GitHub Pages（线上地址 <https://iamplusdev.github.io/push-box/>）。六个
 
 ---
 
-**文档版本**：v1.1.4  
+**文档版本**：v1.1.5  
 **最后更新**：2026-10-22  
 **主分支**：main  
 **官网**：<https://iamplusdev.github.io/push-box/>（源码在 `site/`，改 `site/**` 推到 `main` 就自动发布）  

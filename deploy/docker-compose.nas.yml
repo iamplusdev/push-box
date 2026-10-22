@@ -16,7 +16,7 @@ name: pushbox-nas
 
 services:
   pushbox:
-    # Hub 上是 <主.次.补丁>（如 1.1.4）/ <主.次>（1.1）/ latest 三种写法，指向同一个镜像；版本号由
+    # Hub 上是 <主.次.补丁>（如 1.1.5）/ <主.次>（1.1）/ latest 三种写法，指向同一个镜像；版本号由
     # 发布工作流从 pom.xml 现读，不带 git 标签里的 v 或 server-v 前缀——v1.2.0、server-v1.2.0 在 Hub 上都不存在。
     # 想用自己现场出的镜像（ARM 机型，或不想等发版），把下面这行换成 pushbox:local：
     #   docker build -f deploy/Dockerfile -t pushbox:local .

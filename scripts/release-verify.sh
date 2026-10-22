@@ -326,6 +326,16 @@ else
     fail "占位值只做了一半：要么表单里没有可编辑行，要么漏改的占位值会被当成真配置（ENV 与 entrypoint 两侧必须同进同退）"
 fi
 
+# 烘焙的口令占位值必须按"没填"处理，否则只配主钥的用户会被"二选一"误杀。
+# 只清 shell 局部变量不够：镜像 ENV 会原样传给 java，Java 侧仍会把 __SET_ME__ 当成口令，
+# 所以判据要求 entrypoint 真的 unset 掉这个环境变量，而不只是 `MASTER_PASSPHRASE=""`。
+if grep -q 'PASSPHRASE_WAS_PLACEHOLDER' "$ROOT_DIR/deploy/Dockerfile" \
+  && grep -q 'unset PB_S3_MASTER_PASSPHRASE' "$ROOT_DIR/deploy/Dockerfile"; then
+    pass "口令占位值按未设置处理（主钥模式不会被镜像里的 __SET_ME__ 误判成二选一）"
+else
+    fail "口令占位值没有从环境里清掉：只配 PB_S3_MASTER_KEY 时会被当成同时配了口令而拒绝启动"
+fi
+
 # PB_DB_HOST 是"最省事写法"的入口，但它只被 entrypoint 消费（拼成 PB_DB_URL 再给 yml），
 # 所以这两处必须同进同退：删掉派生那一步，compose 与 NAS 文件里的 PB_DB_HOST 就全成了死开关。
 if grep -q 'PB_DB_HOST: ${PB_DB_HOST' "$ROOT_DIR/deploy/docker-compose.yml" \

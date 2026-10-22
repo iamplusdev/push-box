@@ -193,6 +193,19 @@ OBJECT_ENCRYPT=\$(printf '%s' "\${PB_S3_OBJECT_ENCRYPT:-none}" | tr -d '[:space:
 if [ "\$OBJECT_ENCRYPT" = "sse-c" ]; then
   MASTER_KEY="\${PB_S3_MASTER_KEY:-}"
   MASTER_PASSPHRASE="\${PB_S3_MASTER_PASSPHRASE:-}"
+  PASSPHRASE_WAS_PLACEHOLDER=
+  # 占位值必须按"没填"处理：镜像 ENV 里那行是给图形界面渲染输入行用的，用户在表单里只填主钥时
+  # 它仍是 __SET_ME__。若把它当成真口令，二选一检查会误杀主钥模式；只清本地变量也不够——Java 侧
+  # MediaKeyService 仍会从环境里读到它，所以这里直接 unset。
+  if [ "\$MASTER_PASSPHRASE" = "__SET_ME__" ]; then
+    unset PB_S3_MASTER_PASSPHRASE
+    MASTER_PASSPHRASE=""
+    PASSPHRASE_WAS_PLACEHOLDER=1
+  fi
+  if [ "\$MASTER_KEY" = "__SET_ME__" ]; then
+    unset PB_S3_MASTER_KEY
+    MASTER_KEY=""
+  fi
   if [ -n "\$MASTER_KEY" ] && [ -n "\$MASTER_PASSPHRASE" ]; then
     echo "❌ 错误: PB_S3_MASTER_KEY 与 PB_S3_MASTER_PASSPHRASE 只能二选一"
     echo "   两种来源派生出的 KEK 不同，同时配置无法判断该用哪一把；删掉其中一个再启动"
@@ -209,11 +222,6 @@ if [ "\$OBJECT_ENCRYPT" = "sse-c" ]; then
     fi
     echo "✅ SSE-C 加密已启用，主钥长度验证通过（提醒：主钥一旦用过就不可轮换）"
   elif [ -n "\$MASTER_PASSPHRASE" ]; then
-    if [ "\$MASTER_PASSPHRASE" = "__SET_ME__" ]; then
-      echo "❌ 错误: PB_S3_MASTER_PASSPHRASE 还是镜像里的占位值 __SET_ME__"
-      echo "   换成自己的口令（至少 12 个字符）；口令一旦用于写入对象就不可换。"
-      exit 1
-    fi
     # 按字符数（不是字节数）判，且强制 UTF-8 locale：中文口令在 C locale 下会被 wc -m 数成字节。
     # 下限与 Java 侧 MediaKeyService.MIN_PASSPHRASE_CODE_POINTS 对齐，两边各拦一次。
     PASS_LEN=\$(printf '%s' "\$MASTER_PASSPHRASE" | LC_ALL=C.UTF-8 wc -m | tr -d '[:space:]')
@@ -225,6 +233,12 @@ if [ "\$OBJECT_ENCRYPT" = "sse-c" ]; then
     echo "✅ SSE-C 加密已启用，口令长度验证通过（KEK 由 Argon2id 派生，口令本身不落库）"
     echo "   提醒：口令一旦用于写入对象就不可换——换了旧图片再也解不开"
   else
+    if [ "\$PASSPHRASE_WAS_PLACEHOLDER" = "1" ]; then
+      echo "❌ 错误: PB_S3_MASTER_PASSPHRASE 还是镜像里的占位值 __SET_ME__"
+      echo "   换成自己的口令（至少 12 个字符）；改用主钥就把这一行清空，再配 PB_S3_MASTER_KEY。"
+      echo "   口令一旦用于写入对象就不可换。"
+      exit 1
+    fi
     echo "❌ 错误: SSE-C 模式下 PB_S3_MASTER_KEY 与 PB_S3_MASTER_PASSPHRASE 必须配一个"
     echo "   二选一："
     echo "     · PB_S3_MASTER_KEY=\$(openssl rand -base64 32)   （随机 32 字节，部署脚本里更常见）"
