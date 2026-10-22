@@ -69,7 +69,7 @@
 - **修法改测试自己，不改 CI 的环境**：`@SpringBootTest(properties = …)` 里补 `"pb.storage.type=s3"`——这个类要的是真桶，前提就该由它自己声明，而不是指望 runner 恰好把默认值设成 s3。CI 的 env 一个字没动，任何带 `PB_S3_*` 但没有 `PB_STORAGE_TYPE` 的开发机也从此跑出同一份判据。
 - **复现路径**（runner 日志与 surefire artifact 匿名都是 401，读不到）：WSL 里起 CI 同款 `mysql:8.4 --ngram_token_size=2`（实测 `@@version=8.4.11`、`@@ngram_token_size=2`）+ `rustfs` + aws-cli 建桶 `pushbox`，端口发到宿主，Windows 侧用本机那份热 `~/.m2` 跑 `mvn -B -pl server -am test`。**先在 WSL 里跑失败过一次**：容器内现下依赖实测 2.6 kB/s，等不起，所以换成宿主跑 mvn。复现结果与 CI 同形（`Tests run: 263, Errors: 7`），修完这 7 条变 7/7 绿（单类 20.8s）。
 - **修完全量复跑是 `core 43 + server 263 = 306、跳过 0`，但仍有 3 条红，全在这台机器的出网**：`error=unreachable host=picsum.photos`（`MediaSsePipelineTest` 两条）与 `http_404 host=httpbin.org`（`MediaFetchServiceTest.generatesThumbnail`），断言都是 `expected: "ready" but was: "failed"`——抓取侧到不了那两台公共图床，不是装配问题。**这类"用例依赖公网图床"的脆弱面本条只登记、没改**：CI runner 那边一直够得着，所以历史上绿过；真要钉死得把那几条换成本机起的测试图片服务，那是另一件事。
-- **`v1.1.0` 标签在这条转绿之前不打**：Docker Hub 的版本标签按本仓口径不可变（`1.1.0`/`1.1`/`latest` 一旦推错只能换个号重来），而 `v*` 事件同时开 GitHub Release。
+- **`v1.1.0` 标签在这条转绿之前不打**：Docker Hub 的版本标签按本仓口径不可变（`1.1.0`/`1.1`/`latest` 一旦推错只能换个号重来），而 `v*` 事件同时开 GitHub Release。**这条规矩当天就兑现了**——先等 `main` 上 `ci.yml` 绿（head `f86eeac` run `39722819597` 四 job 全 success，第 8 步 `skipped == 0` 且用例数 ≥ 306 第一次在 `main` 上跑到），再把只剩文档改动的 `4e2fd71` 推成 tip、在它上面打 tag，见下面「发出去」那一节。
 
 ### 验证
 
@@ -78,6 +78,14 @@
 - entrypoint 渲染成脚本后跑了 5 个场景（缺库变量、local 齐全、local 目录不可写、local 却配着 S3 凭据、sse-c 主钥长度不对），文案与退出码都按预期；`docker compose config` 在 WSL 里把主文件与 wsl 两本都渲染过，named volume 解析成 `pushbox_server_media`。
 - `dotnet test PushBox.Crypto.Tests -c Release`：**554/554**，trx 解析出的 `UnitTestResult` 计数同一值（新闸的判据就是它）。
 - `bash scripts/release-verify.sh`：**52 通过 / 0 失败**，两条 WARN（本机没有 docker CLI 判不了镜像体积、工作区还有未提交文件）。新增两条 PASS：Java 计数与 `ci.yml` 基线一致（306，9 处 / 7 个文档——第二十七轮那两句历史数字改成不带求和形状的写法之后，CHANGELOG 自己就不在这份名单里了，这正是那条约定预期的效果）、C# 计数一致（现值 306 554，8 个文档）。
+### 发出去：`v1.1.0` 的三条链第一次全绿，顺手照出 Release 正文里一枚不存在的镜像标签
+
+- **tag 打在 `4e2fd71`**（`main` 的 tip，也就是 CI 刚绿过的那棵树；前面的 `f86eeac` 只少了 CHANGELOG 的编号订正）。这一版之前，`v*` 事件那条路径在 runner 上从没跑过，本机只能验到闸门脚本——所以这三条绿是第一次，不是重复。
+- **三条链的结论**：`build-apk.yml` run `39724346953`（`Set version from git tag` → `Verify release APK signature` → `Publish to GitHub Release` 全 success）；`build-msi.yml` run `39724347008`（`Sign installer` **skipped**，其余全 success）；`docker-publish.yml` run `39724347017`（`版本号一致性闸门` → `Docker metadata` → `Build and push` → `本次的标签清单` 全 success）。Release 页 <https://github.com/iamplusdev/push-box/releases/tag/v1.1.0> 上两个资产的名字与字节数（`pushbox-release-v1.1.0.apk` 12 797 054、`PushBox-Setup-1.1.0-win-x64.exe` 58 729 609）是从公开的 releases API 读出来的，不是照工作流文案推的。带 `paths:` 过滤的 `site-deploy.yml` 与 `update-dockerhub-description.yml` 在 `v*` 事件上不触发，这一版本它们没动。
+- **`gh` 与 `git push --tags` 之外还有一条真 bug**：Release 正文首行是模板拼出来的 `Docker 镜像 iamplusdev/push-box:v1.1.0`，而 `docker-publish.yml` 用 `type=semver,pattern={{version}}` 推的是**去掉 `v` 的 `1.1.0`**（外加 `1.1` 与 `latest`）。照正文 `docker pull` 的人会指向一枚 Hub 上不存在的标签。两个构建工作流的 `NOTE` 都改成从 `${TAG#v}` 推标签，并且**不是"看着改对了"**：把这两步的 `run` 脚本原样抽出来、把 `gh` 换成打桩函数在本地执行，两条输出实测为 `push-box:1.1.0（同一镜像另有 1.1 与 latest 两个标签）`（打桩还顺带确认 `--verify-tag` 与 `--title` 没被引号拼坏）。
+- **改不掉的已经发出去那一页**：这台机器没有 `gh` CLI、也没有可用的仓库 token，`v1.1.0` 那页首行至今仍是 `push-box:v1.1.0`，正确文案从下一个 tag 起生效。这一句写出来是为了别让"工作流已修"被读成"那页已修"。
+- **两条没独立复核的**：① Hub 上真实的标签清单——`hub.docker.com` 与 `registry-1.docker.io` 从这台机器都是 `http=000` 连接超时（不是 404，与前面 `update-dockerhub-description` 那次同一个网络现实），所以"三枚版本标签已推上去"只有 CI 那两步的退出码背书；② 两个产物都没在这台机器上装过，APK 只到"CI 里签名与证书指纹对得上基线"，安装包只到"CI 构建出文件并上传"，且**仍未签名**（`CODESIGN_*` 那对 secrets 没配，SmartScreen 那一栏照旧）。
+
 - **环境状态记一笔**：本轮复验时本机 `7404` 上没有监听（那台手动起的服务端不在跑），探针全程打在自起的 8081 上。
 
 ---

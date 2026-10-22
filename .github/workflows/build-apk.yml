@@ -189,7 +189,11 @@ jobs:
           set -uo pipefail
           # 两个构建工作流可能在同一 tag 上并发建 release：create 撞已存在就吞掉，
           # 资产用 --clobber 覆盖上传，保证并发安全。
-          NOTE="自动构建产物：Android APK / Windows 安装包 / Docker 镜像 iamplusdev/push-box:$TAG
+          # 镜像标签是 docker-publish.yml 的 docker/metadata 按 semver 去掉 v 算出来的
+          # （1.1.0 / 1.1 / latest），与 git tag 的 v1.1.0 不同名：这里照抄 $TAG，
+          # 用户就会去拉一个 Hub 上不存在的 tag。
+          IMG_TAG="${TAG#v}"
+          NOTE="自动构建产物：Android APK / Windows 安装包 / Docker 镜像 iamplusdev/push-box:${IMG_TAG}（同一镜像另有 ${IMG_TAG%.*} 与 latest 两个标签）
 
           ## Mapping File（用于还原线上崩溃堆栈）
           - 归档：本 tag 对应 workflow run 的 artifact \`mapping-${TAG}\`（需要仓库读权限，不进公开 Release）

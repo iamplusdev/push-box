@@ -169,7 +169,9 @@ jobs:
           # 未签名时把 SmartScreen 这一句写进 Release 说明：下载 setup.exe 的人只看这一页，
           # 不点进来不会知道"挡一道窗"是预期行为而不是包坏了。build-apk.yml 里写了同一句——
           # 两个 workflow 在同一 tag 上抢着建 release，谁先 create 谁说了算，所以两边都得带上。
-          NOTE='自动构建产物：Android APK / Windows 安装包 / Docker 镜像 iamplusdev/push-box:'"$TAG"
+          # 镜像标签同样不能照抄 git tag：docker-publish.yml 推的是去掉 v 的 1.1.0 / 1.1 / latest。
+          IMG_TAG="${TAG#v}"
+          NOTE='自动构建产物：Android APK / Windows 安装包 / Docker 镜像 iamplusdev/push-box:'"$IMG_TAG"'（同一镜像还有 '"${IMG_TAG%.*}"' 与 latest 两个标签）'
           if [ -z "$CERT_B64" ]; then
             NOTE="$NOTE
 
