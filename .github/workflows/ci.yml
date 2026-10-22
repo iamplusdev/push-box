@@ -197,6 +197,7 @@ jobs:
         with:
           dotnet-version: "8.0.x"
       - name: dotnet test PushBox.Crypto.Tests
+        id: dotnet
         working-directory: windows
         run: dotnet test PushBox.Crypto.Tests/PushBox.Crypto.Tests.csproj -c Release --nologo --results-directory TestResults --logger "trx;LogFileName=crypto.trx"
       # C# 侧原来没有基线闸：dotnet test 的退出码只回答"有没有红"，用例被静默裁掉（删了 [Fact]、
@@ -204,21 +205,63 @@ jobs:
       # 2026-10-22 就抓到 发布准备报告 还挂着 556/556、其余六处已经改成实测 554 —— 和 Java 那边
       # 同一个失效方式。所以这里用 trx 数出真实条数（不看控制台文案，避免 runner 语言影响解析），
       # 下面这一行的数字是 release-verify.sh 里 C# 计数闸读的唯一真值：改了它就同步改文档，别反过来。
+      #
+      # `if: always()` 不是可选的：这一步默认继承 success()，于是 dotnet test 一旦非零退出它就整个被
+      # 跳过——而"到底是哪几条红了"只有这一步答得出。2026-10-22 在 head `7b148ea` 上就是这么错过的：
+      # 匿名能读到的 annotation 只剩一句 `Process completed with exit code 1`，日志要登录才打得开，
+      # 本机同一条命令 554/554 全绿，于是连"是不是脆用例"都判不了。trx 里的 `outcome` 与 `errorInfo.message`
+      # 都在文件里，把它写成 annotation（check-run annotations 端点匿名可读）就等于把红因发到公开面上。
       - name: 断言 C# 用例数没有被静默裁剪
+        if: always()
         working-directory: windows
         shell: pwsh
+        env:
+          DOTNET_OUTCOME: ${{ steps.dotnet.outcome }}
         run: |
           $CS_BASELINE = 554
-          $trx = Get-ChildItem -Path TestResults -Recurse -Filter crypto.trx | Select-Object -First 1
-          if (-not $trx) { Write-Output "::error::找不到 crypto.trx，测试根本没跑出结果文件"; exit 1 }
-          [xml]$report = Get-Content -LiteralPath $trx.FullName -Raw
+          $trx = Get-ChildItem -Path TestResults -Recurse -Filter crypto.trx -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $trx) {
+            Write-Output "::error::没有 crypto.trx（dotnet test 这步 outcome=$env:DOTNET_OUTCOME）：还原或编译就断了，不是用例红——去看上面那步"
+            exit 1
+          }
+          [xml]$report = $null
+          try {
+            $report = Get-Content -LiteralPath $trx.FullName -Raw
+          } catch {
+            Write-Output "::error::crypto.trx 读不出来：$($_.Exception.Message)"
+            exit 1
+          }
+          if (-not $report -or -not $report.TestRun) {
+            # 这一句不是多余的防御：trx 半路损坏时 [xml] 转换会把 $report 留成空，而下面那句
+            # `$report.TestRun.Results.UnitTestResult` 会当成"一条用例、没通过"，把红因写成空气。
+            Write-Output "::error::crypto.trx 解析失败（不是 XmlDocument），这一条不能当作用例红来报"
+            exit 1
+          }
           $results = @($report.TestRun.Results.UnitTestResult)
           $notPassed = @($results | Where-Object { $_.outcome -ne 'Passed' })
-          Write-Output "C# 用例总数=$($results.Count) 未通过=$($notPassed.Count)"
+          Write-Output "C# 用例总数=$($results.Count) 未通过=$($notPassed.Count)（dotnet test 这步 outcome=$env:DOTNET_OUTCOME）"
           if ($notPassed.Count -gt 0) {
-            $notPassed | Select-Object -First 20 | ForEach-Object {
-              Write-Output "::error::$($_.testName) 结果=$($_.outcome)（skip 也算没测过）"
+            $i = 0
+            foreach ($r in ($notPassed | Select-Object -First 12)) {
+              $i++
+              # 只取断言输出的第一行并压掉换行：workflow command 的 value 里带 \r\n 会把一条
+              # annotation 截成两行，后半段变成没人认领的日志噪声。
+              # 路径是 Output/ErrorInfo/Message 而不是 result 直接挂 errorInfo——PowerShell 的
+              # XmlDocument 适配器按子元素层级出属性，写成 $r.errorInfo 会静默拿到空值，
+              # 于是 annotation 里只剩用例名、断言那句话整个丢掉（本机变异用例实测出来的）。
+              $msg = ''
+              if ($r.Output -and $r.Output.ErrorInfo -and $r.Output.ErrorInfo.Message) {
+                $msg = (($r.Output.ErrorInfo.Message -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -First 1) -replace '\s+', ' '
+              }
+              $line = "[$i/$($notPassed.Count)] $($r.testName) 结果=$($r.outcome) $msg"
+              Write-Output "::error::$($line -replace '\r?\n', ' ')"
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- ``$($r.testName)`` — $($r.outcome)：$msg"
             }
+            exit 1
+          }
+          if ($env:DOTNET_OUTCOME -ne 'success') {
+            # trx 里全绿可上一步还是非零退出——那是 runner/工具链侧的事，不能报"✅ 全部执行"糊过去。
+            Write-Output "::error::用例全绿但 dotnet test 退出码非 0（outcome=$env:DOTNET_OUTCOME）：还原/编译/工具链问题，不是用例红"
             exit 1
           }
           if ($results.Count -lt $CS_BASELINE) {
