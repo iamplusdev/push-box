@@ -19,7 +19,7 @@
 <nav class="side">
   <a class="brand" href="index.html">
     <span class="mark"><img src="assets/img/icon-192.png" alt=""></span>
-    <span><b>PushBox</b><span>1.1.0 · 自托管推送</span></span>
+    <span><b>PushBox</b><span>1.1.1 · 自托管推送</span></span>
   </a>
   <h3>文档</h3>
   <ul>
@@ -142,7 +142,7 @@ bash deploy/run-dev.sh                                 # 监听 7404，自己 so
     <li>
       <b>确认它起来了</b>
       <pre class="code" data-code="bash"><code>curl -sS http://127.0.0.1:7404/healthz</code></pre>
-      <span class="sub">期望 <code>{"status":"UP","db":"up","storage":"up"}</code>。</span>
+      <span class="sub">期望 <code>{"ok":true,"db":"up","storage":"up",...}</code>；任一项不通回 <code>503</code>。这条只在<b>本机直连</b>时给得出 200——容器部署时 <code>/healthz</code> 只认容器环回，验收方式见 <a href="install.html#prod">安装与部署</a>。</span>
     </li>
     <li>
       <b>在管理台建频道，发第一条消息</b>
