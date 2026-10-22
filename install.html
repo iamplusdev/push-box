@@ -19,7 +19,7 @@
 <nav class="side">
   <a class="brand" href="index.html">
     <span class="mark"><img src="assets/img/icon-192.png" alt=""></span>
-    <span><b>PushBox</b><span>1.1.3 · 自托管推送</span></span>
+    <span><b>PushBox</b><span>1.1.4 · 自托管推送</span></span>
   </a>
   <h3>文档</h3>
   <ul>
@@ -124,9 +124,9 @@ PB_BASE=http://127.0.0.1:8081 node p0-e2e.mjs   # 端口不同时自己指</code
   <ul>
     <li>桶<b>不需要</b>匿名可读：图片字节由服务端取回后再发给设备，桶对客户端可以完全不可见。</li>
     <li>endpoint 是 IP 或裸主机名时 <code>pb.s3.path-style</code> 保持 <code>true</code>，虚拟主机风格的域名解析不出来。</li>
-    <li>想让对象在桶里是密文：主钥 <code>PB_S3_MASTER_KEY=$(openssl rand -base64 32)</code>，再加 <code>--pb.s3.object-encrypt=sse-c</code>。开关只影响新写入的对象，历史对象按各自记录的形态读。</li>
+    <li>想让对象在桶里是密文：加 <code>-e PB_S3_OBJECT_ENCRYPT=sse-c</code>，再给它一个 KEK 来源——推荐 <code>-e PB_S3_MASTER_PASSPHRASE='&lt;至少 12 个字符的口令&gt;'</code>，由服务端用 Argon2id 派生；也可以继续用 <code>-e PB_S3_MASTER_KEY="$(openssl rand -base64 32)"</code>。两者只能留一个。开关只影响新写入的对象，历史对象按各自记录的形态读。</li>
   </ul>
-  <div class="callout danger"><b>主钥一旦有对象落库就不能换</b><p>换主钥等于旧封装钥全部解不开，表现为图片集体不见了，而且不可恢复。请把它和数据库口令放在一起备份。</p></div>
+  <div class="callout danger"><b>KEK 一旦有对象落库就不能换</b><p>换口令或换主钥等于旧封装钥全部解不开，表现为图片集体不见了，而且不可恢复。口令本身不存库：<code>app_state.media_kek_v1</code> 只存随机盐、KDF 参数与校验值，所以库还在、口令没变，重启/重装容器都能读回旧图；反过来，口令忘了与主钥丢了等价。请把它和数据库口令放在一起备份。</p></div>
 
   <h2 id="prod">Docker 部署</h2>
   <p>镜像在 Docker Hub 上，<b>里面同时装着服务端与 Web 管理台</b>：同一个进程、同一个端口吐 API、长连接和页面，同源，所以不需要 CORS，反代也只要一条规则。<b>起步只必填两项</b>——库地址与库口令，其余拓扑默认值已经烘焙在镜像的 <code>ENV</code> 里。</p>
@@ -150,7 +150,7 @@ SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句</co
   -e PB_DB_HOST=&lt;库的IP或服务名&gt; -e PB_DB_PASSWORD='&lt;强口令&gt;' \
   -v pushbox-media:/app/data/media -v pushbox-logs:/app/logs \
   docker.io/iamplusdev/push-box:latest</code></pre>
-      <span class="sub">不给别的值时：端口 7404、本地文件存储（图片落 <code>pushbox-media</code> 卷，明文 + 每文件 600 权限，启动时出声提醒一次）、管理台<b>关闭</b>、库名与库用户名都是 <code>pushbox</code>。要换形态就在同一条命令后面追加同名变量：<code>PB_STORAGE_TYPE=s3</code> 加 <code>PB_S3_*</code> 外接桶，<code>PB_S3_OBJECT_ENCRYPT=sse-c</code> 加 <code>PB_S3_MASTER_KEY</code> 让本地图片也加密（主钥一旦有对象落库就<b>不可轮换</b>），<code>PB_SERVER_PORT</code> 改端口（<code>-p</code> 右侧要跟着改）。<b>镜像之外没有第二件事</b>——第 1 步那个库建好就到此为止。</span>
+      <span class="sub">不给别的值时：端口 7404、本地文件存储（图片落 <code>pushbox-media</code> 卷，明文 + 每文件 600 权限，启动时出声提醒一次）、管理台<b>关闭</b>、库名与库用户名都是 <code>pushbox</code>。要换形态就在同一条命令后面追加同名变量：<code>PB_STORAGE_TYPE=s3</code> 加 <code>PB_S3_*</code> 外接桶，<code>PB_S3_OBJECT_ENCRYPT=sse-c</code> 加 <code>PB_S3_MASTER_PASSPHRASE</code>（或 <code>PB_S3_MASTER_KEY</code>，二选一）让本地图片也加密（KEK 一旦有对象落库就<b>不可轮换</b>），<code>PB_SERVER_PORT</code> 改端口（<code>-p</code> 右侧要跟着改）。<b>镜像之外没有第二件事</b>——第 1 步那个库建好就到此为止。</span>
     </li>
     <li>
       <b>已经有一个桶？同一条命令让它落桶</b>
@@ -161,10 +161,10 @@ SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句</co
   -e PB_S3_ENDPOINT=http://&lt;桶机的IP&gt;:7101 \
   -e PB_S3_ACCESS_KEY='&lt;AK&gt;' -e PB_S3_SECRET_KEY='&lt;SK&gt;' \
   -e PB_S3_BUCKET=pushbox \
-  -e PB_S3_OBJECT_ENCRYPT=sse-c -e PB_S3_MASTER_KEY="$(openssl rand -base64 32)" \
+  -e PB_S3_OBJECT_ENCRYPT=sse-c -e PB_S3_MASTER_PASSPHRASE='&lt;至少 12 个字符的口令&gt;' \
   -v pushbox-logs:/app/logs \
   docker.io/iamplusdev/push-box:latest</code></pre>
-      <span class="sub">和上一条命令比只多了 5 行、少了一个卷。<code>PB_STORAGE_TYPE=s3</code> <b>不能省</b>：镜像默认是 <code>local</code>，只给 <code>PB_S3_*</code> 不给这个开关，那几项一个字都不读（启动时会点名提醒"配了但读不到"），图片照旧落本地目录。对象落桶后 <code>pushbox-media</code> 那个卷就没用了，日志卷还是要。<b>桶要你先建好</b>，程序不建桶；跟别的系统共用一个桶可以，但只读写 PushBox 自己那套对象键。<code>PB_S3_PATH_STYLE</code> 默认 <code>true</code>（MinIO / RustFS 是对的），阿里云 OSS 或 AWS 按服务商文档可能要 <code>false</code>；桶名与区域不是 <code>pushbox</code> / <code>us-east-1</code> 就改上面那两行。图片明文落在桶上是<b>拒绝启动</b>的——桶侧任何拿到同一组 AK/SK 的读者都能直接读走，所以要 <code>sse-c</code> + 主钥，或显式 <code>-e PB_ALLOW_PLAINTEXT_MEDIA=1</code> 表态。</span>
+      <span class="sub">和上一条命令比只多了 5 行、少了一个卷。<code>PB_STORAGE_TYPE=s3</code> <b>不能省</b>：镜像默认是 <code>local</code>，只给 <code>PB_S3_*</code> 不给这个开关，那几项一个字都不读（启动时会点名提醒"配了但读不到"），图片照旧落本地目录。对象落桶后 <code>pushbox-media</code> 那个卷就没用了，日志卷还是要。<b>桶要你先建好</b>，程序不建桶；跟别的系统共用一个桶可以，但只读写 PushBox 自己那套对象键。<code>PB_S3_PATH_STYLE</code> 默认 <code>true</code>（MinIO / RustFS 是对的），阿里云 OSS 或 AWS 按服务商文档可能要 <code>false</code>；桶名与区域不是 <code>pushbox</code> / <code>us-east-1</code> 就改上面那两行。图片明文落在桶上是<b>拒绝启动</b>的——桶侧任何拿到同一组 AK/SK 的读者都能直接读走，所以要 <code>sse-c</code> + 口令或主钥（二选一），或显式 <code>-e PB_ALLOW_PLAINTEXT_MEDIA=1</code> 表态。</span>
     </li>
     <li>
       <b>验证：在容器里取</b>
@@ -179,7 +179,7 @@ SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句</co
       <span class="sub"><b>要用管理台</b>这两个值就必须都有、互不相同、各自至少 32 字节，只填一个或填弱值容器会直接拒绝启动。两个都留空是一个合法状态：管理台整个关闭，那些接口一律回 403「管理台未启用」，客户端收发不受影响。管理台在<b>根路径 <code>/</code></b>（不是 <code>/admin</code>），登录口令就是 <code>PB_ADMIN_SECRET</code>。然后「频道 → 新建」——频道号和密钥就是要填进推送工具的那一对，<b>密钥只在创建和重置的那一刻显示一次</b>。</span>
     </li>
   </ol>
-  <p>在 NAS 的图形界面（飞牛 / 群晖 / 1Panel）里装时没有 <code>.env</code> 这一层。用「创建容器」表单的话，只有两处要自己动手：<b>存储位置两行</b>——容器内 <code>/app/data/media</code> 与 <code>/app/logs</code> 各映射到 NAS 上一个文件夹（镜像声明了 <code>VOLUME</code>，较新的表单会带出容器内路径，宿主文件夹仍要你选；建好后先 <code>sudo chown -R 10001:10001 &lt;那个文件夹&gt;</code>；留空则删容器时图片一起没）；<b>环境变量只填两个</b>——<code>PB_DB_HOST</code> 与 <code>PB_DB_PASSWORD</code>，表单里显示出来的其余项都是默认值。要外接桶就把 <code>PB_STORAGE_TYPE=s3</code> 与 <code>PB_S3_*</code> 七行一次加齐；<code>PB_S3_*</code> 默认不会出现在表单里（AK/SK 是凭据，不预置进镜像，半套又会误导人）。逐步说明见仓库的 <code>deploy/NAS部署指南.md</code> 路径 C，compose 版见 <code>deploy/docker-compose.nas.yml</code>。</p>
+  <p>在 NAS 的图形界面（飞牛 / 群晖 / 1Panel）里装时没有 <code>.env</code> 这一层。用「创建容器」表单的话，只有两处要自己动手：<b>存储位置两行</b>——容器内 <code>/app/data/media</code> 与 <code>/app/logs</code> 各映射到 NAS 上一个文件夹（镜像声明了 <code>VOLUME</code>，较新的表单会带出容器内路径，宿主文件夹仍要你选；建好后先 <code>sudo chown -R 10001:10001 &lt;那个文件夹&gt;</code>；留空则删容器时图片一起没）；<b>环境变量只改两个</b>——<code>PB_DB_HOST</code> 与 <code>PB_DB_PASSWORD</code>，其余显示出来的都是默认值；凭据行显示为占位值 <code>__SET_ME__</code>，没替换的占位值会被 entrypoint 拒绝启动。要外接桶就把 <code>PB_STORAGE_TYPE</code> 改成 <code>s3</code>，并把表单里已经显示出来的 <code>PB_S3_ENDPOINT</code> / <code>PB_S3_ACCESS_KEY</code> / <code>PB_S3_SECRET_KEY</code> / <code>PB_S3_MASTER_PASSPHRASE</code> 四行占位值换成真实值，再把加密模式改成 <code>sse-c</code>。逐步说明见仓库的 <code>deploy/NAS部署指南.md</code> 路径 C，compose 版见 <code>deploy/docker-compose.nas.yml</code>。</p>
 
   <h2 id="prod-compose">要反代 / 监控 / 自带桶时：compose 形态</h2>
   <p><b>为什么这一条要克隆仓库而上面不用</b>：<code>docker-compose.yml</code>、<code>Caddyfile</code>、<code>docker-compose.monitoring.yml</code> 和那几段 sidecar 定义都是<b>文件</b>，它们装不进 <code>pushbox</code> 镜像里；<code>.env</code> 只是给这些文件记账的那一层。只要一个容器时用不到它们。</p>
@@ -224,7 +224,7 @@ docker compose up -d</code></pre>
   <ul>
     <li>compose 只认 <code>PB_*</code> 这一套名字，不要再写 <code>SPRING_DATASOURCE_URL</code> 之类的别名——两个名字各声称拥有同一个键时，排查会看不出真实取值来自哪。</li>
     <li>拓扑 C 的 <code>/app/data/media</code> <b>必须挂卷</b>，compose 里已经挂成 named volume <code>pushbox_server_media</code>。改成宿主目录时注意属主要能被容器里的账号写（uid 10001）：这条现在有启动阶段的写入探针兜，写不进就当场退出并给出两种修法，不会拖到第一条带图的消息才看出来。</li>
-    <li>「不许静默写明文」这条卡的是<b>桶</b>：<code>PB_STORAGE_TYPE=s3</code> 时 <code>none</code> 会拒绝启动，要么开 <code>sse-c</code> 配主钥，要么显式 <code>PB_ALLOW_PLAINTEXT_MEDIA=1</code>。<code>local</code> 只打一条 WARN——对象在部署者自己的盘上、逐文件 600 权限，硬拦只会逼人为了过检查去配一个用不到的桶。</li>
+    <li>「不许静默写明文」这条卡的是<b>桶</b>：<code>PB_STORAGE_TYPE=s3</code> 时 <code>none</code> 会拒绝启动，要么开 <code>sse-c</code> 配口令或主钥，要么显式 <code>PB_ALLOW_PLAINTEXT_MEDIA=1</code>。<code>local</code> 只打一条 WARN——对象在部署者自己的盘上、逐文件 600 权限，硬拦只会逼人为了过检查去配一个用不到的桶。</li>
   </ul>
 
   <h2 id="tls">HTTPS 与自签 CA</h2>
