@@ -1,14 +1,20 @@
 package dev.pushbox.server.config;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.HikariDataSource;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.AnnotationConfigUtils;
 import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.core.env.MapPropertySource;
@@ -91,6 +97,63 @@ class DevCredentialsGuardTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("PB_DB_PASSWORD")
         .hasMessageNotContaining("PB_S3_ENDPOINT");
+  }
+
+  @Test
+  @DisplayName("⑨ local 模式却带着 PB_S3_*：不拦启动，但必须出声——静默跑本地目录比启动失败更难发现")
+  void localStorageWithLingeringS3CredentialsWarns() {
+    Map<String, String> props = new LinkedHashMap<>();
+    props.put("PB_DB_PASSWORD", SENTINEL);
+    props.put("pb.storage.type", "local");
+    props.put("pb.storage.local-path", "./data/media");
+    props.put("PB_S3_ACCESS_KEY", SENTINEL);
+
+    List<String> warns = warningLines("dev", props);
+    // 报的是"哪几个键用不上 + 对象落在哪 + 怎么切回桶形态"，值一个字都不出现
+    assertThat(warns).hasSize(1);
+    assertThat(warns.get(0))
+        .contains("PB_S3_ACCESS_KEY")
+        .contains("./data/media")
+        .contains("PB_STORAGE_TYPE=s3")
+        .doesNotContain(SENTINEL);
+  }
+
+  @Test
+  @DisplayName("⑩ 真跑 s3 时不许响：凭据配齐是正常形态，把这条告警变成常驻噪音就等于没有")
+  void s3ModeStaysSilentWhenCredentialsAreComplete() {
+    Map<String, String> props = new LinkedHashMap<>();
+    props.put("PB_DB_PASSWORD", SENTINEL);
+    props.put("pb.storage.type", "s3");
+    props.put("PB_S3_ENDPOINT", SENTINEL);
+    props.put("PB_S3_ACCESS_KEY", SENTINEL);
+    props.put("PB_S3_SECRET_KEY", SENTINEL);
+
+    assertThat(warningLines("dev", props)).isEmpty();
+  }
+
+  /**
+   * 起一次上下文，收集 {@link DevCredentialsGuard} 自己那条 logger 上的 WARN。
+   *
+   * <p>用 ListAppender 挂在类 logger 上而不是查 root：root 的 level 与 appender 由 logback-spring.xml
+   * 决定，而这个测试跑在裸 GenericApplicationContext 里，那份配置根本没被 Spring Boot 加载过——
+   * 挂在类 logger 上，采到的就是这句告警本身，与 root 怎么配无关。
+   */
+  private static List<String> warningLines(String profile, Map<String, String> props) {
+    ch.qos.logback.classic.Logger guardLogger =
+        (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(DevCredentialsGuard.class);
+    ListAppender<ILoggingEvent> appender = new ListAppender<>();
+    appender.start();
+    guardLogger.addAppender(appender);
+    try {
+      refresh(profile, props, true);
+    } finally {
+      guardLogger.detachAppender(appender);
+      appender.stop();
+    }
+    return appender.list.stream()
+        .filter(event -> event.getLevel() == Level.WARN)
+        .map(ILoggingEvent::getFormattedMessage)
+        .toList();
   }
 
   private static void refresh(String profile, Map<String, String> props, boolean withDataSource) {

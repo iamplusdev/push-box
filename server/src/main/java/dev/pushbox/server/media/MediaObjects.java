@@ -8,6 +8,7 @@ import java.util.Locale;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.sync.RequestBody;
@@ -62,9 +63,9 @@ public class MediaObjects {
   private final byte[] masterKey;
   private final boolean useLocalStorage;
 
-  public MediaObjects(S3Client s3, PbProperties props) {
+  public MediaObjects(@Nullable S3Client s3, PbProperties props) {
     this.config = props.getS3();
-    String storageType = props.getStorage().getType();
+    String storageType = props.getStorage().getType().trim();
     this.useLocalStorage = "local".equalsIgnoreCase(storageType);
     this.encMode = normalizeMode(config.getObjectEncrypt());
 
@@ -88,7 +89,9 @@ public class MediaObjects {
       log.info("对象存储后端=本地文件系统 path={} encrypt={}", localPath, encMode);
     } else {
       if (s3 == null) {
-        throw new IllegalStateException("pb.storage.type=s3 时需要有效的 S3Client，但 Spring 未注入");
+        throw new IllegalStateException("pb.storage.type=" + storageType
+            + " 需要 S3Client，但 Spring 没有注入：这一项只认 s3|local，"
+            + "拼成别的（local 少个 l、s3 后面多个空格）两边都不沾");
       }
       this.s3 = s3;
       this.localStorage = null;

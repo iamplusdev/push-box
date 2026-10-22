@@ -1,6 +1,7 @@
 package dev.pushbox.server.config;
 
 import java.net.URI;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -13,14 +14,22 @@ import software.amazon.awssdk.services.s3.S3Configuration;
 @Configuration
 public class S3Config {
 
+  /**
+   * local 模式下这个 bean 干脆不存在，而不是"存在但值为 null"。
+   *
+   * <p>{@code @Bean} 方法 return null 时 Spring 注册的是 {@code NullBean}，而 {@code NullBean} 对
+   * 必须注入的构造参数等于"没有这个 bean"：{@code MediaObjects} 起手就撞上
+   * {@code NoSuchBeanDefinitionException: No qualifying bean of type 'S3Client'}，进程在
+   * DataSource 之后、任何业务调用之前死掉。症状是"配了 PB_STORAGE_TYPE=local 反而起不来"，
+   * 而单测全是 {@code new MediaObjects(null, props)} 手工构造，永远照不出这条接线，
+   * 所以本地存储这条路只在单元测试里通过过一次。
+   *
+   * <p>默认值与 {@link PbProperties.Storage#getType()} 保持一致（s3）：变量没配时该建客户端。
+   * {@code havingValue} 的比较不区分大小写，所以 {@code PB_STORAGE_TYPE=S3} 也认。
+   */
   @Bean
+  @ConditionalOnProperty(prefix = "pb.storage", name = "type", havingValue = "s3", matchIfMissing = true)
   public S3Client s3Client(PbProperties props) {
-    String storageType = props.getStorage().getType();
-    if ("local".equalsIgnoreCase(storageType)) {
-      // 本地存储模式下不需要 S3Client，返回一个占位符以避免 Spring 依赖注入失败
-      return null;
-    }
-
     PbProperties.S3 s3 = props.getS3();
     // 空值必须在这里拒绝启动。晚一拍的代价是：容器起来了、TCP 健康检查过了、/healthz 也说 db=up，
     // 但每条带图的消息一路停在 failed，症状要等到用户报"图不见了"才看得见。
