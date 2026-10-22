@@ -1,0 +1,182 @@
+name: 官网发布（GitHub Pages）
+
+# site/ 没有构建步骤（双击 index.html 就能看），所以"发布"这件事只是把 site/ 这一棵目录树搬到一条
+# 只装它的分支根上：gh-pages 的根树 == site/ 的树，一字节不多——没有 README、没有构建产物、没有源码。
+# 用 git 的 plumbing（commit-tree + push）做，不引第三方 action：少一个能往仓库写数据的供应链入口，
+# 也省得为一份静态 HTML 在 runner 上装 Node。
+#
+# 「有内容更新时才发布」分两层，两层都必须有：
+#   1) 触发层 —— push 只对 site/** 与本文件生效，改代码、改内部文档不会惊动官网。
+#   2) 内容层 —— 比 site/ 的树哈希与 gh-pages 现在的根树哈希，相同就直接退出。树哈希是 Git 自己算的
+#      内容指纹，所以"同一份 site/ 被 merge 带进来两次""手动重跑一次"都不会多出一个空 commit、
+#      也不会多触发一次 Pages 构建。只有第 1 层是不够的：workflow_dispatch 完全不吃 paths 过滤。
+#
+# 这个 workflow 故意不做的两件事（都要人点头，不能让流水线替仓库改设置）：
+#   - 不开 GitHub Pages。第一次要拿管理员 token 调一次 POST /repos/<仓库>/pages，命令写在最后一个步骤的
+#     404 分支里。没开的时候这条流水线只把分支推出来，站点地址自然还是打不开。
+#   - 不写 tag 事件。官网内容与版本号无关，打 v* 标签不该重发站点（这条判据被 scripts/release-verify.sh 断言着）。
+#
+# 回滚口径：gh-pages 是线性历史，每条 commit 的 message 里都记着它当初发布的 site/ 树哈希，
+# 把它指回上一个 commit 就是回滚；`git log gh-pages` 能直接看出哪一次换了哪棵树。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/site-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 只检查、算树、比对，不推 gh-pages
+        type: boolean
+        default: false
+      force_branch:
+        description: 允许从 main 以外的分支发布（勾上等于确认：这一份会直接上线，没有预览地址）
+        type: boolean
+        default: false
+
+concurrency:
+  group: site-deploy
+  cancel-in-progress: false   # 两条部署并发时后推的那条会盖掉前一条，这里排队而不是取消
+
+permissions:
+  contents: write   # 只有"推 gh-pages"这一件事需要写权限
+  pages: read       # 只为把站点地址读出来贴进 job summary；Pages 没开时 404 也只出声、不判红
+
+jobs:
+  deploy:
+    name: 发布 site/ 到 gh-pages
+    runs-on: ubuntu-latest
+    env:
+      PUBLISH_BRANCH: gh-pages
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 新提交要挂在 gh-pages 现有那条后面（下面 commit-tree 带 -p）；浅克隆拿不到父链，push 会撞 shallow update not allowed
+
+      - name: 检查站点能不能挂在子路径下
+        run: |
+          set -euo pipefail
+          # 项目站的地址带仓库名（https://<owner>.github.io/push-box/），所以 href="/x" 这种根绝对路径
+          # 在 file:// 和本机静态服务器上都是好的，一上 Pages 就指到域名根去。这一条本机看不出来。
+          if grep -rnE '(href|src)="/' site/; then
+            echo "::error::site/ 里有上面这些根绝对路径引用，发到 Pages 子路径下会 404，改成相对路径"
+            exit 1
+          fi
+          # Pages 用分支做源时，根目录没有 .nojekyll 就会走一遍 Jekyll；站点里全是原样就该发出去的
+          # HTML/CSS/JS/PNG，没必要让另一套构建参与，所以这个空文件必须在。
+          if [ ! -f site/.nojekyll ]; then
+            echo "::error::site/.nojekyll 缺失：Pages 会拿 Jekyll 处理这份静态站"
+            exit 1
+          fi
+          echo "PASS：引用全是相对路径，.nojekyll 就位"
+
+      - name: 算内容指纹，判这次到底要不要发
+        id: plan
+        run: |
+          set -euo pipefail
+          SITE_TREE=$(git rev-parse 'HEAD:site')
+          EMPTY_TREE=$(git hash-object -t tree /dev/null)
+          if [ "$SITE_TREE" = "$EMPTY_TREE" ]; then
+            echo "::error::site/ 是空树，不发。真要下架官网去 Pages 设置里关，别推一条空分支上去"
+            exit 1
+          fi
+          echo "site_tree=$SITE_TREE" >> "$GITHUB_OUTPUT"
+          echo "site/ 树 $SITE_TREE，共 $(git ls-tree -r --name-only "$SITE_TREE" | wc -l) 个文件"
+
+          # dispatch 跑的是所选分支那一份 site/，而 Pages 只有一个地址：从分支发就等于直接上线。
+          # 唯一不必拦的是 dry_run —— 它只算树、比对、生成提交，一个字节都不推。
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF_NAME" != "main" ] \
+             && [ "${{ inputs.dry_run }}" != "true" ] && [ "${{ inputs.force_branch }}" != "true" ]; then
+            echo "::error::当前从 $GITHUB_REF_NAME 触发，这份 site/ 会直接成为线上官网（没有预览地址）。" \
+             "确认要这样发就勾上 force_branch 再跑一次"
+            exit 1
+          fi
+
+          if git fetch --no-tags origin "+refs/heads/$PUBLISH_BRANCH:refs/remotes/origin/$PUBLISH_BRANCH" 2>/dev/null; then
+            CUR_SHA=$(git rev-parse "origin/$PUBLISH_BRANCH")
+            CUR_TREE=$(git rev-parse "$CUR_SHA^{tree}")
+          else
+            CUR_SHA=''
+            CUR_TREE=''
+          fi
+          echo "cur_sha=$CUR_SHA" >> "$GITHUB_OUTPUT"
+
+          if [ "$CUR_TREE" = "$SITE_TREE" ]; then
+            echo "与 $PUBLISH_BRANCH 现有那份逐字节相同 → 跳过发布（不产生空 commit，也不触发一次 Pages 构建）"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$PUBLISH_BRANCH 现树 ${CUR_TREE:-分支还不存在，这是首次发布} → 要发"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 用 site/ 的树生成提交并推上 gh-pages
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          SITE_TREE: ${{ steps.plan.outputs.site_tree }}
+          CUR_SHA: ${{ steps.plan.outputs.cur_sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          # commit-tree 要一个身份；用 bot 自己那对，免得 runner 上"没配 user.email"这种错占掉一次发布
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          MSG1="deploy: site tree $SITE_TREE"
+          MSG2="来源 $GITHUB_REPOSITORY@$GITHUB_REF_NAME（$GITHUB_SHA，run $GITHUB_RUN_ID）"
+          # 挂在现有那条后面，而不是每次造一条孤儿：孤儿会让上一次发布变成不可达对象，
+          # 过一阵就被 GC 收走，回滚与「哪一次换了哪棵树」的账都没处查。
+          if [ -n "$CUR_SHA" ]; then
+            COMMIT=$(git commit-tree "$SITE_TREE" -p "$CUR_SHA" -m "$MSG1" -m "$MSG2")
+          else
+            COMMIT=$(git commit-tree "$SITE_TREE" -m "$MSG1" -m "$MSG2")
+          fi
+          # 自证：这条提交的根树必须正是算出来的那份 site/，多一字节少一字节都不推
+          if [ "$(git rev-parse "$COMMIT^{tree}")" != "$SITE_TREE" ]; then
+            echo "::error::生成的提交根树与 site/ 树不一致，不推"
+            exit 1
+          fi
+          echo "算出提交 $COMMIT，根目录内容："
+          git ls-tree --name-only "$COMMIT" | sed 's/^/  /'
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "::notice::dry-run：提交 $COMMIT 已生成，没有推送"
+            exit 0
+          fi
+          if [ -z "$CUR_SHA" ]; then
+            git push origin "$COMMIT:refs/heads/$PUBLISH_BRANCH"
+          else
+            # lease 拿这次 fetch 到的值当期望值：有人在并发窗口里手动动过 gh-pages 就推不动，
+            # 而不是被这条流水线悄悄盖掉。
+            git push --force-with-lease="refs/heads/$PUBLISH_BRANCH:$CUR_SHA" \
+              origin "$COMMIT:refs/heads/$PUBLISH_BRANCH"
+          fi
+          {
+            echo "## 官网已发布"
+            echo ""
+            echo "- \`$PUBLISH_BRANCH\` → \`$COMMIT\`（上一个 \`${CUR_SHA:-无}\`）"
+            echo "- 站点树 \`$SITE_TREE\`，来源 \`$GITHUB_REPOSITORY@$GITHUB_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 报站点地址（Pages 还没开时把下一步写出来）
+        if: steps.plan.conclusion == 'success'
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY/pages"
+          code=$(curl -sS -o /tmp/pages.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "$api")
+          if [ "$code" = "200" ]; then
+            url=$(jq -r '.html_url // .url // "（响应里没有地址）"' /tmp/pages.json)
+            status=$(jq -r '.status // "unknown"' /tmp/pages.json)
+            echo "站点地址：$url（Pages 侧状态 $status，构建一般要 1～2 分钟）"
+            echo "- 站点地址：$url" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$code" = "404" ]; then
+            echo "::notice::$PUBLISH_BRANCH 已就位，但 Pages 还没开。开通是一次性动作，要仓库管理员的 token："
+            echo "  curl -X POST -H \"Authorization: Bearer \$TOKEN\" -H 'Accept: application/vnd.github+json' \\"
+            echo "    https://api.github.com/repos/$GITHUB_REPOSITORY/pages \\"
+            echo "    -d '{\"source\":{\"branch\":\"$PUBLISH_BRANCH\",\"path\":\"/\"},\"build_type\":\"legacy\"}'"
+          else
+            echo "::warning::查 Pages 状态返回 HTTP $code，不是 200 也不是 404，自己去仓库 Settings → Pages 看一眼"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
