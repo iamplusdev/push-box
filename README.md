@@ -265,7 +265,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 | 跑法 | 判什么 |
 |------|--------|
-| `JAVA_HOME=… mvn -B -pl core,server test` | 服务端与加密库（**301/301**，core 43 + server 258）。要先 `set -a && . deploy/env/local.env && set +a`：114 条挂 `PB_S3_ACCESS_KEY` 门控，缺凭据时是 187 执行 + 114 静默 skip，而 `mvn test` 的退出码仍然是 0 |
+| `JAVA_HOME=… mvn -B -pl core,server test` | 服务端与加密库（**306/306**，core 43 + server 263）。要先 `set -a && . deploy/env/local.env && set +a`：114 条挂 `PB_S3_ACCESS_KEY` 门控，缺凭据时是 192 执行 + 114 静默 skip，而 `mvn test` 的退出码仍然是 0 |
 | `node deploy/probe/p0-e2e.mjs` | 端到端协议（**0 失败**；条数以脚本末行的 `N/N` 为准） |
 | `cd android && ./gradlew :app:assembleDebug` | Android 编译通过 |
 | `cd web-admin && npm ci && npm run build` | 管理台 `vue-tsc` 类型检查与 `dist/` 产物 |
@@ -299,7 +299,8 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 ## 持续集成（GitHub Actions）
 
-推到 `main` 自动出各端产物、推 Docker Hub；打 `v*` 标签额外发布 GitHub Release。五个工作流都在
+推到 `main` 自动出各端产物、推 Docker Hub；打 `v*` 标签额外发布 GitHub Release；改动含 `site/**` 的
+`main` 推送还会把官网发到 GitHub Pages。六个工作流都在
 `.github/workflows/`，其中 `ci.yml` 是 PR 门禁（真 MySQL + 真对象存储，末尾断言"闸门用例一条都没被跳过"）。
 
 | 工作流 | 触发 | 产出 |
@@ -307,9 +308,10 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 | `docker-publish.yml` | push main / `v*` 标签 / 手动 | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`：标签上打 `1.1.0`/`1.1`/`latest`，main 上只打 `main`/`sha-*`（版本标签必须不可变）。构建前先跑版本闸门——tag、`pom.xml`、compose 三者版本号不一致就直接红，不会推出去一个自称某版、里面跑着另一版的镜像。手动触发默认是 **dry-run**（只构建不推），用它可以在不碰 Hub 的前提下验 `DOCKERHUB_*` 这对 secrets |
 | `build-apk.yml` | push main / `v*` 标签 | 只出 `assembleRelease`（R8 + 签名），用 `apksigner verify` 把关后上传 `pushbox-release-*.apk`；标签时发 Release。没配 keystore 时构建直接失败，不再退化成"发一只 debug 包" |
 | `build-msi.yml` | push main / `v*` 标签 | `windows-latest` 上 `dotnet publish self-contained win-x64` + Inno Setup 出 `setup.exe`，上传 artifact；标签时发 Release |
-| `update-dockerhub-description.yml` | push main 且改动含 `README.md`（这是五个工作流里**唯一**带 `paths:` 过滤的） | 把 `README.md` 同步为 Docker Hub 仓库说明。**至今没跑过**：唯一那次 `main` 推送是"新建分支"（`before` 是全零），GitHub 算不出改动文件集，带 `paths:` 的它被跳过、另外四个照跑；因为它从没被登记过，连网页上的「Run workflow」都不存在，补跑只能等下一次改到 `README.md` 的 `main` 常规推送（判据与证据见 `发布检查清单.md`「Hub 仓库说明」） |
+| `update-dockerhub-description.yml` | push main 且改动含 `README.md`（带 `paths:` 过滤的两个之一，另一个是 `site-deploy.yml`） | 把 `README.md` 同步为 Docker Hub 仓库说明。**至今没跑过**：唯一那次 `main` 推送是"新建分支"（`before` 是全零），GitHub 算不出改动文件集，带 `paths:` 的它被跳过、另外四个照跑（那是五个工作流的时候，`site-deploy.yml` 还不存在）；因为它从没被登记过，连网页上的「Run workflow」都不存在，补跑只能等下一次改到 `README.md` 的 `main` 常规推送（判据与证据见 `发布检查清单.md`「Hub 仓库说明」） |
+| `site-deploy.yml` | push main 且改动含 `site/**` / 手动 | 把 `site/` 那棵目录树原样发到一条**只装站点**的分支 `gh-pages`（分支的根树 == `site/` 的树，没有源码也没有构建产物），Pages 以它为源。没有构建步骤，用 `git commit-tree` + push 完成，只依赖 `actions/checkout`。**内容没变就不发**：`paths:` 挡掉"只改代码"的推送，树哈希比较再挡掉"同一份 site/ 被带进来两次"和手动重跑（dispatch 不吃 `paths:`，所以这层不可省）。不挂 `v*` 标签——官网与版本号无关。**它不开 GitHub Pages**：第一次要拿管理员 token 调一次 `POST /repos/<仓库>/pages`，没开时这条链只推分支、站点地址自然还是打不开 |
 
-前四个工作流没有 `paths:` 过滤：只要落到 `main` 或 `v*` 标签，哪怕只改一个像素也会整套跑一遍。**推其它分支名（例如发布前的 `publish` 分支）不触发任何工作流**，这也是"代码先上远端、CI 暂时不动"能成立的原因。
+出制品与门禁的那四个工作流没有 `paths:` 过滤：只要落到 `main` 或 `v*` 标签，哪怕只改一个像素也会整套跑一遍。**推其它分支名（例如发布前的 `publish` 分支）不触发任何工作流**，这也是"代码先上远端、CI 暂时不动"能成立的原因。`site-deploy.yml` 从非 `main` 分支手动触发且真要推上去时会被直接拒（Pages 只有一个地址，没有预览地址可回退），要越过这道确认得显式勾上 `force_branch`；勾 `dry_run` 不拦，因为它一个字节都不推。
 
 **要在仓库 Settings → Secrets and variables → Actions 配的密钥：**
 
@@ -350,4 +352,4 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 **文档版本**：v1.1.0  
 **最后更新**：2026-10-20  
 **主分支**：main  
-**仓库**：[GitHub](https://github.com/iamplusdev/push-box.git)（主仓）| [Gitee](https://gitee.com/iamplus/push-box.git) | [Gitea](https://gitea.iamplus.cn/iamplus/push-box.git)（镜像，暂未同步）
+**仓库**：[GitHub](https://github.com/iamplusdev/push-box.git)（主仓，Issue 与 CI 都在这边）| [Gitee](https://gitee.com/iamplus/push-box.git)（手动同步的国内镜像，可能落后主仓）

@@ -7,6 +7,70 @@
 
 ---
 
+## 未发布（2026-10-22）—— 本机起步那条路第一次真跑通（第二十八轮）
+
+> 技术决策见 [软件设计方案](docs/软件设计方案.md) §11.1.2 / §11.2.1；这一轮的起点是"发布前还有哪些可优化项"那张清单里的第 1、2、3、5 项加计数闸。
+
+### 修掉一条让"本机起步"整条路径跑不起来的缺陷
+
+- **`PB_STORAGE_TYPE=local` 时进程根本起不来**，报 `NoSuchBeanDefinitionException: No qualifying bean of type 'S3Client'`（装配链 `adminCli → MediaPurgeService → MediaObjects`）。`S3Config` 原来在 local 下 `return null`，而 Spring 对 `@Bean` 返回 null 注册的是 `NullBean`——它对必须注入的构造参数等于"没有这个 bean"。**README、`部署快速参考`、compose、entrypoint 四条线都写着 local 是本机默认形态，而它只在单测里通过过**：那些用例全是 `new MediaObjects(null, props)` 手工构造，绕开了容器。
+- **修法是让这个 bean 在 local 下不存在**，不是给参数加 `@Nullable` 把现场抹平：`S3Config#s3Client` 上 `@ConditionalOnProperty(prefix="pb.storage", name="type", havingValue="s3", matchIfMissing=true)`（默认值与 `PbProperties.Storage#type` 对齐），`MediaObjects` 的参数留 `@Nullable`、`storageType` 先 `trim`，并把"`s3 `"这类两边都不沾的取值）报成"只认 s3|local"而不是一个堆栈。
+- **新增 `StorageWiringTest` 3 条**：跑真 `AnnotationConfigApplicationContext`（`register(S3Config.class, MediaObjects.class)`，`pb.storage.type` 同时塞进 `MapPropertySource` 与绑定后的 `PbProperties`——只给一边测的就不是生产那条路径）。local 那一支断言 `getBeanNamesForType(S3Client.class)` **为空**而不是"有个 bean 但值是 null"，`s3` 与 `S3` 各断建出一个。这类"只有容器才照得出来"的缺陷，从此有一条不用人肉起服务端的证明。
+
+### 服务端：把"配了但读不到"也变成一件要出声的事
+
+- **`DevCredentialsGuard` 加反向 WARN**（①）。必填项按存储类型分档之后，"忘了把 `PB_STORAGE_TYPE` 改成 `s3`"不再让启动失败，只会让整套部署静默落在本地目录上——所以 local 模式却配着 `PB_S3_ENDPOINT/ACCESS_KEY/SECRET_KEY` 时点名这几项"配了但一个字都不读"，并给出落盘目录与"要验桶就带 `PB_STORAGE_TYPE=s3` 重启"的下一步。**只报键名与目录，值不进日志**（同 §13 的脱敏口径）。`DevCredentialsGuardTest` 从 8 条扩到 10 条：⑨ 钉住这条 WARN（含"不许出现哨兵值本身"），⑩ 钉住真跑 s3 时这句不许响。
+- 踩到的坑记一笔：`log.warn("…{}…{}", …)` 与 `String.formatted()` 是两套占位符，写成 `"""…{}…""".formatted(a, b)` 会把 `{}` 原样打出来——是 ⑨ 那条断言把它抓出来的。
+
+### 部署：容器里的报错要说清"下一步敲什么"
+
+- **entrypoint 的每一条失败都自带落点**（②）：缺 `PB_DB_URL`/`PB_DB_PASSWORD` 时点名写进哪个文件（`deploy/.env`）、JDBC 该长成什么样、拓扑 B 那台的服务名变体，以及指回 `deploy/部署快速参考.md` 的哪一节；S3 三项缺失时补一句"不想外接存储就设 `PB_STORAGE_TYPE=local`"。这些文案原先只说"未设置"，读者得自己去翻变量清单。
+- **`PB_STORAGE_TYPE=local` 时启动阶段做一次写入探针**（③）：往 `${PB_STORAGE_LOCAL_PATH:-/app/data/media}` 写 `.entrypoint-write-probe` 再删掉，写不进就当场退出。判据是"目录存在但属 root"这一类**不会让 `/healthz` 报错**的配法——`HealthzController.storageConfigValid` 只校验配置项非空，靠它兜等于让每条带图消息静默停在 `failed`。探针那句 `if ! : > "$F" 2>/dev/null` 也修了：重定向按从左到右生效，得写成 `( : > "$F" ) 2>/dev/null` 才真把 `Permission denied` 咽下去。
+- **local 模式下目录归镜像里预建并 chown**：`useradd` 那步从只建 `/app/logs` 改成 `mkdir -p /app/logs /app/data/media`，`PB_STORAGE_LOCAL_PATH` 的默认值也从 `./data/media` 纠正为容器里真实的那个 `/app/data/media`（entrypoint 原样打印前者，等于给出一条挂不到的路径）。
+- **`deploy/docker-compose.yml` 的本地对象目录换成 named volume `server_media`**（③）：绑定挂载 `./data/media` 会把宿主目录属主带进容器，而 Docker 替缺目录建出来的那层属 root，容器里的 `pushbox(10001)` 写不动——同一条判据现在由上面那个探针在启动时判死。备份口径跟着改成 `docker volume inspect pushbox_server_media -f '{{.Mountpoint}}'`；`docker-compose-wsl.yml` **刻意保留绑定挂载**（`deploy-wsl.sh`/`.ps1` 按目录整体重置测试栈），注释里写明了这条差别。
+
+### 计数闸：两处"看着有闸、其实没人看"的盲区（②）
+
+- **C# 侧原来完全没有基线断言**：`ci.yml` 的 windows job 只跑 `dotnet test`，退出码只回答"有没有红"，用例被静默裁掉（删 `[Fact]`、改分类过滤、整类没被 discover）照样退 0。现在改判 trx（`--logger "trx;…"` + PowerShell 数 `UnitTestResult`，不解析控制台文本——那玩意的语言跟 runner 走），并加文档侧第二条计数闸，唯一真值取 `ci.yml` 里的 `$CS_BASELINE = 554`。**加它当天就抓到一处现值腐烂**：`发布准备报告` 的状态表还挂着 556/556，而其余六处同一天已改成实测的 554。
+- **Java 那条只认 `core a + server b` 这种能求和的形状**，`site/index.html` 首屏那行裸的 `303 / 554` 从来不在比对范围内。新闸判"关键词同一行里的三位数对"，Java 与 C# 两个基线之外的数一律 FAIL，带日期的行整行跳过（历史证据不参与现值判定，同 `docs/审计报告.md` 的排除理由）。**负测做过**：把 `site/index.html` 改成 `303 / 555` 当场 `FAIL: 文档里出现了基线之外的 C#/Java 用例数：555`；另加一条防空转断言，没有一处文档真写着基线值时判 FAIL 而不是"全都对"。
+
+### 文档与站点
+
+- `deploy/部署快速参考.md`：named volume 与写入探针两条口径、拓扑 C 那一行改口；`deploy/env/prod.env.example`、`deploy/backup/backup.sh` 跟着改卷名与备份路径；`site/install.html` 拓扑表补同一句。
+- `docs/软件设计方案.md` §11.2.1 加一段"用同一套跑法复验抓到的接线缺陷"（NullBean 的成因、为什么单测照不出来、判据落在 `StorageWiringTest`），§11.1.2 补"反方向也一样要出声"那句判据与 `DevCredentialsGuardTest` 的真实条数（8 → 10）。
+- 测试计数按实测归一：`core` 43、`server` 263，两档合计 **306**（本轮 `+3` 全是 `StorageWiringTest`），不带凭据时 **192 执行 + 114 跳过**。`README`、两份指南、本清单、`发布准备报告`、三张 site 页面与 `ci.yml` 的基线一起抬到 306；`CHANGELOG` 里第二十七轮那两句历史数字改成不带求和形状的写法（数字留着当证据，但不让它和现值撞成两个取值，否则这条闸永远红）。
+
+### 官网：大段说明砍掉 36%，长段落改成编号步骤卡
+
+- **8 个页面全部按"这是什么 → 怎么敲 → 敲完看到什么算对"重写**，纯文本 72 774 → 46 243 字（−36%）。站点是给使用者看的，所以仓库内部口径整类删掉：零构建说明、"内容取自哪些文档"、CI 与签名 Secrets、单测条数、探针的代价、构建踩过的坑、"这里为什么不写死"——**官网已不再携带测试计数**，因此 Java 与 C# 两条计数闸的扫描路径都摘掉 `site/`，Java 那条的文档数下限从 ≥6 改成 ≥4（摘掉后实测 5 个文档带计数，余量 1：一处改成叙述式仍绿，两处红），`发布检查清单` 的闸门描述跟着改口。
+- **排版**：`.steps` 编号步骤卡（CSS `counter` 出序号，每步一句说明 + 一条命令）替掉原来的长段落；`h1/h2/h3` 与正文宽度收到 74ch；`callout` 与 `p.sub` 补齐两级层次。全站实测 **>160 字的正文段落 0 个、>120 字的表格单元格 0 个**（剩下的长文本全是步骤卡里"标题 + 命令"两段拼出来的 `li`，正是这次要的形态）。
+- **代码样式**：`site/assets/site.js` 加了一个约 40 行的零依赖高亮器（bash/powershell/python 共用一套、sql、json 各一套），保持"双击 `site/index.html` 就能看、无构建"这个前提。**唯一的不变量是重拼后 `textContent` 必须逐字符等于原文**——复制按钮读的就是它；用 62 段代码跑同一套走位验证，0 段丢字。两个坑：标志位不能整表共用 `gi`（`\b[A-Z][A-Z0-9_]{2,}\b` 加了 `i` 会把 `mvn`、`deploy` 全染成变量色），Spring 那类长参数要连着取值一起吃掉（`--pb.s3.delete-grace=2s` 是一条参数，不是四段）。
+- **curl 生成器**（`site/api.html`）改完才发现问题：它用 `textContent` 重刷 `genFile`/`genOut`，等于把首屏那次高亮冲掉——现在 `render()` 之后补一次 `paint()`，实测输入标题后两段分别落 16/9 个 span 且文字完整。顺手把它那句兜底地址从 `127.0.0.1:8080` 改成 7404（表单默认值本来就是 7404，只有清空输入框才走得到兜底）。
+- `site/install.html` 不再打印 dev 配置自带的占位管理口令——**公开文档里出现一个能直接登录的口令，等于教人把它带进生产**；改成"口令就是 `PB_ADMIN_SECRET` 的值，本地用自带的那份，对外必须换"。
+- **Docker 部署这一节只写从 Docker Hub 拉镜像**：删掉 `docker compose up -d --build` 那行与"改了服务端代码就本地构建"的说法，`git clone` 那一步改口成"仓库里只要 compose 与 env 模板，机器上不用装 JDK 和 Maven"。自己改代码怎么构建仍然只在内部文档（`deploy/部署快速参考.md`）里讲——**站点是给部署的人看的，不是给改代码的人看的**。
+- **站点接上真实图标**（用的全是 `logo/web/` 里已有的导出稿，没有新生成任何图）：`favicon.ico` + `favicon-32x32.png` + `apple-touch-icon.png` + `icon-192.png` + `icon-512.png` 五本拷进 `site/assets/img/`，8 个页面的 `<head>` 各挂三条 `link`，侧栏与首页顶栏那个手写的字母 "P" 换成真 logo（`.mark` 从此是 30px 圆角图块），首页标题做成一份 logotype——图标以 `.92em` 跟在 `PushBox` 那行字左边、随 `clamp(52px, 9vw, 96px)` 一起缩放。**先按"hero 上方单独放一张 84px 图"做过一版，被判定"太突兀"后改成行内 logotype**：浮在正文上方的小图块没有归属，嵌进标题行才读得出它是标识（880px 视口实测图标 73×73、与 79.2px 字号同一行且不折行）。**这条改动同时把 memory 里挂着的"favicon 未接"结掉了**。浏览器实测五本全 200、`naturalWidth` 非零。
+- **公开渠道只留 GitHub 与 Gitee**：Gitea 那台是私有备份，不该出现在公开站点上。8 个页面的侧栏/页脚与 `README.md` 的仓库行全部删掉那个地址。**`AGENTS.md` 里那一条留着没动**——它是"推三个 remote"这条工作流的依据，删了就等于把备份地址也一起弄丢了；但它跟着仓库公开，要不要挪进 gitignored 的本地文件得先问过再改。
+- **首页"源码仓库"改成静态两张卡**（GitHub 主仓 / Gitee 国内镜像，各带一条 `git clone` 与一个 ↗ 链接）。原先这两张卡由 `site/repos.json` 在运行时 fetch 出来，而 `file://` 双击打开正是站点写明的用法——浏览器不允许 fetch 同目录文件，于是首页那一节在最常用的打开方式下只剩一句报错提示。现在地址、命令、角色都写在 HTML 里，`site/repos.json` 与 `site/assets/site.js` 里那段卡片渲染代码一并删除。**卡片文案是按远端实测写的，不是照着旧文案搬**：`git ls-remote` 与 `api.github.com` 都查过——GitHub 有 `main`+`publish` 两条分支、标签与 Release 还是空的，Gitee 目前只有 `publish`。所以旧那句"Release 与安装包下载都在这里"（GitHub）与"按版本手动同步的镜像"（Gitee）都不能原样留着：前者改写成"安装包与镜像标签由 CI 在打 `v*` 标签时产出"这件由 `.github/workflows/build-apk.yml`、`build-msi.yml`、`docker-publish.yml` 三个触发器证实的事，后者改成如实的"同步是手动的，所以它可能落后主仓；提 Issue 请回 GitHub"，都不做带时间口径的断言。
+
+### 官网发布链：`site-deploy.yml` 把 site/ 发到只装站点的 gh-pages 分支
+
+- **形态**：`site/` 没有构建步骤，所以"发布"只是把这一棵目录树搬到一条只装它的分支根上——用 `git commit-tree` 直接以 `site/` 的树做根树生成提交，再推 `gh-pages`。分支根上因此只有 `.nojekyll` + 8 本 HTML + `assets/`，没有源码、没有 README、没有构建产物；第一条提交是孤儿，之后每条挂前一条（不一直造孤儿是因为孤儿会让上一次发布变成不可达对象，GC 一收走就连"哪一次换了哪棵树"的账都没处查）。**只依赖 `actions/checkout`，没引第三方 action**：这条链要往仓库写数据，第三方 action 是白多出来的供应链入口，而且为一份静态 HTML 在 runner 上装 Node 也没必要。
+- **"有内容更新时才发布"落成两层**：① `push` 触发带 `paths: ['site/**', 本文件]`，改代码与内部文档不会惊动官网；② 比 `site/` 的树哈希与 `gh-pages` 现有根树，相同就退出。**第 ② 层不能省**：`workflow_dispatch` 完全不吃 `paths:` 过滤，只有第 ① 层时手动每点一次就多一个空 commit 与一次 Pages 构建。并发用 `concurrency` 排队而不是取消（两条部署同时推 `gh-pages` 会互相覆盖），推时用 `--force-with-lease=<分支>:<这次 fetch 到的值>`，有人在窗口里手动动过那条分支就推不动、而不是被悄悄盖掉。
+- **刻意不做的事**：不开 GitHub Pages（改仓库设置要人点头；没开时只推分支、站点地址仍打不开，工作流最后一步在 404 分支里把开通那条 `POST` 原样打出来）、不挂 `v*` 标签（官网内容与版本号无关）、不删历史。非 `main` 分支手动触发且真要推上去时直接拒——Pages 只有一个地址、没有预览地址可回退，确认要发得显式勾 `force_branch`；`dry_run` 不吃这条限制，因为它只算树、比对、生成提交，一个字节都不推。
+- **`site/.nojekyll` 是这条链的前提之一**：Pages 以分支为源时，根目录没有它就会拿 Jekyll 过一遍这份静态站；站点里全是原样该发出去的 HTML/CSS/JS/PNG，不该有第二套构建参与。发布前还有一步"引用必须全是相对路径"的检查——项目站地址带仓库名（`https://<owner>.github.io/push-box/`），`href="/x"` 这种根绝对路径在 `file://` 与本机静态服务器上都是好的，一上 Pages 就指到域名根，本机看不见这类坏链。
+- **验证**：拿一条本地裸仓库当 GitHub 的替身，把四步 plumbing 原样跑过——推上去的根树与 `site/` 树逐字节相同、第一条提交无父、第二次同内容运行判"跳过"、`site/` 多一个文件判"要发"、lease 期望值错则推被挡下、期望值对则历史线性（第二条父=第一条）。`scripts/release-verify.sh` 新增一条 `site-deploy.yml 护栏齐全`（paths 在 / 内容比较在 / 不挂 tag / 只用官方 action / 检查 `.nojekyll`），五种会让它红的改法逐条做过负测；**第一版负测里"补上 tags 触发"那条 sed 根本没匹配上，闸门报绿其实是测了个空气**，加了"变异必须真生效"的自检才露出来。实跑 `bash scripts/release-verify.sh`：**53 通过 / 0 失败**（比上一轮多的那一条就是它）。**这条链至今没在 runner 上跑过**：它挂在 `push: branches: [main]` 上，要等这份 `site/` 改版真落到 `main` 才第一次运行，而推 `main` 连带 `docker-publish.yml` 真推 Docker Hub（不可逆），Pages 本身也还没开。
+
+### 验证
+
+- `mvn -B -o -pl core,server test`（2026-10-22）：**306 条，0 失败 0 错误，114 条按 `PB_S3_ACCESS_KEY` 门控跳过**（不带凭据即 192 执行）。本轮新增/改动的 `StorageWiringTest` 3/3、`DevCredentialsGuardTest` 10/10、`MediaObjectsConfigTest` 4/4。
+- **端到端探针在 local 存储模式下 23/23 全绿**：`bash deploy/run-dev.sh --server.port=8081` + `PB_BASE=http://127.0.0.1:8081 node deploy/probe/p0-e2e.mjs`，启动行是 `对象存储后端=本地文件系统 path=./data/media encrypt=none`、`/healthz` 回 `db/storage up`。这是这条路径第一次跑通整条 P0 链——同一份 jar 在修复前起不来（就是上面那条缺陷）。用完只杀自己叫起的 PID。
+- entrypoint 渲染成脚本后跑了 5 个场景（缺库变量、local 齐全、local 目录不可写、local 却配着 S3 凭据、sse-c 主钥长度不对），文案与退出码都按预期；`docker compose config` 在 WSL 里把主文件与 wsl 两本都渲染过，named volume 解析成 `pushbox_server_media`。
+- `dotnet test PushBox.Crypto.Tests -c Release`：**554/554**，trx 解析出的 `UnitTestResult` 计数同一值（新闸的判据就是它）。
+- `bash scripts/release-verify.sh`：**52 通过 / 0 失败**，两条 WARN（本机没有 docker CLI 判不了镜像体积、工作区还有未提交文件）。新增两条 PASS：Java 计数与 `ci.yml` 基线一致（306，9 处 / 7 个文档——第二十七轮那两句历史数字改成不带求和形状的写法之后，CHANGELOG 自己就不在这份名单里了，这正是那条约定预期的效果）、C# 计数一致（现值 306 554，8 个文档）。
+- **环境状态记一笔**：本轮复验时本机 `7404` 上没有监听（那台手动起的服务端不在跑），探针全程打在自起的 8081 上。
+
+---
+
 ## 未发布（2026-10-22）—— 频道密钥本机留存 + 服务端启动与单镜像部署（第二十七轮）
 
 > 技术决策见 [软件设计方案](docs/软件设计方案.md) D73 / D74；D17 随之改为"两端都不做筛选"。
@@ -49,13 +113,13 @@
 - **`run-dev.sh` 的文件头**还写着"只连远端 MySQL/RustFS"（2026-10-13 库就搬到本机了，昨天存储也改成本地文件），改成按现状描述。
 
 - **§11.2 的 `Caddyfile` 一节整段重写**：以前的写法是"Caddy 上自签 TLS + 显式设 `read_timeout 300s`、`idle_timeout 300s`"，而真实的 `deploy/Caddyfile` 只监听 `:80`、没有 `tls` 那一行，那两个子指令在 `caddy:2`（v2.11.7）的 `reverse_proxy` 与 `transport http` 两处都不合法（v2.16 才提升到顶层）——照旧文档抄的结果是配置加载失败、容器重启循环。同一段里 Prometheus/Caddy 的上游端口从 8080 改成实际的 7404，"上 HTTPS 的配套动作"补上那条容易踩空的实情：`network_security_config.xml` 只信任 `src="system"`，**用户级安装的根 CA 它不认**，`res/xml/network_security_config.xml` 的注释同步改掉"生产时整份替换"这句与 §11.1 明文允许项自相矛盾的话。
-- **测试条数按现跑实测**：`core` 43 + `server` 258 = **301**（本轮 `+9`：`SpaWebConfigTest` 7 条、`DevCredentialsGuardTest` 2 条），不带凭据时 **187 执行 + 114 跳过**。`开发指南` / `测试指南` / `README` 三处原来写 292/249 的同一行、以及 `测试指南` 报告模板里的勾选项一起改。
+- **测试条数按现跑实测**：`core` 43、`server` 258 两档合计 **301**（本轮 `+9`：`SpaWebConfigTest` 7 条、`DevCredentialsGuardTest` 2 条），不带凭据时 **187 执行 + 114 跳过**。`开发指南` / `测试指南` / `README` 三处原来写 292/249 的同一行、以及 `测试指南` 报告模板里的勾选项一起改。
 - **本机起步那一步，`README` 与两张 site 页面都指错了模板**：写的是 `cp deploy/env/prod.env.example deploy/env/local.env`。那一份的口径是容器（键集、必填项、默认值都按 compose 写），拿它当本机模板填出来的是一个"名字对了、内容不对"的 `local.env`；本机模板一直是 `deploy/env/local.env.example`。同一句的注释也从"填 `PB_DB_PASSWORD` / `PB_S3_*`"改成"起步只必填 `PB_DB_PASSWORD`"，前置条件里"S3 兼容桶（本项目用 RustFS）"整项删掉——dev 默认 `local`，桶是"要验桶形态才装"的那一个。
 - **"管理台能不能建频道/重置密钥"四份文档四种说法，现读代码归成一份口径**：`Channels.vue` 全文只有 `刷新` 与 `删除`（归档）两个动作，`ChannelDetail.vue` 只有一个 `返回`、整页只读——也就是**建频道与 `rotate-secret` 确实只有接口、界面上没有按钮**（`site/admin-api.html` 那份端点总表标的"控制台：否"一直是对的）。对不上的三处：`README` 的已知限制把这节标题写成"Web 管理台支持频道创建与密钥重置"（读起来像界面能点），`发布检查清单` 有一条**怎么演**写成"管理台建频道 → … → 管理台发一条测试消息"（两个动作都没有按钮，照着演会卡在第一步），§11.1 的第三方自测引导写成"在 App 的新建频道或 **Web 管理台创建**时一次性回显"。三处统一改成：日常走 Android/PC 的「频道」页，脚本才用那两个端点；即时消息走 `POST /message`，管理台能触发推送的只有定时任务。
 
 ### 验证
 
-- `mvn -B -o -pl core,server test`（2026-10-22 复跑两次，改 `application-dev.yml` 注释前后各一次）：**301 条 = core 43 + server 258，0 失败 0 错误，114 条按 `PB_S3_ACCESS_KEY` 门控跳过**（不带凭据即 187 执行 + 114 跳过，与既往口径一致）。其中本轮新增/改动的 `DevCredentialsGuardTest` 8/8、`SpaWebConfigTest` 7/7。跑法必须让 `core` 与 `server` 在同一个 reactor（`-pl core,server` 或 `-pl server -am`），否则用的是本地仓库里的旧 core jar。
+- `mvn -B -o -pl core,server test`（2026-10-22 复跑两次，改 `application-dev.yml` 注释前后各一次）：**301 条（core 43、server 258 两档），0 失败 0 错误，114 条按 `PB_S3_ACCESS_KEY` 门控跳过**（不带凭据即 187 执行 + 114 跳过，与既往口径一致）。其中本轮新增/改动的 `DevCredentialsGuardTest` 8/8、`SpaWebConfigTest` 7/7。跑法必须让 `core` 与 `server` 在同一个 reactor（`-pl core,server` 或 `-pl server -am`），否则用的是本地仓库里的旧 core jar。
 - 现查本机在跑的那个服务端：`0.0.0.0:7404` LISTENING，`/healthz` 回 `{"ok":true,"db":"up","storage":"up"}`，`/` 回 404 JSON（API-only 构建，jar 里没有 `static/index.html`，正是 `SpaWebConfigTest` 第 ⑦ 条钉住的那个分支）。这一条就是"默认端口按 7404 写、不要动 dev 的 `server.port`"的直接依据。
 - `./gradlew :app:assembleRelease` BUILD SUCCESSFUL，release APK 已装到真机（`4TF6HQ8TCE6XHURO`）。
 - `dotnet test windows/PushBox.sln -c Release`（2026-10-22 复跑）：**554 通过 / 0 失败 / 0 跳过**，退出码 0。比上一版少 2 条是撤掉「全部/未读/已读」筛选时连带删掉的 `MainModelTest` 两条筛选用例，不是测试被裁剪。
