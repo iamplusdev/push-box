@@ -192,7 +192,7 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
 **解决**：让构建阶段直接用宿主机网络栈：
 
 ```bash
-docker buildx build --network=host -f deploy/Dockerfile -t pushbox/server:1.1.3 --load .
+docker buildx build --network=host -f deploy/Dockerfile -t pushbox/server:1.1.4 --load .
 ```
 
 `--network=host` 只影响构建，不进镜像、不影响运行时网络；compose 默认的 bridge 启动方式不变。

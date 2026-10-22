@@ -174,7 +174,10 @@ public class PbProperties {
     private Duration deleteGrace = Duration.ofHours(168);
     /** §4.5 桶内形态：none（明文）| sse-c（每对象客户钥，钥本身用 master-key 封装后落库） */
     private String objectEncrypt = "none";
+    /** 随机主钥：base64 的 32 字节。与 {@link #masterPassphrase} 二选一。 */
     private String masterKey;
+    /** 口令派生 KEK：与 {@link #masterKey} 二选一；盐/KDF 参数/KCV 存 app_state。 */
+    private String masterPassphrase;
 
     public String getEndpoint() { return endpoint; }
     public void setEndpoint(String v) { this.endpoint = v; }
@@ -194,6 +197,8 @@ public class PbProperties {
     public void setObjectEncrypt(String v) { this.objectEncrypt = v; }
     public String getMasterKey() { return masterKey; }
     public void setMasterKey(String v) { this.masterKey = v; }
+    public String getMasterPassphrase() { return masterPassphrase; }
+    public void setMasterPassphrase(String v) { this.masterPassphrase = v; }
   }
 
   public static class Media {

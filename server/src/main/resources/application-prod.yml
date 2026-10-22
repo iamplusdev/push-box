@@ -51,9 +51,12 @@ pb:
     access-key: ${PB_S3_ACCESS_KEY:}
     secret-key: ${PB_S3_SECRET_KEY:}
     path-style: ${PB_S3_PATH_STYLE:true}
-    # none|sse-c。sse-c 时 PB_S3_MASTER_KEY 必须是 base64 的 32 字节；缺失或长度不对
-    # 会在 MediaObjects 构造期抛异常让进程起不来（绝不静默写明文）。
-    # 主钥一旦用过就不可轮换：换了旧封装钥再也解不开。
+    # none|sse-c。sse-c 的 KEK 二选一：
+    #   · PB_S3_MASTER_KEY        —— base64 的 32 字节（openssl rand -base64 32）；
+    #   · PB_S3_MASTER_PASSPHRASE —— 至少 12 个字符的口令，服务端用 Argon2id 派生。
+    # 口令本身不落库：app_state.media_kek_v1 只存随机盐、KDF 参数与 KCV，重启/重装后同一口令
+    # 派生出同一把 KEK。两个都配、或 sse-c 下一个都没有，都会拒绝启动（绝不静默写明文）。
+    # KEK 一旦用过就不可轮换：换了旧封装钥再也解不开。
     # 这一行的默认值 none 在 prod 不再是"用不管的选项"，但判据分两档（D76）：
     #   · type=s3   —— 明文桶会让图片/头像被同一把 AK/SK 的任何读者读走，ProdPlaintextMediaGuard 直接拒绝启动。
     #   · type=local —— 对象在部署者自己的盘上、逐文件 600 权限，守卫只出声；逼人为了过检查去配一个桶，
@@ -62,6 +65,7 @@ pb:
     # PB_S3_OBJECT_ENCRYPT 带默认值、compose 的插值闸卡不住它，所以判据落在守卫与 entrypoint 两处，必须同进同退。
     object-encrypt: ${PB_S3_OBJECT_ENCRYPT:none}
     master-key: ${PB_S3_MASTER_KEY:}
+    master-passphrase: ${PB_S3_MASTER_PASSPHRASE:}
   admin:
     # Web 管理台登录口令。留空即禁用管理台（登录返回 403 "管理台未启用"）。
     # 管理台经 Caddy 公网可达，务必用强随机值（如 openssl rand -base64 32），别复用 dev 的弱口令。

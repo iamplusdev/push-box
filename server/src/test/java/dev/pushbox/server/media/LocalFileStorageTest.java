@@ -27,7 +27,7 @@ class LocalFileStorageTest {
   @BeforeEach
   void setUp() {
     // 默认使用明文模式
-    storage = new LocalFileStorage(tempDir.toString(), MediaObjects.ENC_NONE, null);
+    storage = new LocalFileStorage(tempDir.toString(), MediaObjects.ENC_NONE, (byte[]) null);
   }
 
   @AfterEach

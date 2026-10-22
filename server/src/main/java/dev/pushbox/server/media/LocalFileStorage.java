@@ -29,11 +29,23 @@ class LocalFileStorage {
   private final Path root;
   private final String encMode;
   private final byte[] masterKey;
+  private final MediaKeyService keyService;
 
+  /** 单测路径：直接给一把 KEK，不碰数据库。 */
   LocalFileStorage(String rootPath, String encMode, byte[] masterKey) {
+    this(rootPath, encMode, masterKey, null);
+  }
+
+  LocalFileStorage(String rootPath, String encMode, MediaKeyService keyService) {
+    this(rootPath, encMode, null, keyService);
+  }
+
+  private LocalFileStorage(String rootPath, String encMode, byte[] masterKey,
+      MediaKeyService keyService) {
     this.root = Paths.get(rootPath).toAbsolutePath().normalize();
     this.encMode = encMode;
     this.masterKey = masterKey;
+    this.keyService = keyService;
 
     try {
       Files.createDirectories(this.root);
@@ -75,7 +87,7 @@ class LocalFileStorage {
 
       return new MediaObjects.PutResult(
           customerKey == null ? MediaObjects.ENC_NONE : MediaObjects.ENC_SSE_C,
-          customerKey == null ? null : KeyWrap.wrap(masterKey, customerKey));
+          customerKey == null ? null : KeyWrap.wrap(kek(), customerKey));
     } catch (IOException e) {
       throw new RuntimeException("写入本地文件失败: " + filePath, e);
     }
@@ -169,7 +181,11 @@ class LocalFileStorage {
 
   /** 当前配置是否会用到客户自带钥。 */
   boolean usesCustomerKey() {
-    return masterKey != null;
+    return keyService != null ? keyService.usesCustomerKey() : masterKey != null;
+  }
+
+  private byte[] kek() {
+    return keyService != null ? keyService.kek() : masterKey;
   }
 
   /** 新对象用的随机客户钥；非 sse-c 返回 null。 */
@@ -182,7 +198,7 @@ class LocalFileStorage {
     if (!usesCustomerKey()) {
       return null;
     }
-    byte[] reused = sseKeyWrapped == null ? null : KeyWrap.unwrap(masterKey, sseKeyWrapped);
+    byte[] reused = sseKeyWrapped == null ? null : KeyWrap.unwrap(kek(), sseKeyWrapped);
     return reused == null ? KeyWrap.randomDataKey() : reused;
   }
 
@@ -199,11 +215,12 @@ class LocalFileStorage {
     }
     if (!usesCustomerKey()) {
       throw new IllegalStateException("库里有封装钥但 pb.storage.type=local 且 pb.s3.object-encrypt="
-          + encMode + "：对象是 sse-c 写的，读它必须配回同一个主钥");
+          + encMode + "：对象是 sse-c 写的，读它必须配回同一个主钥或口令");
     }
-    byte[] dataKey = KeyWrap.unwrap(masterKey, sseKeyWrapped);
+    byte[] dataKey = KeyWrap.unwrap(kek(), sseKeyWrapped);
     if (dataKey == null) {
-      throw new IllegalStateException("SSE-C 客户钥解封失败：pb.s3.master-key 与写入时不是同一把？");
+      throw new IllegalStateException(
+          "SSE-C 客户钥解封失败：PB_S3_MASTER_KEY / PB_S3_MASTER_PASSPHRASE 与写入时不是同一个？");
     }
     return dataKey;
   }

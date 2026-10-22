@@ -10,7 +10,7 @@
 ## 0. 先确认三件事
 
 - **镜像标签没有 `v`**。Hub 上打的是 `X.Y.Z` / `X.Y` / `latest`（发布工作流从 `pom.xml` 现读版本号）。
-  写 `push-box:v1.1.3` 或 `push-box:server-v1.1.3` 都会报 manifest unknown。
+  写 `push-box:v1.1.4` 或 `push-box:server-v1.1.4` 都会报 manifest unknown。
 - **PushBox 不自带数据库**，且必须是 **MySQL 8.0 或 8.4**。第一版迁移用了 `utf8mb4_0900_ai_ci`
   与 `FULLTEXT ... WITH PARSER ngram`（`server/src/main/resources/db/migration/V1__init.sql`），
   这两样 5.7 都没有。8.0/8.4 两个实例上都实测过迁移可过。
@@ -69,15 +69,20 @@ FLUSH PRIVILEGES;
       PB_S3_SECRET_KEY: 换成你自己的 SK
       PB_S3_BUCKET: pushbox                    # 桶名不是 pushbox 就改这里；区域不是 us-east-1 再加 PB_S3_REGION
       PB_S3_OBJECT_ENCRYPT: sse-c              # 桶上落明文是拒启的，见下面那句
-      PB_S3_MASTER_KEY: 一段 base64 的 32 字节（openssl rand -base64 32）
+      PB_S3_MASTER_PASSPHRASE: 自己定一个至少 12 个字符的口令   # 或改用 PB_S3_MASTER_KEY，二选一
 ```
 
-三条要知道的：
+四条要知道的：
 
 - **`sse-c` 那两行不是可选的装饰**。`PB_S3_OBJECT_ENCRYPT` 在这一本文件里默认 `none`，而桶上明文意味着
   任何拿到同一组 AK/SK 的读者都能直接把图片与头像读走，所以 `s3 + none` 直接拒绝启动。想先把服务跑起来
-  就显式加一行 `PB_ALLOW_PLAINTEXT_MEDIA: "1"` 表态；但**主钥一旦有对象落库就不可轮换**——换了它，旧图片
-  再也解不开，所以 `PB_S3_MASTER_KEY` 生成后当场备份到 Git 之外。
+  就显式加一行 `PB_ALLOW_PLAINTEXT_MEDIA: "1"` 表态。
+- **主钥与口令二选一**：`PB_S3_MASTER_PASSPHRASE` 是给人记的口令（至少 12 个字符），服务端用 Argon2id
+  从它派生出 32 字节 KEK；也可以继续用 `PB_S3_MASTER_KEY`（`openssl rand -base64 32`）直接给 KEK。
+  两个都配会拒绝启动。**KEK 一旦有对象落库就不可轮换**——换了它旧图片再也解不开；口令本身不落库，
+  首次写入图片时会在 `app_state.media_kek_v1` 里存一份随机盐、KDF 参数和校验值，所以重装/重建容器后
+  只要库还在、口令还是原来那个，旧图片照常能读；口令忘了也一样救不回来。
+  `PB_S3_MASTER_KEY` 若是生成出来的，同样当场备份到 Git 之外。
 - **`server_media` 那个卷不用删**。落桶之后它只是空着；留着它，以后想回 `local` 时路径还是通的。日志卷
   `server_logs` 任何时候都要留。
 - **`PB_S3_PATH_STYLE` 默认是 `true`**（取值在 `application-prod.yml`，不在镜像 ENV 里），MinIO / RustFS 是对的；接阿里云 OSS 或 AWS 时按服务商文档
@@ -86,7 +91,8 @@ FLUSH PRIVILEGES;
 ### 路径 C：不建 Compose 项目，直接在「创建容器」表单里填
 
 飞牛/群晖的「创建容器」会把镜像拉下来、把镜像里烘焙的环境变量逐行显示成输入框。
-**只要填两个，其余显示出来的都可以不动**；但「存储位置」必须有两行，否则删了容器图片就没了。
+**只改 `PB_DB_HOST` 与 `PB_DB_PASSWORD` 两行，其余显示出来的都可以不动**；但「存储位置」必须有两行，否则删了容器图片就没了。
+凭据行显示的是占位值 `__SET_ME__`（不是真口令），entrypoint 会把没替换的占位值按"没填"拒绝启动。
 
 镜像声明了两个持久化目录（`VOLUME`），所以较新的镜像会把**容器内路径**直接带出来，**宿主文件夹那一列仍然是空的**——
 Docker 不会替人猜 NAS 上的路径，得你点选或新建。表单里一行都没有（镜像是旧的）就手动点「添加」补下面两行：
@@ -107,19 +113,21 @@ sudo chown -R 10001:10001 /vol1/1000/pushbox
 不 chown 也能把容器建起来，但启动日志会当场报「本地存储目录 /app/data/media 不可写」并退出——
 这是刻意的，不然症状会推迟到第一条带图片的消息才出现。
 
-**环境变量：只填两个**
+**环境变量：只改两个**
 
 | 填什么 | 值 |
 |---|---|
 | `PB_DB_HOST` | 库的局域网 IP（例如 `192.0.2.20`）；库和容器在同一台机器上也**别填 `127.0.0.1`** |
-| `PB_DB_PASSWORD` | 第 1 步建库时那个 `pushbox` 用户的口令 |
+| `PB_DB_PASSWORD` | 表单里显示的是占位值 `__SET_ME__`，改成第 1 步建库时那个 `pushbox` 用户的口令 |
 
-表单里还会显示端口、目录、库名、库用户名这些——**都是默认值，不用改**。管理台默认关闭，想开再加
-`PB_ADMIN_SECRET` 与 `PB_ADMIN_JWT_SECRET` 两行（各用 `openssl rand -base64 32` 生成，不能同值）。
+表单里还会显示端口、目录、库名、库用户名、`PB_S3_*` 这些——**都是默认值或占位值，local 模式不用改**。
+没替换的 `__SET_ME__` 会被 entrypoint 当成"没填"直接拒绝：不会拿假口令去连库，也不会拿假 AK/SK 去连桶。
+管理台默认关闭，想开再加 `PB_ADMIN_SECRET` 与 `PB_ADMIN_JWT_SECRET` 两行（各用 `openssl rand -base64 32` 生成，不能同值）。
 
-**要外接桶**：表单默认看不到任何 `PB_S3_*`，这是刻意的——镜像只烘焙非凭据的 local 默认值，AK/SK 这类凭据
-绝不预置；只列半套（比如只有桶名）又会让人误以为桶已经配好。要用桶就在上面两个之外，把这七行一次性加齐
-（少一行容器都会在启动时点名）：
+**要外接桶**：表单里已经显示 `PB_S3_ENDPOINT`、`PB_S3_ACCESS_KEY`、`PB_S3_SECRET_KEY`、
+`PB_S3_MASTER_PASSPHRASE` 四行占位值，把 `PB_STORAGE_TYPE` 改成 `s3`，再把这四行的 `__SET_ME__`
+换成真实值；桶名默认 `pushbox`，不是它才改 `PB_S3_BUCKET`；`PB_S3_OBJECT_ENCRYPT` 默认 `none`，
+桶上不允许明文，改成 `sse-c`。最终这七项应该是：
 
 ```
 PB_STORAGE_TYPE=s3
@@ -128,11 +136,14 @@ PB_S3_ACCESS_KEY=你的 AK
 PB_S3_SECRET_KEY=你的 SK
 PB_S3_BUCKET=pushbox
 PB_S3_OBJECT_ENCRYPT=sse-c
-PB_S3_MASTER_KEY=一段 base64 的 32 字节（openssl rand -base64 32）
+PB_S3_MASTER_PASSPHRASE=自己定一个至少 12 个字符的口令
+# 或者不用口令：把 PB_S3_MASTER_PASSPHRASE 清空，另加 PB_S3_MASTER_KEY=一段 base64 的 32 字节（openssl rand -base64 32）；两者只能留一个
 ```
 
-这一节的判据与上面 Compose 那条完全相同；桶上不允许明文，所以 `sse-c` 与主钥那两行不是装饰，
-理由见上一小节那三条。
+镜像是旧的、表单里没有这些占位行的话，才需要手动点「添加」按上面这份补齐。
+
+这一节的判据与上面 Compose 那条完全相同；桶上不允许明文，所以 `sse-c` 与口令/主钥那两行不是装饰，
+理由见上一小节那四条。
 
 ## 3. 路径 B：NAS 上还没有库，顺带起一个 MySQL
 
@@ -196,7 +207,9 @@ docker network inspect <项目名>_default -f '{{range .IPAM.Config}}{{.Subnet}}
 | `1045 Access denied`（在 Java 的日志里） | 口令不对，或用户主机写法不是 `'pushbox'@'%'`。**库名对不上也报这一句**（`Access denied for user 'pushbox'@'%' to database '<库名>'`），MySQL 8 在这种配法下不会给你 `Unknown database`；那句 `using password: ***` 里的 `***` 是我们自己的脱敏把 YES/NO 遮了，不是口令 |
 | `本地存储目录 /app/data/media 不可写（容器内进程是 uid 10001）` | 你挂的是 NAS 共享文件夹（绑定挂载带来 root 属主）。改用文件里那两个 named volume，或 `sudo chown -R 10001:10001 <那个目录>` |
 | `PB_STORAGE_TYPE=local 但环境里还配着 PB_S3_*` | type 忘了改回 `s3`，或确实只想本地存储——后者把那几项删掉，别留一个"看着像配了桶"的现场 |
-| `生产环境不允许对象存储不加密` | 只在 `PB_STORAGE_TYPE=s3` 时会出现。设 `PB_S3_OBJECT_ENCRYPT=sse-c` + 主钥，或明确接受明文就 `PB_ALLOW_PLAINTEXT_MEDIA=1` |
+| `生产环境不允许对象存储不加密` | 只在 `PB_STORAGE_TYPE=s3` 时会出现。设 `PB_S3_OBJECT_ENCRYPT=sse-c` + 口令或主钥，或明确接受明文就 `PB_ALLOW_PLAINTEXT_MEDIA=1` |
+| `PB_S3_MASTER_PASSPHRASE 与 PB_S3_MASTER_KEY 只能二选一` | 两行都填了，删掉其中一行。已有对象时还要看 `app_state.media_kek_v1` 在不在：在就继续用口令，不在就继续用主钥 |
+| `PB_S3_MASTER_PASSPHRASE 与首次启用时不是同一个口令` | 口令打错了，或换过口令。KEK 不可轮换；库还没写过图片的话，删掉 `app_state` 里 `media_kek_v1` 那一行后可以用新口令重新初始化 |
 | `启用 Web 管理台必须另设 PB_ADMIN_JWT_SECRET` / `不能与 PB_ADMIN_SECRET 同值` / `过短` | 管理台的两把钥必须都有、≥32 字节、且互不相同。各生成一把：`openssl rand -base64 32` |
 | 服务起来了，图片消息一直转圈/`failed` | 本地存储下 `/healthz` 会真的往目录里写一个临时文件，所以 `storage=down` 就是不可写；`s3` 那一支才只判配置非空。先看容器日志有没有 entrypoint 那句"目录不可写"，再看 `docker volume ls` 里 `<项目名>_server_media` 在不在 |
 

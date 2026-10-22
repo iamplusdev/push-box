@@ -1,4 +1,10 @@
 # syntax=docker/dockerfile:1
+# check=skip=SecretsUsedInArgOrEnv
+#
+# 下面 ENV 里带 __SET_ME__ 的几行是**占位值**，不是秘密：飞牛/群晖的「创建容器」只把镜像声明的
+# ENV 渲染成输入行，没有这几行，用户就得自己知道键名再一行行点「添加」。代价是 SecretsUsedInArgOrEnv
+# 这条构建检查会按键名报警——它分不出真凭据和占位值，所以在这里显式跳过；entrypoint 会把没替换的
+# 占位值按"没填"拒绝启动，假数据不可能被当成真配置用出去。
 # §11.2 服务端多阶段构建。构建上下文必须是仓库根（要 core/ + server/ + web-admin/ + 根 pom.xml），
 # compose 里写成 context: .. / dockerfile: deploy/Dockerfile。
 # D27 后 Java 侧走 Maven，所以基础镜像用 maven 而不是设计早期草稿里的 gradle。
@@ -59,10 +65,17 @@ if [ -z "\${PB_DB_URL:-}" ]; then
   echo "ℹ️  PB_DB_URL 未设置，已按 PB_DB_HOST=\$DB_HOST PB_DB_PORT=\$DB_PORT PB_DB_NAME=\$DB_NAME 拼出连接串"
 fi
 
-if [ -z "\${PB_DB_PASSWORD:-}" ]; then
-  echo "❌ 错误: PB_DB_PASSWORD 未设置（库口令——本镜像剩下的唯一必填项）"
-  echo "   飞牛/群晖的容器表单里加一行 PB_DB_PASSWORD=<你的库口令>；用 compose 就写在 environment 段里。"
-  echo "   这一项同时是 MySQL 里那个用户的口令，所以取值以「能连上那台库」为准，不能随便填一个字符串。"
+DB_PASSWORD="\${PB_DB_PASSWORD:-}"
+if [ -z "\$DB_PASSWORD" ] || [ "\$DB_PASSWORD" = "__SET_ME__" ]; then
+  if [ "\$DB_PASSWORD" = "__SET_ME__" ]; then
+    echo "❌ 错误: PB_DB_PASSWORD 还是镜像里的占位值 __SET_ME__"
+    echo "   表单里把这一行改成第 1 步建库时那个 pushbox 用户的口令；"
+    echo "   用 docker run 就传 -e PB_DB_PASSWORD=<口令>，用 compose 就写进 environment 段。"
+  else
+    echo "❌ 错误: PB_DB_PASSWORD 未设置（库口令——本镜像剩下的唯一必填项）"
+    echo "   飞牛/群晖的容器表单里改掉 PB_DB_PASSWORD 那一行；用 compose 就写在 environment 段里。"
+    echo "   这一项同时是 MySQL 里那个用户的口令，所以取值以「能连上那台库」为准，不能随便填一个字符串。"
+  fi
   exit 1
 fi
 
@@ -158,8 +171,12 @@ if [ "\$STORAGE_TYPE" = "local" ]; then
   rm -f "\$MEDIA_DIR/.entrypoint-write-probe"
 else
   for var in PB_S3_ENDPOINT PB_S3_ACCESS_KEY PB_S3_SECRET_KEY; do
-    if [ -z "\${!var:-}" ]; then
+    VALUE="\${!var:-}"
+    if [ -z "\$VALUE" ] || [ "\$VALUE" = "__SET_ME__" ]; then
       echo "❌ 错误: \$var 未设置（PB_STORAGE_TYPE=\$STORAGE_TYPE 时它是必填）"
+      if [ "\$VALUE" = "__SET_ME__" ]; then
+        echo "   它还是镜像里的占位值 __SET_ME__，换成桶的真实取值；图形界面里直接改这一行，不用再点「添加」。"
+      fi
       echo "   不想外接存储就设 PB_STORAGE_TYPE=local"
       exit 1
     fi
@@ -175,22 +192,45 @@ fi
 OBJECT_ENCRYPT=\$(printf '%s' "\${PB_S3_OBJECT_ENCRYPT:-none}" | tr -d '[:space:]' | tr 'A-Z' 'a-z')
 if [ "\$OBJECT_ENCRYPT" = "sse-c" ]; then
   MASTER_KEY="\${PB_S3_MASTER_KEY:-}"
-  if [ -z "\$MASTER_KEY" ]; then
-    echo "❌ 错误: SSE-C 模式下 PB_S3_MASTER_KEY 不能为空"
-    echo "   生成命令: openssl rand -base64 32"
+  MASTER_PASSPHRASE="\${PB_S3_MASTER_PASSPHRASE:-}"
+  if [ -n "\$MASTER_KEY" ] && [ -n "\$MASTER_PASSPHRASE" ]; then
+    echo "❌ 错误: PB_S3_MASTER_KEY 与 PB_S3_MASTER_PASSPHRASE 只能二选一"
+    echo "   两种来源派生出的 KEK 不同，同时配置无法判断该用哪一把；删掉其中一个再启动"
     exit 1
   fi
-
-  # base64 编码的 32 字节 ≈ 44 字符（含 padding）
-  KEY_LEN=\${#MASTER_KEY}
-  if [ \$KEY_LEN -lt 40 ] || [ \$KEY_LEN -gt 48 ]; then
-    echo "❌ 错误: PB_S3_MASTER_KEY 长度不正确 (\$KEY_LEN 字符)"
-    echo "   期望: base64 编码的 32 字节（约 44 字符）"
-    echo "   不把值本身打出来——这一行会进容器日志，日志还会被采集走"
+  if [ -n "\$MASTER_KEY" ]; then
+    # base64 编码的 32 字节 ≈ 44 字符（含 padding）
+    KEY_LEN=\${#MASTER_KEY}
+    if [ \$KEY_LEN -lt 40 ] || [ \$KEY_LEN -gt 48 ]; then
+      echo "❌ 错误: PB_S3_MASTER_KEY 长度不正确 (\$KEY_LEN 字符)"
+      echo "   期望: base64 编码的 32 字节（约 44 字符）"
+      echo "   不把值本身打出来——这一行会进容器日志，日志还会被采集走"
+      exit 1
+    fi
+    echo "✅ SSE-C 加密已启用，主钥长度验证通过（提醒：主钥一旦用过就不可轮换）"
+  elif [ -n "\$MASTER_PASSPHRASE" ]; then
+    if [ "\$MASTER_PASSPHRASE" = "__SET_ME__" ]; then
+      echo "❌ 错误: PB_S3_MASTER_PASSPHRASE 还是镜像里的占位值 __SET_ME__"
+      echo "   换成自己的口令（至少 12 个字符）；口令一旦用于写入对象就不可换。"
+      exit 1
+    fi
+    # 按字符数（不是字节数）判，且强制 UTF-8 locale：中文口令在 C locale 下会被 wc -m 数成字节。
+    # 下限与 Java 侧 MediaKeyService.MIN_PASSPHRASE_CODE_POINTS 对齐，两边各拦一次。
+    PASS_LEN=\$(printf '%s' "\$MASTER_PASSPHRASE" | LC_ALL=C.UTF-8 wc -m | tr -d '[:space:]')
+    if [ "\$PASS_LEN" -lt 12 ]; then
+      echo "❌ 错误: PB_S3_MASTER_PASSPHRASE 至少需要 12 个字符（当前 \$PASS_LEN 个）"
+      echo "   短口令在库泄露后可被离线穷举；这里同样不打印口令本身"
+      exit 1
+    fi
+    echo "✅ SSE-C 加密已启用，口令长度验证通过（KEK 由 Argon2id 派生，口令本身不落库）"
+    echo "   提醒：口令一旦用于写入对象就不可换——换了旧图片再也解不开"
+  else
+    echo "❌ 错误: SSE-C 模式下 PB_S3_MASTER_KEY 与 PB_S3_MASTER_PASSPHRASE 必须配一个"
+    echo "   二选一："
+    echo "     · PB_S3_MASTER_KEY=\$(openssl rand -base64 32)   （随机 32 字节，部署脚本里更常见）"
+    echo "     · PB_S3_MASTER_PASSPHRASE=<至少 12 个字符的口令>（好记，KEK 由 Argon2id 派生）"
     exit 1
   fi
-
-  echo "✅ SSE-C 加密已启用，主钥长度验证通过（提醒：主钥一旦用过就不可轮换）"
 else
   ALLOW_PLAINTEXT=\$(printf '%s' "\${PB_ALLOW_PLAINTEXT_MEDIA:-}" | tr -d '[:space:]' | tr 'A-Z' 'a-z')
   case "\$ALLOW_PLAINTEXT" in
@@ -206,10 +246,12 @@ else
       elif [ "\$STORAGE_TYPE" = "local" ]; then
         echo "⚠️  图片与头像会明文落在 \$MEDIA_DIR（PB_S3_OBJECT_ENCRYPT=\$OBJECT_ENCRYPT）。"
         echo "   本机盘上的明文靠的是文件权限 600 和这块盘本身；要密文就设"
-        echo "   PB_S3_OBJECT_ENCRYPT=sse-c 并配 PB_S3_MASTER_KEY（openssl rand -base64 32，用过不可轮换）。"
+        echo "   PB_S3_OBJECT_ENCRYPT=sse-c 并二选一：PB_S3_MASTER_KEY（openssl rand -base64 32）"
+        echo "   或 PB_S3_MASTER_PASSPHRASE（至少 12 个字符；KEK 由 Argon2id 派生）。用过不可轮换。"
       else
         echo "❌ 错误: 生产环境不允许对象存储不加密"
-        echo "   请设 PB_S3_OBJECT_ENCRYPT=sse-c 并配 PB_S3_MASTER_KEY（openssl rand -base64 32）；"
+        echo "   请设 PB_S3_OBJECT_ENCRYPT=sse-c 并二选一：PB_S3_MASTER_KEY（openssl rand -base64 32）"
+        echo "   或 PB_S3_MASTER_PASSPHRASE（至少 12 个字符）；"
         echo "   确实要明文（例如内网试用）再显式设 PB_ALLOW_PLAINTEXT_MEDIA=1"
         exit 1
       fi
@@ -314,7 +356,14 @@ ENV SPRING_PROFILES_ACTIVE=prod \
     PB_DB_USERNAME=pushbox \
     PB_DB_WAIT_SECONDS=60 \
     PB_STORAGE_TYPE=local \
-    PB_STORAGE_LOCAL_PATH=/app/data/media
+    PB_STORAGE_LOCAL_PATH=/app/data/media \
+    PB_DB_PASSWORD=__SET_ME__ \
+    PB_S3_ENDPOINT=__SET_ME__ \
+    PB_S3_ACCESS_KEY=__SET_ME__ \
+    PB_S3_SECRET_KEY=__SET_ME__ \
+    PB_S3_BUCKET=pushbox \
+    PB_S3_OBJECT_ENCRYPT=none \
+    PB_S3_MASTER_PASSPHRASE=__SET_ME__
 
 USER pushbox
 # 监听端口是 ${PB_SERVER_PORT:7404}（application-prod.yml），EXPOSE 只是给人看的元数据，

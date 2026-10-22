@@ -43,13 +43,14 @@ pb:
     # 要现场看真删：--pb.s3.delete-grace=2s --pb.s3.purge-interval=5s（探针 ⑯ 就是这么跑的）
     purge-initial-delay: 60s
     purge-interval: 1h
-    # §4.5 桶内形态。开 sse-c 前先做两件事：
-    #   1) 给 PB_S3_MASTER_KEY 配一个稳定的 base64 32 字节（openssl rand -base64 32），
-    #      这个值一旦用了就不能换——换了旧对象再也解不开；
-    #   2) 主钥缺失或长度不对时服务端直接拒绝启动（MediaObjects 构造期校验），不会静默写明文。
+    # §4.5 桶内形态。开 sse-c 时 KEK 二选一：
+    #   1) PB_S3_MASTER_KEY        —— 稳定的 base64 32 字节（openssl rand -base64 32）；
+    #   2) PB_S3_MASTER_PASSPHRASE —— 至少 12 个字符的口令，Argon2id 派生，盐/KCV 存 app_state。
+    # 两者都配或都没有时服务端直接拒绝启动，不会静默写明文；KEK 一旦用过就不能换。
     # 切换只影响新写入的对象：历史对象按各自 media_objects/senders 的 enc_mode 读，仍是明文。
     object-encrypt: none
     master-key: ${PB_S3_MASTER_KEY:}
+    master-passphrase: ${PB_S3_MASTER_PASSPHRASE:}
   media:
     enabled: true
     max-images: 4

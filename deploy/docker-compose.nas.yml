@@ -16,7 +16,7 @@ name: pushbox-nas
 
 services:
   pushbox:
-    # Hub 上是 <主.次.补丁>（如 1.1.3）/ <主.次>（1.1）/ latest 三种写法，指向同一个镜像；版本号由
+    # Hub 上是 <主.次.补丁>（如 1.1.4）/ <主.次>（1.1）/ latest 三种写法，指向同一个镜像；版本号由
     # 发布工作流从 pom.xml 现读，不带 git 标签里的 v 或 server-v 前缀——v1.2.0、server-v1.2.0 在 Hub 上都不存在。
     # 想用自己现场出的镜像（ARM 机型，或不想等发版），把下面这行换成 pushbox:local：
     #   docker build -f deploy/Dockerfile -t pushbox:local .
@@ -41,8 +41,10 @@ services:
       PB_LOG_DIR: /app/logs
       # 明文落在自己的盘上（逐文件 600 权限）。想连本地盘也加密就改成：
       #   PB_S3_OBJECT_ENCRYPT: sse-c
-      #   PB_S3_MASTER_KEY: 一个 base64 的 32 字节（openssl rand -base64 32）——用过就不可轮换，
-      #   换了它旧图片再也解不开，所以先把这句读第二遍再动手。
+      #   KEK 二选一：
+      #     PB_S3_MASTER_KEY: <base64 的 32 字节：openssl rand -base64 32>
+      #     PB_S3_MASTER_PASSPHRASE: <至少 12 个字符的口令；KEK 由 Argon2id 派生，口令本身不落库>
+      #   两个都配会拒绝启动。用过的 KEK 不可轮换——换了它旧图片再也解不开。
       PB_S3_OBJECT_ENCRYPT: none
       # 管理台：两把都留空 = 整个管理台不开放（客户端收发消息、建频道照常在 Android/PC 里做）。
       # 要用浏览器管理就同时填两项，各生成一把、不许相同：openssl rand -base64 32

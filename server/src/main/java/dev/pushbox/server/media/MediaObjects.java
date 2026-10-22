@@ -8,6 +8,7 @@ import java.util.Locale;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.ResponseBytes;
@@ -59,33 +60,31 @@ public class MediaObjects {
   private final LocalFileStorage localStorage;
   private final PbProperties.S3 config;
   private final String encMode;
-  /** 只在 sse-c 下非空：封装/解封每对象客户钥用的主钥。 */
-  private final byte[] masterKey;
+  /** sse-c 的 KEK 来源：随机主钥或口令派生，两条都在这里统一。 */
+  private final MediaKeyService keyService;
   private final boolean useLocalStorage;
 
+  /** 手工构造路径（单测）：没有数据库，只支持随机主钥。 */
   public MediaObjects(@Nullable S3Client s3, PbProperties props) {
+    this(s3, props, new MediaKeyService(props));
+  }
+
+  @Autowired
+  public MediaObjects(@Nullable S3Client s3, PbProperties props, MediaKeyService keyService) {
     this.config = props.getS3();
+    this.keyService = keyService;
     String storageType = props.getStorage().getType().trim();
     this.useLocalStorage = "local".equalsIgnoreCase(storageType);
     this.encMode = normalizeMode(config.getObjectEncrypt());
 
-    if (ENC_SSE_C.equals(encMode)) {
-      byte[] key = KeyWrap.masterKeyFromConfig(config.getMasterKey());
-      if (key == null) {
-        throw new IllegalStateException("pb.s3.object-encrypt=sse-c 需要 pb.s3.master-key"
-            + "（base64 的 32 字节，例如 openssl rand -base64 32），当前配置解不出 32 字节");
-      }
-      this.masterKey = key;
-    } else if (ENC_NONE.equals(encMode)) {
-      this.masterKey = null;
-    } else {
+    if (!ENC_SSE_C.equals(encMode) && !ENC_NONE.equals(encMode)) {
       throw new IllegalStateException("pb.s3.object-encrypt 只支持 none|sse-c，当前是 " + encMode);
     }
 
     if (useLocalStorage) {
       this.s3 = null;
       String localPath = props.getStorage().getLocalPath();
-      this.localStorage = new LocalFileStorage(localPath, encMode, masterKey);
+      this.localStorage = new LocalFileStorage(localPath, encMode, keyService);
       log.info("对象存储后端=本地文件系统 path={} encrypt={}", localPath, encMode);
     } else {
       if (s3 == null) {
@@ -126,7 +125,7 @@ public class MediaObjects {
 
   /** 当前配置是否会用到客户自带钥：抓取侧据此决定要不要生成并落库。 */
   public boolean usesCustomerKey() {
-    return masterKey != null;
+    return keyService.usesCustomerKey();
   }
 
   /** 配置里要求的桶内形态；某个对象实际的形态以 {@link PutResult#encMode()} 与库里那列为准。 */
@@ -147,7 +146,7 @@ public class MediaObjects {
     if (!usesCustomerKey()) {
       return null;
     }
-    byte[] reused = sseKeyWrapped == null ? null : KeyWrap.unwrap(masterKey, sseKeyWrapped);
+    byte[] reused = sseKeyWrapped == null ? null : KeyWrap.unwrap(keyService.kek(), sseKeyWrapped);
     return reused == null ? KeyWrap.randomDataKey() : reused;
   }
 
@@ -176,7 +175,7 @@ public class MediaObjects {
     }
     s3.putObject(builder.build(), RequestBody.fromBytes(data));
     return new PutResult(customerKey == null ? ENC_NONE : ENC_SSE_C,
-        customerKey == null ? null : KeyWrap.wrap(masterKey, customerKey));
+        customerKey == null ? null : KeyWrap.wrap(keyService.kek(), customerKey));
   }
 
   /**
@@ -264,11 +263,12 @@ public class MediaObjects {
     }
     if (!usesCustomerKey()) {
       throw new IllegalStateException("库里有封装钥但 pb.s3.object-encrypt=" + encMode
-          + "：对象是 sse-c 写的，读它必须配回同一个主钥");
+          + "：对象是 sse-c 写的，读它必须配回同一个主钥或口令");
     }
-    byte[] dataKey = KeyWrap.unwrap(masterKey, sseKeyWrapped);
+    byte[] dataKey = KeyWrap.unwrap(keyService.kek(), sseKeyWrapped);
     if (dataKey == null) {
-      throw new IllegalStateException("SSE-C 客户钥解封失败：pb.s3.master-key 与写入时不是同一把？");
+      throw new IllegalStateException(
+          "SSE-C 客户钥解封失败：PB_S3_MASTER_KEY / PB_S3_MASTER_PASSPHRASE 与写入时不是同一个？");
     }
     return dataKey;
   }

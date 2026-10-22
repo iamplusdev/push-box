@@ -803,6 +803,28 @@ public class PbStore {
         key, value, now);
   }
 
+  /**
+   * 只在键不存在时写入。多实例同时首启时用它抢同一个 KDF 参数：后到的实例不覆盖先到的盐，
+   * 而是回读赢家那份参数再派生——否则两个实例会各持一把 KEK。
+   */
+  public boolean putStateIfAbsent(String key, String value, long now) {
+    return Db.updateBySql("""
+        INSERT IGNORE INTO app_state (state_key, state_value, updated_at) VALUES (?,?,?)""",
+        key, value, now) > 0;
+  }
+
+  /** 库里是否已有任何 sse-c 封装钥：切换主钥来源前必须问这一句。 */
+  public boolean hasAnyWrappedKey() {
+    Row media = Db.selectOneBySql(
+        "SELECT 1 AS present FROM media_objects WHERE sse_key_wrapped IS NOT NULL LIMIT 1");
+    if (media != null) {
+      return true;
+    }
+    Row sender = Db.selectOneBySql(
+        "SELECT 1 AS present FROM senders WHERE sse_key_wrapped IS NOT NULL LIMIT 1");
+    return sender != null;
+  }
+
   // ---------- §14 abuse control: sender allowlist, daily counters, capacity ----------
 
   /** 检查发送者是否在白名单里（频道开启白名单模式时才查）。 */

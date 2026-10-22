@@ -3,6 +3,7 @@ package dev.pushbox.server.config;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.pushbox.server.media.MediaKeyService;
 import dev.pushbox.server.media.MediaObjects;
 import java.util.Base64;
 import java.util.Map;
@@ -61,6 +62,9 @@ class StorageWiringTest {
     ctx.getEnvironment().getPropertySources().addFirst(new MapPropertySource(
         "storage-type", Map.of("pb.storage.type", storageType)));
     ctx.getBeanFactory().registerSingleton("pbProperties", props(storageType));
+    // 这条用例不接数据库：随机主钥模式不需要 app_state，传 null 的 PbStore 即可。
+    ctx.getBeanFactory().registerSingleton("mediaKeyService",
+        new MediaKeyService(props(storageType), null));
     ctx.register(S3Config.class, MediaObjects.class);
     ctx.refresh();
     return ctx;

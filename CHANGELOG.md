@@ -7,6 +7,46 @@
 
 ---
 
+## v1.1.4（2026-10-22）—— 媒体 KEK 改由短口令派生；NAS 表单显示凭据占位行（第三十二轮）
+
+> 起点：`PB_S3_MASTER_KEY` 要求用户保管一段 44 字符的 base64 随机串。抄错一位、重装时重新生成一份，症状都是"图片打不开"。这一轮让 `sse-c` 可以只给一句至少 12 个字符的口令；原有主钥继续可用。
+
+### 设计
+
+- **`MediaKeyService` 成为 KEK 的唯一来源**：随机主钥模式原样保留；口令模式按 NFC 规范化并去掉首尾空白后，用 Argon2id（默认 `m=65536KB,t=3,p=1`）派生 32 字节 KEK，再走原来的 `KeyWrap` 封装每对象客户钥。没有改任何对象格式——已落库的 61 字节封装钥与历史 `none` 对象照旧可读。
+- **口令不落库**：每套安装首次真正用到 KEK 时生成随机 16 字节盐，把 `version/kdf/salt/kcv` 写成 `app_state.media_kek_v1`（JSON）；口令本身一个字都不存。同一口令 + 同一行 state ⇒ 同一把 KEK，所以重启、重建容器、卸载重装（库还在）都不影响旧图。
+- **KCV 启动自检**：用 KEK 封装一段固定串存进 state，启动时解封比对。口令错了在启动阶段就报"与首次启用时不是同一个口令"，不会拿错 KEK 去写新对象。
+- **空库不提前钉死**：启动时若 state 不存在且库里没有封装钥，只打印"第一张图片写入时初始化"，不写 state。这样刚部署时口令打错一次，不会在还没有任何媒体时就把错误口令永久钉进库里。
+- **二选一与模式切换闸门**：`PB_S3_MASTER_KEY` 与 `PB_S3_MASTER_PASSPHRASE` 同时配 → 拒绝启动；口令模式发现库里有封装钥却没有 state（旧主钥写的）→ 拒绝启动且不写 state；主钥模式发现 state 存在（口令写的）→ 拒绝启动，提示继续用口令或在确认后再手工删 `media_kek_v1`。
+- **不提供轮换/重封装**：KEK 一旦有对象落库就不可换。换口令与丢主钥等价，旧对象解不开；这是本期明确边界。
+
+### 接线
+
+- `PbProperties.S3.masterPassphrase` + `application-prod.yml` / `application-dev.yml` 的 `master-passphrase: ${PB_S3_MASTER_PASSPHRASE:}`。
+- `MediaObjects` / `LocalFileStorage` 改为向 `MediaKeyService` 取 KEK；单测用的 `byte[]` 构造器保留。`PbStore` 增加 `putStateIfAbsent`（`INSERT IGNORE`）与 `hasAnyWrappedKey`（查 `media_objects` / `senders` 两列）。
+- 容器 entrypoint 接受两种 KEK 来源：口令按 Unicode 码点判 ≥12（`LC_ALL=C.UTF-8 wc -m`），主钥仍按 40–48 字符；两者同时给直接拒绝，错误输出不含任何口令值。`docker-compose.yml` / `docker-compose-wsl.yml` 透传 `PB_S3_MASTER_PASSPHRASE`，NAS 指南、部署快速参考、`prod.env.example` / `local.env.example` / `wsl-test.env.example`、README、`site/install.html`、软件设计方案与发布检查清单同步成"口令或主钥二选一"。
+
+### 部署表单
+
+- **凭据行改成占位值显示**：`Dockerfile` 的 ENV 追加 `PB_DB_PASSWORD=__SET_ME__`、`PB_S3_ENDPOINT` / `PB_S3_ACCESS_KEY` / `PB_S3_SECRET_KEY` / `PB_S3_MASTER_PASSPHRASE` 四行 `__SET_ME__`，并显示 `PB_S3_BUCKET=pushbox`、`PB_S3_OBJECT_ENCRYPT=none`（与 yml 默认值相同）。飞牛/群晖的「创建容器」只渲染镜像 ENV，这样库口令、AK/SK、KEK 口令的输入行直接出现，用户是改值而不是逐条点「添加」。这些全是假值，不是凭据；跳过 `SecretsUsedInArgOrEnv` 的理由写在 Dockerfile 头注释里（那条 lint 只看键名、分不出占位值）。
+- **占位值按"没填"处理**：entrypoint 对 `PB_DB_PASSWORD`、S3 三项、`PB_S3_MASTER_PASSPHRASE` 都显式判 `__SET_ME__` 并拒绝启动，报错点名"还是镜像里的占位值"；`local` 模式不读 S3，那几行占位值原样留着不影响启动。`__SET_ME__` 只有 10 个字符，即使绕过 entrypoint，Java 侧的口令长度下限也会拒绝，不存在"用公开占位值派生 KEK"的路径。
+- **文档**：NAS 指南路径 C、README、部署快速参考与 `site/install.html` 从"表单看不到 S3、手动加七行"改成"占位行直接改"；README 里同时保留 v1.1.3 及更早镜像仍是旧行为的说明。
+
+### 验证
+
+- **`MediaKeyServiceTest` 11 条全绿**：同一口令跨实例同 KEK、每次安装不同盐、错口令被 KCV 拒绝、短口令拒绝、二选一、两种模式切换闸门、旧封装钥阻止口令模式且 state 保持为空、空库启动不写 state、主钥模式不依赖数据库、NFC/空白归一、明文模式无 KEK。
+- **`mvn -o test`（JDK 21）退出码 0**：`pushbox-core` 43/43；`pushbox-server` 276 条，0 失败，114 条按 `PB_S3_*` 等环境变量门控跳过（未连真桶/真库的那批）。
+- **entrypoint 口令场景 5/5**：12 字符通过、11 字符判死且不打印口令、4 个汉字按码点被判过短、主钥+口令同时给判死、两边都不给时点名两种来源。
+- **entrypoint 占位值场景 6/6**：库口令仍是 `__SET_ME__` 判死并点名占位值；`local` 下只留 S3 占位值正常启动；`s3` 下端点占位值判死；三件套改真、口令仍是占位值时点名口令占位值；全改真且 `sse-c` 真口令通过；全改真、明文带逃生阀通过。
+- **`scripts/release-verify.sh` 72 通过 / 0 失败 / 2 警告**（警告照旧是工作区未提交与本机无 docker CLI），新增五条静态闸门：prod yml 映射、entrypoint 认识口令、compose 透传、entrypoint 执行二选一、GUI 占位值与拒绝逻辑同进同退；原来"PB_DB_PASSWORD 绝不进镜像 ENV"那条改成"只允许 `__SET_ME__` 占位值"，任何真值仍然 FAIL。
+
+### 未做
+
+- 未实现 KEK 轮换或旧对象重封装。
+- 未开始第二阶段（镜像默认 local + 管理台内配置 S3 地址/AK/SK/口令的设置页）；当前仍只有环境变量这一条配置路径。
+
+---
+
 ## v1.1.3（2026-10-22）—— 镜像声明两个持久化目录，NAS 表单不再从空挂载开始（第三十一轮）
 
 > 起点是 v1.1.2 发出去之后的一句追问：飞牛「创建容器」表单里的「存储位置」还是空的，S3 配置也看不到。
@@ -108,7 +148,7 @@
 - **两条判据在同一份镜像里单独复现过**：`PB_DB_HOST=127.0.0.1` 打出环回警告 + 等满后那条四步排查（主机 / 端口没发布 / **库容器在崩溃循环** / 防火墙，第三条是本轮自己踩出来的——我给 mysqld 塞了一个它不认识的启动参数，它把初始化做完就退出，端口从来没人监听过，而 TCP 侧只表现为"连不上"）；把一个 root 属主的空目录绑进 `/app/data/media` 则当场 `❌ 本地存储目录 … 不可写（容器内进程是 uid 10001）` 并退 1，两种修法直接印在日志里。
 - **entrypoint 场景矩阵 25 条**（上一版的 20 条 + 这轮为归一化取值补的 ㉑–㉕：`PB_S3_OBJECT_ENCRYPT` 带大小写与空白、逃生阀写 `TRUE`、未知加密模式不该被判死、`PB_STORAGE_TYPE` 大小写）在还原脚本上逐条对上预期输出与退出码；`docker compose config` 把 NAS 那本与主/wsl 两本都渲染过。
 - **文档不能领先镜像**：Hub 上当时的 `1.1.0` 那份镜像默认 `s3`、且缺 `PB_DB_URL` 直接拒启，"填两个值就能起"是**下一版**的行为。`README`、`deploy/部署快速参考.md` 主路径那一节、`site/install.html` 三处各加了一句明说这件事的 caveat（site 那条还多写一句"新 compose 配旧镜像时，那条报错会指着一个你已经删掉的变量，先 `docker image inspect` 看镜像日期再照本页填"）——不加这句，这一轮写的文档本身就是一次把用户往解析阶段报错里推的复现。**这几句的寿命就是一次发布**：本次 `v1.1.1` 是第一个带这些烘焙默认值的镜像，所以五处全部删掉（`README` 两处、`部署快速参考` 两处含主命令那行注释、NAS 指南第 0 节那条——随之"先确认四件事"改三件、`site/install.html` 整个 warn 框、`docker-compose.nas.yml` 头注释里"别用旧镜像"那两行）。判据是用户那句「只要本地已经实现，就不要写这种东西」：**文档描述的是发出去的那一版**，窗口期靠发布节奏解决，不靠读者自行判断手上那份新不新。
-- 计数：`bash scripts/release-verify.sh` **61 通过 / 0 失败 / 2 警告**（本机没有 docker CLI 判不了镜像体积、工作区有未提交文件），Java 基线 306 → **308**（core 43 + server 265）与 `ci.yml` 的 `$CS_BASELINE = 554` 一起对上；带日期的历史数字继续改成不带求和形状的写法，让计数闸只管现值。
+- 计数：`bash scripts/release-verify.sh` **61 通过 / 0 失败 / 2 警告**（本机没有 docker CLI 判不了镜像体积、工作区有未提交文件），Java 基线 306 → **308**（core 43 条、server 265 条）与 `ci.yml` 的 `$CS_BASELINE = 554` 一起对上；带日期的历史数字继续改成不带求和形状的写法，让计数闸只管现值。
 
 ### 部署文档收成一条主路径，官网改用 Pages 地址
 
@@ -211,7 +251,7 @@
 - **十条 run 的结论**（这台机器没有 `gh`、也没有 token，全部走 `api.github.com` 匿名读）：tag 事件三条——`docker-publish.yml` run `39750471717`（版本号闸门 → metadata → build&push → 标签清单，即 `1.1.1` / `1.1` / `latest` 那三枚）、`build-msi.yml` `39750471713`（`Sign installer` 仍 **skipped**，其余 success）、`build-apk.yml` `39750471704`；`main` 推送五条——`ci.yml` `39750377194`（四个 job 全绿，其中「断言 DB 闸门用例真的执行了」与「断言 C# 用例数没有被静默裁剪」两道计数步第一次是在 `1.1.1` 这棵树上跑的）、`docker-publish.yml` `39750377007`（只出 `main` / `sha-c78d062`，按口径不碰版本标签）、`build-apk.yml` `39750377334`、`build-msi.yml` `39750377041`、`update-dockerhub-description.yml` `39750377324`；发布站点两条——`官网发布（GitHub Pages）` `39750377003` 与其下游 `pages build and deployment` `39750395138`。十条结论全是 `success`。
 - **上一版那条"改不掉"现在改得掉了**：`v1.1.1` 这页正文首行实测是 `Docker 镜像 iamplusdev/push-box:1.1.1（同一镜像还有 1.1 与 latest 两个标签）`，不带 `v`。也就是说 `7b148ea` 那次改的 `${TAG#v}` 第一次在真 Release 页上生效——`v1.1.0` 那一页首行仍是错的 `push-box:v1.1.0`，那是历史页、动不了，两页并排看正好是这条修正的前后对照。两个资产的名字与体积从公开 API 读出：`pushbox-release-v1.1.1.apk` 12.2 MB、`PushBox-Setup-1.1.1-win-x64.exe` 56.0 MB。
 - **站点这次是"推上去就当场复核"的**：`gh-pages` 顶部提交是 `3c671dc`（`deploy: site tree 49abc386…`，那个哈希由 `site-deploy.yml` 现算，所以只在本轮 `site/**` 真变过时才动）。线上 `install.html` 里 `PB_STORAGE_TYPE=s3` 出现 5 次、步骤卡标题「已经有一个桶？同一条命令让它落桶」在页上，且**那一行的行号与仓库内文件逐行对齐**（121 / 153 / 160 三处在两边一模一样）；`index.html` 与 `install.html` 的徽章都是 `1.1.1`。这条比对是刻意做的：上一版抓到过"仓库改了、站点没跟着改"，行号一致比"看着内容差不多"更能证同一棵树。
-- **仍然只有 CI 退出码背书的三件事**：① Hub 上真实的标签清单——`registry.hub.docker.com` 从这台机器是 `curl (28)` 连不上（`http=000`，不是 404），所以"三枚版本标签已就位"没有本机实证；② 镜像体积判不了（本机无 docker CLI，`release-verify.sh` 那唯一一条 WARN 就是它，最终 **62 通过 / 0 失败 / 1 警告**）；③ 这一版**没重跑任何客户端装机**——`v1.1.1` 只动部署资产、文档与版本号，三端代码与用例数没变（Java 仍是 core 43 + server 265），可 tag 一样会把新 APK 与安装包发出去（`versionCode` 10101 > 10100），所以那两份制品的装机路径沿用的是 `v1.1.0` 那批真机证据，安装包也**仍未签名**。
+- **仍然只有 CI 退出码背书的三件事**：① Hub 上真实的标签清单——`registry.hub.docker.com` 从这台机器是 `curl (28)` 连不上（`http=000`，不是 404），所以"三枚版本标签已就位"没有本机实证；② 镜像体积判不了（本机无 docker CLI，`release-verify.sh` 那唯一一条 WARN 就是它，最终 **62 通过 / 0 失败 / 1 警告**）；③ 这一版**没重跑任何客户端装机**——`v1.1.1` 只动部署资产、文档与版本号，三端代码与用例数没变（Java 仍是 core 43 条、server 265 条），可 tag 一样会把新 APK 与安装包发出去（`versionCode` 10101 > 10100），所以那两份制品的装机路径沿用的是 `v1.1.0` 那批真机证据，安装包也**仍未签名**。
 
 ---
 

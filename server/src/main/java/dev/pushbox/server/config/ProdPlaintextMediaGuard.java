@@ -67,8 +67,9 @@ public class ProdPlaintextMediaGuard implements BeanFactoryPostProcessor, Enviro
         log.warn("""
             图片与头像将明文落在本地目录 {}（pb.s3.object-encrypt={}）。
                 这里只出声不拒绝启动：本地盘的暴露面是"谁能读到这块盘"，对象已经按 600 权限写。
-                要密文就设 PB_S3_OBJECT_ENCRYPT=sse-c 并给 PB_S3_MASTER_KEY（openssl rand -base64 32，
-                注意主钥一旦用过就不可轮换）。""",
+                要密文就设 PB_S3_OBJECT_ENCRYPT=sse-c，并二选一：
+                PB_S3_MASTER_KEY（openssl rand -base64 32）或 PB_S3_MASTER_PASSPHRASE（至少 12 个字符）。
+                注意 KEK 一旦用过就不可轮换。""",
             environment.getProperty("pb.storage.local-path", "/app/data/media"),
             mode.isEmpty() ? "未配置（按 none）" : mode);
         return;
@@ -110,8 +111,10 @@ public class ProdPlaintextMediaGuard implements BeanFactoryPostProcessor, Enviro
         prod 拒绝以明文（pb.s3.object-encrypt=%s）存储图片与头像：PB_S3_OBJECT_ENCRYPT 没配时它默认就是 none，
             而明文桶不会报错、健康检查照过，唯一后果是媒体字节在对象存储里谁都读得动。
             两种走法，必须选一个写在 env 里：
-              1) 推荐：PB_S3_OBJECT_ENCRYPT=sse-c，并给 PB_S3_MASTER_KEY 配一个 base64 的 32 字节
-                 （openssl rand -base64 32）。注意主钥一旦用过就不可轮换，换了旧对象的封装钥再也解不开；
+              1) 推荐：PB_S3_OBJECT_ENCRYPT=sse-c，并给 KEK 二选一：
+                 · PB_S3_MASTER_KEY=base64 的 32 字节（openssl rand -base64 32）；
+                 · PB_S3_MASTER_PASSPHRASE=至少 12 个字符的口令（Argon2id 派生，盐/KCV 存 app_state，口令不落库）。
+                 两个都配会拒绝启动。注意 KEK 一旦用过就不可轮换，换了旧对象的封装钥再也解不开；
                  切换只影响新写入的对象，历史对象按 media_objects/senders 各自记的 enc_mode 读，照旧能读。
               2) 迁移期临时放行明文：PB_ALLOW_PLAINTEXT_MEDIA=1。关掉它之后，之前按明文写的对象
                  不会变得读不出来——读侧按每个对象自己的 enc_mode 各自解读。

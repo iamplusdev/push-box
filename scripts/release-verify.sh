@@ -272,11 +272,58 @@ else
     fail "Dockerfile 没声明两个 VOLUME：飞牛/群晖的「存储位置」表单会是空的"
 fi
 
-# 口令类一律不给默认值（这条是"容易上手"与"裸奔"之间的界线）。
-if grep -qE '^[[:space:]]*PB_DB_PASSWORD=[^[:space:]]' "$ROOT_DIR/deploy/Dockerfile"; then
-    fail "Dockerfile 给 PB_DB_PASSWORD 烘焙了默认值：凭据绝不进镜像层，任何镜像读者都能拿到"
+# 凭据键可以出现在镜像 ENV 里，但值只允许是 __SET_ME__ 占位值。飞牛/群晖的「创建容器」
+# 只渲染镜像 ENV，没有这一行用户就得自己知道键名再点「添加」；而占位值不是秘密，
+# 且 entrypoint 会把没替换的占位值按"没填"拒绝启动。真值（包括看起来像真的默认口令）
+# 仍然一个都不能烘焙——镜像层里的东西删不掉，任何拉取镜像的人都拿得到。
+CRED_DEFAULTS=$(grep -E '^[[:space:]]*(PB_DB_PASSWORD|PB_S3_ACCESS_KEY|PB_S3_SECRET_KEY|PB_S3_MASTER_KEY|PB_S3_MASTER_PASSPHRASE)=[^[:space:]]' "$ROOT_DIR/deploy/Dockerfile" | grep -v '=__SET_ME__' || true)
+if [ -n "$CRED_DEFAULTS" ]; then
+    fail "Dockerfile 给凭据键烘焙了真值：凭据只能以 __SET_ME__ 占位值出现（未替换时 entrypoint 必须拒绝），实际是：$(echo "$CRED_DEFAULTS" | head -3 | tr '\n' ' ')"
 else
-    pass "PB_DB_PASSWORD 在镜像里没有默认值（凭据只走环境变量）"
+    pass "凭据键在镜像里只有 __SET_ME__ 占位值（未替换会被 entrypoint 拒绝）"
+fi
+
+# 口令派生媒体 KEK：yml 映射、镜像 ENV、compose 透传、entrypoint 二选一判据必须同时在。
+# 少任何一处，文档里能填的口令就会在某一层被静默丢掉，症状是"口令对了但图片解不开"。
+if grep -q 'master-passphrase: \${PB_S3_MASTER_PASSPHRASE' "$ROOT_DIR/server/src/main/resources/application-prod.yml"; then
+    pass "PB_S3_MASTER_PASSPHRASE 在 prod profile 有映射（口令派生 KEK 可达）"
+else
+    fail "application-prod.yml 没接 PB_S3_MASTER_PASSPHRASE：文档里的口令是个死开关，进程照旧只认 PB_S3_MASTER_KEY"
+fi
+
+if grep -q 'PB_S3_MASTER_PASSPHRASE' "$ROOT_DIR/deploy/Dockerfile"; then
+    pass "entrypoint 认识 PB_S3_MASTER_PASSPHRASE（长度下限与二选一都在容器启动前判）"
+else
+    fail "entrypoint 不认识 PB_S3_MASTER_PASSPHRASE：sse-c 下只给口令会报\"必须配一个\"，把人堵在启动前"
+fi
+
+if grep -q 'PB_S3_MASTER_PASSPHRASE: \${PB_S3_MASTER_PASSPHRASE' "$ROOT_DIR/deploy/docker-compose.yml"; then
+    pass "compose 透传 PB_S3_MASTER_PASSPHRASE（.env 里的口令进得了容器）"
+else
+    fail "compose 没透传 PB_S3_MASTER_PASSPHRASE：.env 里写了也到不了进程"
+fi
+
+if grep -q 'PB_S3_MASTER_KEY 与 PB_S3_MASTER_PASSPHRASE 只能二选一' "$ROOT_DIR/deploy/Dockerfile"; then
+    pass "entrypoint 对两个 KEK 来源执行二选一（不会静默偏向其中一个）"
+else
+    fail "entrypoint 不再拒绝同时配置主钥与口令：两个都填时到底用哪个将无法从日志推断"
+fi
+
+# GUI 表单占位值：飞牛/群晖的「创建容器」只渲染镜像 ENV，凭据键不烘焙就一行都没有，用户得自己
+# 知道键名再逐条点「添加」。但只烘焙不拦更糟——漏改的 PB_DB_PASSWORD 会变成一条 MySQL 1045，
+# 从报错里看不出是没改占位值。所以两半必须同时在：ENV 里有 __SET_ME__，entrypoint 对
+# DB 口令、S3 三项、KEK 口令都点名拒绝。少任何一处，这一轮就等于把假值塞给了用户。
+if grep -q 'PB_DB_PASSWORD=__SET_ME__' "$ROOT_DIR/deploy/Dockerfile" \
+  && grep -q 'PB_S3_ENDPOINT=__SET_ME__' "$ROOT_DIR/deploy/Dockerfile" \
+  && grep -q 'PB_S3_ACCESS_KEY=__SET_ME__' "$ROOT_DIR/deploy/Dockerfile" \
+  && grep -q 'PB_S3_SECRET_KEY=__SET_ME__' "$ROOT_DIR/deploy/Dockerfile" \
+  && grep -q 'PB_S3_MASTER_PASSPHRASE=__SET_ME__' "$ROOT_DIR/deploy/Dockerfile" \
+  && grep -q 'PB_DB_PASSWORD 还是镜像里的占位值' "$ROOT_DIR/deploy/Dockerfile" \
+  && grep -q '它还是镜像里的占位值 __SET_ME__' "$ROOT_DIR/deploy/Dockerfile" \
+  && grep -q 'PB_S3_MASTER_PASSPHRASE 还是镜像里的占位值' "$ROOT_DIR/deploy/Dockerfile"; then
+    pass "GUI 表单凭据行以 __SET_ME__ 显示，且 entrypoint 拒绝未替换的占位值"
+else
+    fail "占位值只做了一半：要么表单里没有可编辑行，要么漏改的占位值会被当成真配置（ENV 与 entrypoint 两侧必须同进同退）"
 fi
 
 # PB_DB_HOST 是"最省事写法"的入口，但它只被 entrypoint 消费（拼成 PB_DB_URL 再给 yml），

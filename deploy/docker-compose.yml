@@ -26,7 +26,7 @@ services:
     # 引用 CI 推到 Docker Hub 的那个名字，本文件同时留 build: 段：镜像在远端存在就拉，
     # 拉不到（自己 fork、离线、改了代码）才本地编。写成本地名 pushbox/server 的话，
     # 用户 clone 下来 up 的一定是自己编译的产物，CI 打的 X.Y.Z / X.Y / latest / sha 标签对使用者毫无意义。
-    image: docker.io/iamplusdev/push-box:1.1.3
+    image: docker.io/iamplusdev/push-box:1.1.4
     environment:
       SPRING_PROFILES_ACTIVE: prod
       # 这里只透传 PB_* 名字，映射到 spring.datasource.* 的唯一地点是 application-prod.yml。
@@ -62,11 +62,14 @@ services:
       PB_STORAGE_TYPE: ${PB_STORAGE_TYPE:-s3}
       PB_STORAGE_LOCAL_PATH: ${PB_STORAGE_LOCAL_PATH:-/app/data/media}
       PB_S3_PATH_STYLE: ${PB_S3_PATH_STYLE:-true}
-      # none|sse-c；填 sse-c 时 PB_S3_MASTER_KEY 必须是 base64 的 32 字节，缺失/长度不对进程拒绝启动。
-      # 明文判据按拓扑分档（D76）：s3 里 object-encrypt=none 由 ProdPlaintextMediaGuard 与 entrypoint
-      # 各拒一次；local 只出声（对象在自己盘上、逐文件 600 权限，硬拦只会逼人配一个用不到的桶）。
+      # none|sse-c；填 sse-c 时 KEK 二选一：PB_S3_MASTER_KEY=base64 的 32 字节，或
+      # PB_S3_MASTER_PASSPHRASE=至少 12 个字符的口令（Argon2id 派生，盐/KCV 存 app_state）。
+      # 两个都配会拒绝启动。明文判据按拓扑分档（D76）：s3 里 object-encrypt=none 由
+      # ProdPlaintextMediaGuard 与 entrypoint 各拒一次；local 只出声（对象在自己盘上、逐文件 600 权限，
+      # 硬拦只会逼人配一个用不到的桶）。
       PB_S3_OBJECT_ENCRYPT: ${PB_S3_OBJECT_ENCRYPT:-none}
       PB_S3_MASTER_KEY: ${PB_S3_MASTER_KEY:-}
+      PB_S3_MASTER_PASSPHRASE: ${PB_S3_MASTER_PASSPHRASE:-}
       # 逃生阀：承认"新对象继续按明文写"。s3 下留空即启动失败，因为明文桶不会报错、健康检查照过，
       # 唯一的后果是图片/头像在对象存储里裸奔；local 下它只是把那条 WARN 换成显式表态。
       PB_ALLOW_PLAINTEXT_MEDIA: ${PB_ALLOW_PLAINTEXT_MEDIA:-}

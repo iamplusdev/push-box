@@ -40,7 +40,7 @@ docker run -d --name pushbox \
 
 `192.0.2.20` 是 RFC 5737 的文档保留地址，**照抄一定连不上**——换成你那台库的局域网 IP 或服务名。
 不想敲命令、要在飞牛/群晖的「创建容器」表单里填的，照 [NAS 部署指南](deploy/NAS部署指南.md) 路径 C：
-**存储位置两行**（`/app/data/media`、`/app/logs`；镜像声明了 `VOLUME`，较新的表单会带出容器内路径，宿主文件夹仍要自己选），**环境变量只填两个**；存储位置空着的话，删容器就把图片一起删了。
+**存储位置两行**（`/app/data/media`、`/app/logs`；镜像声明了 `VOLUME`，较新的表单会带出容器内路径，宿主文件夹仍要自己选），**环境变量只改两个**——`PB_DB_PASSWORD` 显示为占位值 `__SET_ME__`，换成真实库口令（需要时再改 `PB_DB_HOST`），没替换的占位值会被拒绝启动；存储位置空着的话，删容器就把图片一起删了。
 
 **镜像之外只有一件事要做**：那个库和那个用户得先存在，服务端不会替你建库（Flyway 只建表）。
 在库所在那台机器上跑一次就够了——NAS 上装的 MySQL 就填它的局域网 IP，别填 `127.0.0.1`（容器里的环回是它自己）：
@@ -67,8 +67,8 @@ entrypoint 出声提醒一次）、管理台**关闭**、库名与库用户名�
 | 想要的形态 | 追加 |
 |------|------|
 | 开管理台 | `-e PB_ADMIN_SECRET='<openssl rand -base64 32>' -e PB_ADMIN_JWT_SECRET='<另一个不同的强随机值>'`（两项都要、互不相同、各 ≥32 字节；**都留空 = 管理台不开放**，客户端收发不受影响，这是安全状态不是漏配） |
-| 外接桶 | `-e PB_STORAGE_TYPE=s3 -e PB_S3_ENDPOINT -e PB_S3_ACCESS_KEY -e PB_S3_SECRET_KEY`，再加 `-e PB_S3_OBJECT_ENCRYPT=sse-c -e PB_S3_MASTER_KEY='<openssl rand -base64 32>'` |
-| 本地图片也要加密 | `-e PB_S3_OBJECT_ENCRYPT=sse-c -e PB_S3_MASTER_KEY='<openssl rand -base64 32>'`（主钥一旦有对象落库就**不可轮换**） |
+| 外接桶 | `-e PB_STORAGE_TYPE=s3 -e PB_S3_ENDPOINT -e PB_S3_ACCESS_KEY -e PB_S3_SECRET_KEY`，再加 `-e PB_S3_OBJECT_ENCRYPT=sse-c` 和 KEK（`PB_S3_MASTER_PASSPHRASE='<至少 12 个字符的口令>'`，或 `PB_S3_MASTER_KEY='<openssl rand -base64 32>'`，二选一） |
+| 本地图片也要加密 | `-e PB_S3_OBJECT_ENCRYPT=sse-c` + 上面任一 KEK 来源（口令由 Argon2id 派生，盐/KCV 存 `app_state`；一旦有对象落库就**不可轮换**） |
 | 改端口 | `-e PB_SERVER_PORT=8081` 并把 `-p` 的右侧同步成 8081 |
 | 库地址只写完整串 | 用 `-e PB_DB_URL='jdbc:mysql://…'` 替代 `PB_DB_HOST`（两个都给时以 `PB_DB_URL` 为准） |
 
@@ -82,7 +82,7 @@ docker run -d --name pushbox \
   -e PB_S3_ENDPOINT=http://192.0.2.30:7101 \
   -e PB_S3_ACCESS_KEY='<AK>' -e PB_S3_SECRET_KEY='<SK>' \
   -e PB_S3_BUCKET=pushbox \
-  -e PB_S3_OBJECT_ENCRYPT=sse-c -e PB_S3_MASTER_KEY='<openssl rand -base64 32>' \
+  -e PB_S3_OBJECT_ENCRYPT=sse-c -e PB_S3_MASTER_PASSPHRASE='<至少 12 个字符的口令>' \
   -v pushbox-logs:/app/logs \
   docker.io/iamplusdev/push-box:latest
 ```
@@ -94,8 +94,9 @@ docker run -d --name pushbox \
 - **`pushbox-media` 那个卷去掉了**：对象落桶，挂着也没用；日志卷还是要。桶本身**要你先建好**，
   镜像不建桶。桶可以跟别的系统共用，但 PushBox 只读写自己那套对象键，读不到别人写进去的东西。
 - **明文在 s3 这档是拒启的**，不像 local 只出声：默认 `PB_S3_OBJECT_ENCRYPT=none`，而桶侧任何拿到
-  同一组 AK/SK 的读者都能直接把图片读走。所以要么像上面那样 `sse-c` + 主钥（**主钥一旦有对象落库就
+  同一组 AK/SK 的读者都能直接把图片读走。所以要么像上面那样 `sse-c` + 口令或主钥（**KEK 一旦有对象落库就
   不可轮换**，换了旧对象再也解不开），要么显式 `-e PB_ALLOW_PLAINTEXT_MEDIA=1` 表态。
+  `PB_S3_MASTER_PASSPHRASE` 与 `PB_S3_MASTER_KEY` 二选一，两个都配会拒绝启动；口令至少 12 个字符。
 - **`PB_S3_PATH_STYLE` 默认是 `true`**（取值在 `application-prod.yml`，不在镜像 ENV 里），MinIO / RustFS 是对的；接阿里云 OSS 或 AWS 时按服务商文档，
   必要时 `-e PB_S3_PATH_STYLE=false`。桶名不是 `pushbox`、区域不是 `us-east-1` 就改上面那两行。
 
@@ -147,7 +148,7 @@ PB_S3_ACCESS_KEY=$(openssl rand -hex 16)
 PB_S3_SECRET_KEY=$(openssl rand -base64 32)
 PB_ADMIN_SECRET=$(openssl rand -base64 32)
 PB_ADMIN_JWT_SECRET=$(openssl rand -base64 32)
-PB_S3_MASTER_KEY=$(openssl rand -base64 32)
+PB_S3_MASTER_KEY=$(openssl rand -base64 32)   # 也可以改用口令：PB_S3_MASTER_PASSPHRASE=<至少 12 个字符>（二选一）
 
 sed -i \
   -e "s|^PB_DB_PASSWORD=.*|PB_DB_PASSWORD=$PB_DB_PASSWORD|" \
@@ -175,7 +176,7 @@ PB_S3_BUCKET=pushbox
 PB_S3_PATH_STYLE=true
 
 # 对象存储加密：prod 只认两种显式表态（这条只卡 s3 拓扑，见下面拓扑 C）
-PB_S3_OBJECT_ENCRYPT=sse-c        # 配 PB_S3_MASTER_KEY（base64 的 32 字节，落库后不可轮换）
+PB_S3_OBJECT_ENCRYPT=sse-c        # KEK 二选一：PB_S3_MASTER_KEY（base64 的 32 字节）或 PB_S3_MASTER_PASSPHRASE（≥12 字符，Argon2id 派生）；落库后不可轮换
 # PB_S3_OBJECT_ENCRYPT=none       # 明文桶：必须同时打开下面的逃生阀，否则 entrypoint 拒绝启动
 # PB_ALLOW_PLAINTEXT_MEDIA=1
 
@@ -187,7 +188,7 @@ PB_S3_OBJECT_ENCRYPT=sse-c        # 配 PB_S3_MASTER_KEY（base64 的 32 字节�
 # ---- 拓扑 C：本地文件系统存储（零依赖单机部署）----
 PB_STORAGE_TYPE=local
 PB_STORAGE_LOCAL_PATH=/app/data/media
-# PB_S3_OBJECT_ENCRYPT=none 或 sse-c + PB_S3_MASTER_KEY。
+# PB_S3_OBJECT_ENCRYPT=none 或 sse-c + PB_S3_MASTER_KEY / PB_S3_MASTER_PASSPHRASE（二选一）。
 # local + none 只打一条 WARN 就启动，不需要 PB_ALLOW_PLAINTEXT_MEDIA——
 # 对象就在部署者自己的盘上（逐文件 600 权限），硬拦只会逼人为了过检查去配一个用不到的桶。
 
@@ -390,7 +391,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 
 | 跑法 | 判什么 |
 |------|--------|
-| `JAVA_HOME=… mvn -B -pl core,server test` | 服务端与加密库（**308/308**，core 43 + server 265）。要先 `set -a && . deploy/env/local.env && set +a`：114 条挂 `PB_S3_ACCESS_KEY` 门控，缺凭据时是 194 执行 + 114 静默 skip，而 `mvn test` 的退出码仍然是 0 |
+| `JAVA_HOME=… mvn -B -pl core,server test` | 服务端与加密库（**319/319**，core 43 + server 276）。要先 `set -a && . deploy/env/local.env && set +a`：114 条挂 `PB_S3_ACCESS_KEY` 门控，缺凭据时是 205 执行 + 114 静默 skip，而 `mvn test` 的退出码仍然是 0 |
 | `node deploy/probe/p0-e2e.mjs` | 端到端协议（**0 失败**；条数以脚本末行的 `N/N` 为准） |
 | `cd android && ./gradlew :app:assembleDebug` | Android 编译通过 |
 | `cd web-admin && npm ci && npm run build` | 管理台 `vue-tsc` 类型检查与 `dist/` 产物 |
@@ -471,7 +472,7 @@ GitHub Pages（线上地址 <https://iamplusdev.github.io/push-box/>）。六个
 >
 > **2026-10-22 晚：分端发布兑现，旧包清空**。`server-v1.1.2` / `android-v1.1.2` / `windows-v1.1.2` 三条组件标签流水线各自跑绿（run `39763487572` / `39763487166` / `39763487499`），GitHub 上只留两个客户端 Release：`android-v1.1.2`（`pushbox-release-1.1.2.apk`，12.8 MB）、`windows-v1.1.2`（`PushBox-Setup-1.1.2-win-x64.exe`，58.7 MB，仍未签名）；服务端只推镜像。`v1.1.0` / `v1.1.1` 的 Release 与标签、本地 `v1.0.0` 标签已删，Hub 上只剩 `1.1.2` / `1.1` / `latest` / `main` / `sha-9f8e201`——上一段说的"v1.1.0 页面首行标签写错"随页面删除不复存在。更新检查用线上列表实测：Windows 客户端代码选中 `windows-v1.1.2`，Android 同一套选取口径选中 `android-v1.1.2`；两端在真机/桌面上的更新弹窗仍未见人点过，官网排版也仍未见人眼复核。
 >
-> **2026-10-22 晚补丁：v1.1.3 只修镜像挂载元数据**。飞牛「创建容器」的「存储位置」一栏按镜像的 `Config.Volumes` 渲染，v1.1.2 没声明 `VOLUME`，所以那一栏没有任何行。v1.1.3 在 `deploy/Dockerfile` 声明 `/app/data/media` 与 `/app/logs`，发布后从 Hub 的 config blob 复核到 `Volumes` 正是这两项；`S3` 仍刻意不预置（AK/SK 是凭据，半套又会误导），要用就在表单里加七行。`server-v1.1.3` 只触发服务端链（run `39767681288`），Hub 当前只剩 `1.1.3` / `1.1` / `latest` / `main` / `sha-d8c1486`，旧的 `1.1.2` 与 `sha-9f8e201` 已删。**边界**：飞牛表单本身仍没有实测，只验到镜像元数据；Android/Windows 版本仍是 1.1.2。
+> **2026-10-22 晚补丁：v1.1.3 只修镜像挂载元数据**。飞牛「创建容器」的「存储位置」一栏按镜像的 `Config.Volumes` 渲染，v1.1.2 没声明 `VOLUME`，所以那一栏没有任何行。v1.1.3 在 `deploy/Dockerfile` 声明 `/app/data/media` 与 `/app/logs`，发布后从 Hub 的 config blob 复核到 `Volumes` 正是这两项；`S3` 仍刻意不预置（AK/SK 是凭据，半套又会误导），要用就在表单里加七行（**`v1.1.4` 起改为把凭据键烘焙成 `__SET_ME__` 占位值，让表单直接显示可编辑行、entrypoint 拒绝未替换的占位值；`v1.1.3` 及更早仍是旧行为**）。`server-v1.1.3` 只触发服务端链（run `39767681288`），Hub 当前只剩 `1.1.3` / `1.1` / `latest` / `main` / `sha-d8c1486`，旧的 `1.1.2` 与 `sha-9f8e201` 已删。**边界**：飞牛表单本身仍没有实测，只验到镜像元数据；Android/Windows 版本仍是 1.1.2。
 
 ---
 
@@ -493,7 +494,7 @@ GitHub Pages（线上地址 <https://iamplusdev.github.io/push-box/>）。六个
 
 ---
 
-**文档版本**：v1.1.3  
+**文档版本**：v1.1.4  
 **最后更新**：2026-10-22  
 **主分支**：main  
 **官网**：<https://iamplusdev.github.io/push-box/>（源码在 `site/`，改 `site/**` 推到 `main` 就自动发布）  
