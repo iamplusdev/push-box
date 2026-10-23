@@ -1,4 +1,4 @@
-# 构建上下文里真正被 COPY 的只有 pom.xml、packages/core/src、server/src（infra/Dockerfile 由
+# 构建上下文里真正被 COPY 的只有 pom.xml、packages/core/src、apps/server/src（infra/Dockerfile 由
 # compose 的 dockerfile: 单独读取，不在上下文内）。其余全排除——尤其 android/ 与 */target/，
 # 带上它们只会让每次 build 先传几个 GB。
 .git
@@ -23,7 +23,7 @@ infra/
 **/generated/
 **/node_modules/
 # web-admin 的构建产物由镜像内的 npm run build 现做，别把宿主上可能过期的 dist 传进上下文
-web-admin/dist/
+apps/web-admin/dist/
 
 # 凭据永远不该进镜像层
 .env

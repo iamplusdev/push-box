@@ -11,7 +11,7 @@
 
   <modules>
     <module>packages/core</module>
-    <module>server</module>
+    <module>apps/server</module>
   </modules>
 
   <properties>

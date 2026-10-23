@@ -221,7 +221,7 @@ section "检查生产环境密钥配置"
 #    PB_CADDY_HOST / PB_HTTP_PORT 同样排除：一个给 Caddy 容器，一个只是宿主侧端口映射。
 SERVER_ENV_HITS=$(sed 's/#.*//' "$ROOT_DIR/infra/docker-compose.yml" "$ROOT_DIR/infra/docker-compose.nas.yml" \
     | grep -oE '\$\{?PB_[A-Z0-9_]+' | grep -vE 'PB_CADDY_HOST|PB_HTTP_PORT' | sort -u | tr '\n' ' ' || true)
-YML_ENV_HITS=$(grep -oE '\$\{PB_[A-Z0-9_]+' "$ROOT_DIR/server/src/main/resources/application.yml" | sort -u | tr '\n' ' ' || true)
+YML_ENV_HITS=$(grep -oE '\$\{PB_[A-Z0-9_]+' "$ROOT_DIR/apps/server/src/main/resources/application.yml" | sort -u | tr '\n' ' ' || true)
 if [ -n "$SERVER_ENV_HITS$YML_ENV_HITS" ]; then
     fail "服务端一侧还在读环境变量：compose [$SERVER_ENV_HITS] application.yml [$YML_ENV_HITS] —— 这些键现在没人消费，是死开关"
 else
@@ -238,8 +238,8 @@ fi
 
 # ③ 配置到 Spring 的唯一通路是 EnvironmentPostProcessor，而它只有在 spring.factories 里登记过才会被调用。
 #    漏掉登记的症状不是报错，是"安装页填的值一个都没生效，进程按 application.yml 的默认值跑"。
-if [ -f "$ROOT_DIR/server/src/main/resources/META-INF/spring.factories" ] \
-    && grep -q 'RuntimeConfigEnvironmentPostProcessor' "$ROOT_DIR/server/src/main/resources/META-INF/spring.factories"; then
+if [ -f "$ROOT_DIR/apps/server/src/main/resources/META-INF/spring.factories" ] \
+    && grep -q 'RuntimeConfigEnvironmentPostProcessor' "$ROOT_DIR/apps/server/src/main/resources/META-INF/spring.factories"; then
     pass "RuntimeConfigEnvironmentPostProcessor 已登记进 spring.factories（安装页的值真的会到 Spring）"
 else
     fail "spring.factories 没登记 RuntimeConfigEnvironmentPostProcessor：配置文件写了也没人读，进程会按 yml 默认值静默跑起来"
@@ -247,9 +247,9 @@ fi
 
 # ④ 安装页三件套：迷你服务、它的页面资源、以及"页面里不再出现环境变量名"。
 #    最后一条是防止文档腐烂进 UI——页面上写着 PB_DB_PASSWORD，而那个键已经没人读了。
-if [ -f "$ROOT_DIR/server/src/main/java/dev/pushbox/server/setup/InstallServer.java" ] \
-    && [ -f "$ROOT_DIR/server/src/main/resources/setup/index.html" ]; then
-    if grep -q 'PB_' "$ROOT_DIR/server/src/main/resources/setup/index.html"; then
+if [ -f "$ROOT_DIR/apps/server/src/main/java/dev/pushbox/server/setup/InstallServer.java" ] \
+    && [ -f "$ROOT_DIR/apps/server/src/main/resources/setup/index.html" ]; then
+    if grep -q 'PB_' "$ROOT_DIR/apps/server/src/main/resources/setup/index.html"; then
         fail "安装页里出现了 PB_* 键名：那些环境变量已经没人消费，页面上写着等于教人填一个死开关"
     else
         pass "安装页与它的服务都在位，且页面里不含任何 PB_* 键名"
@@ -262,24 +262,24 @@ fi
 # 现在由安装页的表单本身表达——不勾就是 local，勾了就必须填全，没有"配了一半"这种状态可守。
 # 文件回来了就说明有人把旧模型抄了回来，而旧模型读的键一个都不存在了。
 for gone in DevCredentialsGuard ProdPlaintextMediaGuard; do
-    if [ -f "$ROOT_DIR/server/src/main/java/dev/pushbox/server/config/$gone.java" ]; then
+    if [ -f "$ROOT_DIR/apps/server/src/main/java/dev/pushbox/server/config/$gone.java" ]; then
         fail "$gone 又出现了：它读的是已经删掉的 PB_* 环境变量，留着只会在新模型下静默不生效"
     fi
 done
-if [ ! -f "$ROOT_DIR/server/src/main/java/dev/pushbox/server/config/DevCredentialsGuard.java" ] \
-    && [ ! -f "$ROOT_DIR/server/src/main/java/dev/pushbox/server/config/ProdPlaintextMediaGuard.java" ]; then
+if [ ! -f "$ROOT_DIR/apps/server/src/main/java/dev/pushbox/server/config/DevCredentialsGuard.java" ] \
+    && [ ! -f "$ROOT_DIR/apps/server/src/main/java/dev/pushbox/server/config/ProdPlaintextMediaGuard.java" ]; then
     pass "两个环境变量守卫已随旧模型一起删除"
 fi
 
 # profile 文件也不该回来：application-{dev,prod}.yml 的全部内容是 ${PB_*} 映射，
 # 留着就会有人以为"设个 profile 就能配"，而 SPRING_PROFILES_ACTIVE 现在也没人传了。
 for gone in application-dev.yml application-prod.yml; do
-    if [ -f "$ROOT_DIR/server/src/main/resources/$gone" ]; then
+    if [ -f "$ROOT_DIR/apps/server/src/main/resources/$gone" ]; then
         fail "$gone 又出现了：它通篇是 \${PB_*} 映射，那些键已经没人消费"
     fi
 done
-if [ ! -f "$ROOT_DIR/server/src/main/resources/application-dev.yml" ] \
-    && [ ! -f "$ROOT_DIR/server/src/main/resources/application-prod.yml" ]; then
+if [ ! -f "$ROOT_DIR/apps/server/src/main/resources/application-dev.yml" ] \
+    && [ ! -f "$ROOT_DIR/apps/server/src/main/resources/application-prod.yml" ]; then
     pass "只剩一份 application.yml（没有 profile 分叉，也就没有\"改了 dev 忘了 prod\"）"
 fi
 
@@ -347,7 +347,7 @@ fi
 # "写得进去但跑不起来"的配置，而症状全在启动之后：
 #   口令与主钥同时填 → 用哪把无从判断；口令太短 → 图片"加密了"其实等于没加密；
 #   勾了对象存储却没填桶 → 图片一路 404；库地址填 127.0.0.1 → 容器连的是它自己。
-INSTALL_VALIDATE="$ROOT_DIR/server/src/main/java/dev/pushbox/server/setup/InstallServer.java"
+INSTALL_VALIDATE="$ROOT_DIR/apps/server/src/main/java/dev/pushbox/server/setup/InstallServer.java"
 for needle in '加密口令与主钥只能填一个' 'MIN_PASSPHRASE_CODE_POINTS' 'Access Key 与 Secret Key 都要填' '容器里的 127.0.0.1 是容器自己' '管理台口令至少 8 个字符' '运维网段要写成 CIDR'; do
     if grep -q "$needle" "$INSTALL_VALIDATE"; then
         pass "安装页仍守着：$needle"
@@ -419,7 +419,7 @@ fi
 
 # application.yml 是最后一道默认值，里面不该再有 ${...} 插值：Spring 对解析不出来的占位符
 # 抛的是 Could not resolve placeholder，进程直接退出，而不是"退回默认值"。
-if grep -qE '\$\{' "$ROOT_DIR/server/src/main/resources/application.yml"; then
+if grep -qE '\$\{' "$ROOT_DIR/apps/server/src/main/resources/application.yml"; then
     fail "application.yml 里还有 \${} 插值：没设对应变量时进程会因 Could not resolve placeholder 启动即退出（配置应由 EnvironmentPostProcessor 覆盖）"
 else
     pass "application.yml 全是字面默认值（覆盖靠 EnvironmentPostProcessor，不靠占位符）"
@@ -432,7 +432,7 @@ PORT_REFS_OK=1
 grep -q 'reverse_proxy pushbox-server:7404' "$ROOT_DIR/infra/Caddyfile" || PORT_REFS_OK=0
 grep -q '"127.0.0.1:7404:7404"' "$ROOT_DIR/infra/docker-compose.yml" || PORT_REFS_OK=0
 grep -q '/dev/tcp/127.0.0.1/7404' "$ROOT_DIR/infra/docker-compose.yml" || PORT_REFS_OK=0
-grep -qE '^[[:space:]]*port: 7404$' "$ROOT_DIR/server/src/main/resources/application.yml" || PORT_REFS_OK=0
+grep -qE '^[[:space:]]*port: 7404$' "$ROOT_DIR/apps/server/src/main/resources/application.yml" || PORT_REFS_OK=0
 if [ "$PORT_REFS_OK" = "1" ]; then
     pass "容器内端口 7404 四处一致（application.yml / Caddyfile 上游 / compose 映射 / compose 探活）"
 else
@@ -454,14 +454,14 @@ fi
 # 凭据明文会落在这些地方：
 #   data/config/pushbox.json —— 新模型下**这是主战场**：安装页写出的那份配置里有库口令、
 #     Access/Secret Key、加密口令与主钥，而且它按设计就是明文（用户明确要求不再假装
-#     "生产环境没有明文密码"）。工作目录随启动位置变：`mvn -pl server test` 落在 server/data/，
+#     "生产环境没有明文密码"）。工作目录随启动位置变：`mvn -pl :pushbox-server test` 落在 apps/server/data/，
 #     直接跑 jar 落在仓库根的 data/，所以两个路径都要挡。
 #   infra/env/local.env —— 开发机的凭据（只给 deploy-wsl.sh 与本地测试用）。
 #   infra/.env / .env —— compose 的 --env-file，装的是第三方容器与 Caddy 的口令。
 #   .idea/ —— IDEA 把运行配置的 Environment variables 写进 workspace.xml。
 # 全靠 .gitignore 挡，所以"忽略规则还在"本身就是发布判据：少一行，下一次谁跑了一次安装页
 # 就等于把整份凭据提交上去了——而且它删不掉，公开仓的历史里会一直留着。
-for pat in 'infra/env/local.env' '^\.env$' '^\.idea/' '^/data/' '^/server/data/'; do
+for pat in 'infra/env/local.env' '^\.env$' '^\.idea/' '^/data/' '^/apps/server/data/'; do
     if grep -qE "$pat" "$ROOT_DIR/.gitignore"; then
         pass ".gitignore 仍然排除 $pat"
     else
@@ -471,15 +471,15 @@ done
 
 # 上一道只判"规则在"，这一道判"规则真的生效"：拿 git 自己问一次这两个目录会不会被收进提交。
 # 规则写在 .gitignore 里但被后面的取反规则翻回来、或者路径写错一层，grep 是看不出来的。
-for d in data server/data; do
+for d in data apps/server/data; do
     if [ -d "$ROOT_DIR/$d" ] && [ -n "$(git -C "$ROOT_DIR" status --porcelain --ignored=no -- "$d" 2>/dev/null)" ]; then
         fail "$d/ 里有 git 看得见的文件：$(git -C "$ROOT_DIR" status --porcelain -- "$d" | head -3 | tr '\n' ' ') —— 那份 pushbox.json 装着全部凭据"
     fi
 done
-if [ -z "$(git -C "$ROOT_DIR" ls-files -- 'data/**' 'server/data/**' 2>/dev/null)" ]; then
-    pass "data/ 与 server/data/ 都不在版本控制里（安装页写出的明文凭据进不了提交）"
+if [ -z "$(git -C "$ROOT_DIR" ls-files -- 'data/**' 'apps/server/data/**' 2>/dev/null)" ]; then
+    pass "data/ 与 apps/server/data/ 都不在版本控制里（安装页写出的明文凭据进不了提交）"
 else
-    fail "已经有文件被提交进 data/ 或 server/data/：$(git -C "$ROOT_DIR" ls-files -- 'data/**' 'server/data/**' | head -3 | tr '\n' ' ')"
+    fail "已经有文件被提交进 data/ 或 apps/server/data/：$(git -C "$ROOT_DIR" ls-files -- 'data/**' 'apps/server/data/**' | head -3 | tr '\n' ' ')"
 fi
 
 # 模板、文档、脚本与站点里都不该出现真实主机地址（那本身就是可拼出拓扑的情报）。
@@ -514,8 +514,8 @@ fi
 LEAKY_CODE=$(grep -rhoE --binary-files=without-match \
     --exclude-dir='bin' --exclude-dir='obj' --exclude-dir='build' --exclude-dir='node_modules' \
     '\b100\.9[0-9]\.[0-9]+\.[0-9]+\b' \
-    "$ROOT_DIR/android/app/src" "$ROOT_DIR/server/src" "$ROOT_DIR/windows/PushBox.Windows" \
-    "$ROOT_DIR/windows/PushBox.Crypto.Tests" "$ROOT_DIR/web-admin/src" 2>/dev/null \
+    "$ROOT_DIR/android/app/src" "$ROOT_DIR/apps/server/src" "$ROOT_DIR/windows/PushBox.Windows" \
+    "$ROOT_DIR/windows/PushBox.Crypto.Tests" "$ROOT_DIR/apps/web-admin/src" 2>/dev/null \
     | sort -u || true)
 if [ -n "$LEAKY_CODE" ]; then
     fail "代码/测试里出现真实地址：$(echo "$LEAKY_CODE" | tr '\n' ' ')"
@@ -800,7 +800,7 @@ done
 # 判据里不写死"多少个端点"：条数跟着代码与文档一起动，写死就变成下一条会腐烂的断言。
 pb_routes_from_code() {
     local f base p
-    for f in "$ROOT_DIR"/server/src/main/java/dev/pushbox/server/web/*.java; do
+    for f in "$ROOT_DIR"/apps/server/src/main/java/dev/pushbox/server/web/*.java; do
         base=$(grep -oP '^@RequestMapping\("\K[^"]+' "$f" | head -1 || true)
         {
             # 方法级：@GetMapping("/x")，以及 @PostMapping(path = "${pb.ingest.base-path:/message}")
@@ -815,11 +815,11 @@ pb_routes_from_code() {
         done
     done
     # WebSocket 端点不在 controller 注解里，是 registry.addHandler(handler, "/ws")
-    grep -rhoP 'addHandler\([^,]*,\s*"\K[^"]+' "$ROOT_DIR"/server/src/main/java --include=*.java || true
+    grep -rhoP 'addHandler\([^,]*,\s*"\K[^"]+' "$ROOT_DIR"/apps/server/src/main/java --include=*.java || true
     # 安装页那个端点也不在 controller 注解里：InstallServer 用的是 JDK 自带的 HttpServer，
     # 注册方式是 createContext("/api/v1/setup", ...)，而它跑在 Spring 之前，所以永远不会有 @*Mapping。
     # 只收 /api 开头的：同一个 createContext 还注册了 "/"（表单页本身），那不是接口路径。
-    grep -rhoP 'createContext\("\K/api[^"]+' "$ROOT_DIR"/server/src/main/java --include=*.java || true
+    grep -rhoP 'createContext\("\K/api[^"]+' "$ROOT_DIR"/apps/server/src/main/java --include=*.java || true
 }
 
 # 文档里的路径先归一化再比：`{channelNo}` 与 `{}` 与 `12345678` 与一串 ULID 都是同一个位置上的

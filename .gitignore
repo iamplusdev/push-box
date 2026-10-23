@@ -61,10 +61,10 @@ android/.kotlin/
 
 # 运行期数据目录：安装页写出的 config/pushbox.json（**里面有库口令、Access/Secret Key、
 # 加密口令与主钥，全是明文**）、本地存储的图片、日志。落在哪取决于工作目录——
-# 直接跑 jar 是仓库根，`mvn -pl server test` 是 server/，所以两个路径都要挡。
+# 直接跑 jar 是仓库根，`mvn -pl :pushbox-server test` 是 apps/server/，所以两个路径都要挡。
 # 图片那层长成 data/media/media/<msg_id>/0.bin：多出来的一层是对象键自带的 `media/` 前缀，不是配错了目录。
 /data/
-/server/data/
+/apps/server/data/
 
 # 产物层：release 脚本把各端编译结果收进这里（jar / apk / exe），仓库只留 .gitkeep
 /output/*

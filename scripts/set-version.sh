@@ -103,8 +103,8 @@ if want windows; then
     fi
 fi
 
-# 5. Maven 反应堆版本（root 自身 version + core/server 的 <parent><version>）
-#    三处必须一起改：server/pom.xml 依赖的 pushbox-parent 版本与根 pom 不一致时，
+# 5. Maven 反应堆版本（root 自身 version + packages/core 与 apps/server 的 <parent><version>）
+#    三处必须一起改：apps/server/pom.xml 依赖的 pushbox-parent 版本与根 pom 不一致时，
 #    整个反应堆 Non-resolvable parent POM，服务端与 Docker 镜像直接构建不了。
 #    改 <artifactId>pushbox-parent</artifactId> 之后三行内的第一个 <version>（覆盖自身版本
 #    与 <parent> 块两种上下文），用 gawk 而非 sed——BRE 的反向引用不支持重复。
@@ -122,10 +122,10 @@ set_pom_parent_version() {
 if want server; then
     set_pom_parent_version "$ROOT_DIR/pom.xml"
     set_pom_parent_version "$ROOT_DIR/packages/core/pom.xml"
-    set_pom_parent_version "$ROOT_DIR/server/pom.xml"
+    set_pom_parent_version "$ROOT_DIR/apps/server/pom.xml"
 
     # 6. Web 管理台 package.json（版本只出现在 version 字段，vite build 产物不带版本注入）
-    WEB_ADMIN_PKG="$ROOT_DIR/web-admin/package.json"
+    WEB_ADMIN_PKG="$ROOT_DIR/apps/web-admin/package.json"
     if [ -f "$WEB_ADMIN_PKG" ]; then
         sed -i.bak "s|\"version\": \"[^\"]*\"|\"version\": \"$VERSION\"|" "$WEB_ADMIN_PKG"
         rm -f "${WEB_ADMIN_PKG}.bak"

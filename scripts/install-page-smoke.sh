@@ -12,7 +12,7 @@
 # 系统类加载器本来就看得见驱动，所以 InstallServerTest 全绿也照样漏掉这一条。
 #
 # 用法:
-#   bash scripts/install-page-smoke.sh                       # 自己找 server/target 下最新的 jar
+#   bash scripts/install-page-smoke.sh                       # 自己找 apps/server/target 下最新的 jar
 #   bash scripts/install-page-smoke.sh path/to/app.jar
 #   SMOKE_PORT=7499 bash scripts/install-page-smoke.sh       # 换端口（默认 7499）
 #
@@ -33,11 +33,11 @@ pass() { echo "  ✅ $1"; pass_n=$((pass_n + 1)); }
 fail() { echo "  ❌ $1"; fail_n=$((fail_n + 1)); }
 
 if [ -z "$JAR" ]; then
-    JAR="$(ls -1t "$ROOT_DIR"/server/target/pushbox-server-*.jar 2>/dev/null | head -1)"
+    JAR="$(ls -1t "$ROOT_DIR"/apps/server/target/pushbox-server-*.jar 2>/dev/null | head -1)"
 fi
 if [ -z "$JAR" ] || [ ! -f "$JAR" ]; then
     echo "❌ 找不到 jar：$JAR"
-    echo "   先出包：JAVA_HOME=<jdk21> mvn -B -pl server -am -DskipTests package"
+    echo "   先出包：JAVA_HOME=<jdk21> mvn -B -pl :pushbox-server -am -DskipTests package"
     exit 1
 fi
 echo "安装页冒烟：$JAR（端口 $PORT）"

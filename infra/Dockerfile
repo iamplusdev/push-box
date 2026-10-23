@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
-# §11.2 服务端多阶段构建。构建上下文必须是仓库根（要 packages/core/ + server/ + web-admin/ + 根 pom.xml），
+# §11.2 服务端多阶段构建。构建上下文必须是仓库根（要 packages/core/ + apps/server/ + apps/web-admin/ + 根 pom.xml），
 # compose 里写成 context: .. / dockerfile: infra/Dockerfile。
-# web-admin SPA 在独立 node 阶段构建后拷进 server 的静态资源目录，最终 fat jar 自带前端，
+# apps/web-admin SPA 在独立 node 阶段构建后拷进 apps/server 的静态资源目录，最终 fat jar 自带前端，
 # 由同一个 Spring Boot 进程在 7404 上同时吐 API、WebSocket 与管理台页面（同源，无需 CORS）。
 #
 # 这个镜像**不带任何配置**：没有 ENV，没有必填变量，没有占位值。第一次启动时它自己在 7404 上
@@ -17,9 +17,9 @@
 FROM node:22-alpine AS webbuild
 WORKDIR /web
 # 先只拷依赖清单，让 npm ci 这一层在 package-lock 不变时被缓存复用。
-COPY web-admin/package.json web-admin/package-lock.json ./
+COPY apps/web-admin/package.json apps/web-admin/package-lock.json ./
 RUN npm ci
-COPY web-admin/ ./
+COPY apps/web-admin/ ./
 RUN npm run build
 
 FROM maven:3.9-eclipse-temurin-21 AS build
@@ -27,17 +27,17 @@ WORKDIR /src
 COPY pom.xml ./
 COPY packages/core/pom.xml packages/core/
 COPY packages/core/src packages/core/src
-COPY server/pom.xml server/
-COPY server/src server/src
+COPY apps/server/pom.xml apps/server/
+COPY apps/server/src apps/server/src
 # 把 SPA 打进 jar：拷进 server 的静态资源目录，mvn package 会一并塞进 BOOT-INF/classes/static。
-COPY --from=webbuild /web/dist server/src/main/resources/static
+COPY --from=webbuild /web/dist apps/server/src/main/resources/static
 # 依赖缓存放 BuildKit cache mount：源码改动不重下几百个依赖，但也不把 .m2 烙进镜像层。
 # 单测跑在 CI 里把关跨端向量，这里只为出包，跳过避免镜像构建拖慢。
 RUN --mount=type=cache,target=/root/.m2 mvn -B -DskipTests package
 
 FROM eclipse-temurin:21-jre AS run
 WORKDIR /app
-COPY --from=build /src/server/target/pushbox-server-*.jar app.jar
+COPY --from=build /src/apps/server/target/pushbox-server-*.jar app.jar
 
 # 入口只剩一件事：确认数据目录写得动，然后 exec java。
 #

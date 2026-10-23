@@ -66,9 +66,9 @@ pb_step "3/6 本地构建与测试"
 if [ "$PB_SKIP_TESTS" = 1 ]; then
   pb_warn "已跳过（--skip-tests）"
 elif [ "$PB_DRY_RUN" = 1 ]; then
-  pb_info "[dry-run] 本来会跑：mvn -B -pl server -am test、web-admin 构建、mvn package + 安装页冒烟、release-verify.sh"
+  pb_info "[dry-run] 本来会跑：mvn -B -pl :pushbox-server -am test、apps/web-admin 构建、mvn package + 安装页冒烟、release-verify.sh"
 else
-  # mvn 必须跑在 JDK 21 上（server/pom.xml 要 release=21）。本机默认 JAVA_HOME 指向 JDK 8，
+  # mvn 必须跑在 JDK 21 上（apps/server/pom.xml 要 release=21）。本机默认 JAVA_HOME 指向 JDK 8，
   # 不覆盖的话会在 pushbox-core 直接炸 "class file version 61.0 ... only recognizes up to 52.0"。
   if [ -d /d/Apps/DE/Java/jdk-21.0.8 ]; then
     export JAVA_HOME=/d/Apps/DE/Java/jdk-21.0.8
@@ -79,19 +79,19 @@ else
   fi
   java -version 2>&1 | head -1
 
-  pb_info "服务端测试（mvn -B -pl server -am test）"
+  pb_info "服务端测试（mvn -B -pl :pushbox-server -am test）"
   # 先删上一轮的 surefire 报告：mvn test 不清 target，而被删掉的测试类（比如随配置重构一起
   # 没了的 DevCredentialsGuardTest）留下的孤儿报告会一直把用例总数抬上去——那样"数一遍报告"
   # 这条闸判的是历史，不是这一轮。删报告比 mvn clean 便宜，且不影响增量编译。
-  rm -rf "$PB_ROOT"/server/target/surefire-reports "$PB_ROOT"/packages/core/target/surefire-reports
-  ( cd "$PB_ROOT" && mvn -B -pl server -am test ) || { pb_fail "服务端测试没过，发布中止（工作区未改动）"; exit 1; }
+  rm -rf "$PB_ROOT"/apps/server/target/surefire-reports "$PB_ROOT"/packages/core/target/surefire-reports
+  ( cd "$PB_ROOT" && mvn -B -pl :pushbox-server -am test ) || { pb_fail "服务端测试没过，发布中止（工作区未改动）"; exit 1; }
   pb_ok "服务端测试通过"
 
   # 退出码只回答"有没有红"：删了 @Test、改了 include 规则、整类没被 discover，它照样退 0。
   # 所以再数一遍报告。判据与 ci.yml 同源，基线也从 ci.yml 的 `if tests < N` 那一行读——
   # 唯一真值只有一处，两边不会各说一套。
   tests=0; skipped=0; files=0
-  for f in "$PB_ROOT"/server/target/surefire-reports/TEST-*.xml "$PB_ROOT"/packages/core/target/surefire-reports/TEST-*.xml; do
+  for f in "$PB_ROOT"/apps/server/target/surefire-reports/TEST-*.xml "$PB_ROOT"/packages/core/target/surefire-reports/TEST-*.xml; do
     [ -e "$f" ] || continue
     files=$((files + 1))
     t="$(grep -oP '<testsuite[^>]*\btests="\K[0-9]+'   "$f" | head -1)"; tests=$((tests + ${t:-0}))
@@ -112,9 +112,9 @@ else
   fi
 
   pb_info "管理台构建（npm ci && npm run build）"
-  ( cd "$PB_ROOT/web-admin" && npm ci --no-audit --no-fund && npm run build ) \
+  ( cd "$PB_ROOT/apps/web-admin" && npm ci --no-audit --no-fund && npm run build ) \
     || { pb_fail "管理台构建没过，发布中止"; exit 1; }
-  [ -s "$PB_ROOT/web-admin/dist/index.html" ] || { pb_fail "dist/index.html 是空的"; exit 1; }
+  [ -s "$PB_ROOT/apps/web-admin/dist/index.html" ] || { pb_fail "dist/index.html 是空的"; exit 1; }
   pb_ok "管理台构建通过"
 
   # 出包再真跑一次安装页。有些坑只有 fat jar 里才出现：DriverManager 初始化时用**系统类加载器**
@@ -122,7 +122,7 @@ else
   # （它在 Spring 之前跑）直接 getConnection 会报 "No suitable driver found"。上面那 300 来条
   # 单测跑的全是 exploded classpath，那条路系统类加载器本来就看得见驱动——全绿也照不出来。
   pb_info "出包并真跑一次安装页（fat jar 独有的类加载坑）"
-  ( cd "$PB_ROOT" && mvn -B -pl server -am -DskipTests package ) || { pb_fail "打包失败，发布中止"; exit 1; }
+  ( cd "$PB_ROOT" && mvn -B -pl :pushbox-server -am -DskipTests package ) || { pb_fail "打包失败，发布中止"; exit 1; }
   pb_info "安装页冒烟（scripts/install-page-smoke.sh）"
   ( cd "$PB_ROOT" && bash scripts/install-page-smoke.sh ) || { pb_fail "安装页冒烟没过，发布中止"; exit 1; }
   pb_ok "安装页在 fat jar 里真跑得起来"
@@ -141,9 +141,9 @@ else
 
   # 重出一份带新版本号的 jar 收进 output/。第 3 步的包已经证明能跑，但它的名字还是旧版本。
   pb_info "按 $PB_TARGET 重出 jar 并收进 output/"
-  ( cd "$PB_ROOT" && mvn -B -pl server -am -DskipTests package ) \
+  ( cd "$PB_ROOT" && mvn -B -pl :pushbox-server -am -DskipTests package ) \
     || { pb_fail "重出包失败；版本号已在工作区、尚未提交，修完重跑本脚本"; exit 1; }
-  pb_collect "$(ls "$PB_ROOT"/server/target/pushbox-server-*.jar | head -1)" server-jar "pushbox-server-$PB_TARGET.jar"
+  pb_collect "$(ls "$PB_ROOT"/apps/server/target/pushbox-server-*.jar | head -1)" server-jar "pushbox-server-$PB_TARGET.jar"
 fi
 
 # ---- 5. 提交与打标签 ----
