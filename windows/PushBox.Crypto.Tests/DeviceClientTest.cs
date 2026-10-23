@@ -294,7 +294,7 @@ public class DeviceClientTest
         Assert.Equal(HttpMethod.Delete.Method, request.Method);
         Assert.Equal("/api/v1/messages/01JTESTMESSAGE000000000000", request.Path);
         // 单条删除把 id 放在路径里，所以 canonical 的第四行是空行、第六行是 sha256("")：
-        // deploy/probe 的 ⑪ 已经拿真 HTTP 把这两个空位核过，向量文件里没有 DELETE 这一支
+        // infra/probe 的 ⑪ 已经拿真 HTTP 把这两个空位核过，向量文件里没有 DELETE 这一支
         Assert.Empty(request.Query);
         Assert.Empty(request.Body);
     }

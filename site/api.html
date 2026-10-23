@@ -283,7 +283,7 @@ print(urllib.request.urlopen(req).read().decode())</code></pre>
   <ol class="steps">
     <li>
       <b>把主机名精确加进 <code>pb.media.allow-hosts</code></b>
-      <pre class="code" data-code="bash"><code>bash deploy/run-dev.sh --pb.media.allow-hosts=grafana.internal:3000</code></pre>
+      <pre class="code" data-code="bash"><code>bash infra/run-dev.sh --pb.media.allow-hosts=grafana.internal:3000</code></pre>
       <span class="sub">默认禁抓私网与 <code>100.64.0.0/10</code>。写的是精确 <code>host</code> 或 <code>host:port</code>，不是前缀匹配；留空表示图片来源全为公网。</span>
     </li>
   </ol>

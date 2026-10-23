@@ -8,7 +8,7 @@
 
 > 服务端**不需要环境变量**（`PB_*` 仍然认，优先级还高于配置文件，理由见 `部署快速参考.md` 开头那段）。
 > 库地址、口令、AK/SK、管理台口令全都在安装页里填，落进容器的
-> `/app/data/config/pushbox.json`。`deploy/wsl-test.env` 只是 `deploy-wsl.sh` 与 compose 的输入：
+> `/app/data/config/pushbox.json`。`infra/wsl-test.env` 只是 `deploy-wsl.sh` 与 compose 的输入：
 > 前者用它拼那一次 POST 的 JSON，后者用它喂 mysql / rustfs / grafana 那几个第三方镜像。
 
 ## 前置条件
@@ -24,7 +24,7 @@
 
 3. **测试环境文件**（不入库，`.gitignore` 已排掉）
    ```bash
-   cp deploy/wsl-test.env.example deploy/wsl-test.env
+   cp infra/wsl-test.env.example infra/wsl-test.env
    ```
    里面的值都是测试值，但**别把它提交上去**：进了公开仓库就等于对全世界公开"这套部署的口令长什么样"，
    而 copy-paste 是双向的——有人会把它当模板用在真机上。
@@ -34,13 +34,13 @@
 首跑四条命令，顺序不能换（桶不会自动出现，`setup` 之前它必须已经在了）：
 
 ```bash
-cd deploy
+cd infra
 ./deploy-wsl.sh build && ./deploy-wsl.sh up && ./deploy-wsl.sh bucket && ./deploy-wsl.sh setup
 ```
 
 | 子命令 | 做什么 |
 |--------|--------|
-| `build` | 用项目根目录的 `deploy/Dockerfile` 构建服务端镜像 |
+| `build` | 用项目根目录的 `infra/Dockerfile` 构建服务端镜像 |
 | `up` | 起 MySQL 8.4 + RustFS + PushBox Server + Caddy。服务端会**停在安装页上**，这是正常的 |
 | `bucket` | 在 RustFS 上建桶 `pushbox`（借 rustfs 自己的网络命名空间跑 `amazon/aws-cli`，因为 compose 没给它发布端口，而 `minio/mc` 已从 Docker Hub 下架） |
 | `setup` | 把 `wsl-test.env` 里的值拼成 JSON 提交给安装页，然后等 `/healthz` 通 |
@@ -108,7 +108,7 @@ wsl docker compose -f docker-compose-wsl.yml --env-file wsl-test.env ps
 
 ## 配置说明
 
-`deploy/wsl-test.env`（模板是 `deploy/wsl-test.env.example`）里的键分三类：
+`infra/wsl-test.env`（模板是 `infra/wsl-test.env.example`）里的键分三类：
 
 | 键 | 给谁用 | 说明 |
 |----|--------|------|
@@ -200,7 +200,7 @@ wsl docker stats pushbox-pushbox-server-1
 
 ## 数据持久化
 
-全是 named volume，**不是** `deploy/data/` 下的目录：
+全是 named volume，**不是** `infra/data/` 下的目录：
 
 | 卷 | 装什么 |
 |----|--------|
@@ -209,7 +209,7 @@ wsl docker stats pushbox-pushbox-server-1
 | `pushbox-test_rustfs_data` | 桶里的对象 |
 | `pushbox-test_caddy_data` / `_caddy_config` | Caddy 自己的状态 |
 
-只有 Prometheus 与 Grafana 用 `deploy/data/` 下的绑定挂载，`up` 会自动 `mkdir`。
+只有 Prometheus 与 Grafana 用 `infra/data/` 下的绑定挂载，`up` 会自动 `mkdir`。
 
 刻意不把服务端那份挂成宿主目录：`deploy-wsl.sh` 多半跑在 `/mnt/d` 上，drvfs 不支持 `chown`，
 宿主目录属主进不了 10001，写入探针会直接拒绝启动。清数据用 `./deploy-wsl.sh clean`，不是 `rm` 目录。
@@ -227,4 +227,4 @@ wsl docker stats pushbox-pushbox-server-1
 5. 启用对象加密（安装页里勾「加密存储」+ 填口令）
 6. 调整资源限制
 
-参考 `deploy/docker-compose.yml` 与 `README.md` 的「Docker 部署」章节。
+参考 `infra/docker-compose.yml` 与 `README.md` 的「Docker 部署」章节。

@@ -64,7 +64,7 @@ public sealed class DeleteReporterTest : IDisposable
         Assert.Equal("/api/v1/messages/grafana-2", request.Path);
         // id 在路径里，所以 query 是空的：canonical 的第四行因此是空行
         Assert.Empty(request.Query);
-        // DELETE 没有正文，第六行是 sha256("")——deploy/probe 的 ⑪ 用真 HTTP 把这条口径钉过
+        // DELETE 没有正文，第六行是 sha256("")——infra/probe 的 ⑪ 用真 HTTP 把这条口径钉过
         Assert.Empty(request.Body);
         Assert.Equal("Bearer pbk_1a2b3c4d5e6f", request.Header("Authorization"));
         Assert.Equal("dev_7f3a", request.Header("X-PB-Device"));

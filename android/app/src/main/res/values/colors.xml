@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 自适应图标的背景层。logo/Android/adaptive_background.png 导出时是一个空图层（432×432 全透明），
+    <!-- 自适应图标的背景层。assets/icons/Android/adaptive_background.png 导出时是一个空图层（432×432 全透明），
          而 API 26+ 的遮罩要求背景铺满整张画布，所以底色改由这里承担；换底色只改这一行。 -->
     <color name="ic_launcher_background">#F2F5F9</color>
 </resources>

@@ -2,7 +2,7 @@
 # §11.2 D1=B 自签路线：一次性生成本机根 CA，并用它签一张带域名/IP SAN 的服务端证书。
 #
 # 在哪跑：在一台"管理机"上跑，不在部署机上跑。跑完只把 certs/pushbox.crt、certs/pushbox.key、
-# certs/pushbox_ca.crt 拷到部署机的 deploy/certs/；根 CA 私钥 pushbox_ca.key 离线保存、绝不进仓库或部署机。
+# certs/pushbox_ca.crt 拷到部署机的 infra/certs/；根 CA 私钥 pushbox_ca.key 离线保存、绝不进仓库或部署机。
 #
 # 用法：
 #   PUSHBOX_HOST=pushbox.internal [PUSHBOX_IP=<部署机IP>] ./gen-ca.sh

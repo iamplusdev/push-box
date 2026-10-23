@@ -7,5 +7,5 @@ contact_links:
     url: https://iamplusdev.github.io/push-box/
     about: 概览、安装与部署、三本 API 参考、协议与加密都在站点上；站点源码在本仓库 site/。
   - name: 部署与联调口径
-    url: https://github.com/iamplusdev/push-box/blob/main/deploy/部署快速参考.md
+    url: https://github.com/iamplusdev/push-box/blob/main/infra/部署快速参考.md
     about: 端口、建库建桶、环境变量这些坑大多已有成文判据，先对着排查再开 issue。

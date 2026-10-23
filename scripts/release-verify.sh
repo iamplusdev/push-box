@@ -53,10 +53,10 @@ section "检查各端版本号自洽"
 ANDROID_VERSION=$(grep 'versionName' "$ROOT_DIR/android/app/build.gradle.kts" | grep -oP '"[^"]+"' | tr -d '"')
 WINDOWS_VERSION=$(grep '<Version>' "$ROOT_DIR/windows/PushBox.Windows/PushBox.Windows.csproj" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
 INNO_VERSION=$(grep '#define MyAppVersion' "$ROOT_DIR/windows/installer/PushBox.iss" | grep -oP '"[^"]+"' | tr -d '"')
-DOCKER_TAG=$(grep -E 'image: (docker\.io/iamplusdev/push-box|pushbox/server):' "$ROOT_DIR/deploy/docker-compose.yml" | head -1 | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
+DOCKER_TAG=$(grep -E 'image: (docker\.io/iamplusdev/push-box|pushbox/server):' "$ROOT_DIR/infra/docker-compose.yml" | head -1 | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
 MAVEN_VERSION=$(grep -m1 '<version>' "$ROOT_DIR/pom.xml" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
-WSL_TAG=$(grep -m1 -E 'image: pushbox/server:' "$ROOT_DIR/deploy/docker-compose-wsl.yml" | sed -E 's/^.*://')
-WSL_DOC_TAG=$(grep -m1 -oE 'pushbox/server:[0-9]+\.[0-9]+\.[0-9]+' "$ROOT_DIR/deploy/WSL测试速查.md" | sed -E 's/^.*://')
+WSL_TAG=$(grep -m1 -E 'image: pushbox/server:' "$ROOT_DIR/infra/docker-compose-wsl.yml" | sed -E 's/^.*://')
+WSL_DOC_TAG=$(grep -m1 -oE 'pushbox/server:[0-9]+\.[0-9]+\.[0-9]+' "$ROOT_DIR/infra/WSL测试速查.md" | sed -E 's/^.*://')
 
 echo "服务端:  $MAVEN_VERSION（compose $DOCKER_TAG / WSL compose $WSL_TAG / WSL 文档 $WSL_DOC_TAG）"
 echo "Android: $ANDROID_VERSION"
@@ -67,11 +67,11 @@ echo "（三端版本号互相独立，不要求相等）"
 if ! [[ "$MAVEN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     fail "没从 pom.xml 读出 X.Y.Z 版本号（读到：'$MAVEN_VERSION'）：pom 写法变了就改这条判据的取值方式，别删"
 elif [ "$DOCKER_TAG" != "$MAVEN_VERSION" ]; then
-    fail "deploy/docker-compose.yml 钉的是 :$DOCKER_TAG，pom 是 $MAVEN_VERSION；照 compose 起的人拉不到这一版（跑 bash scripts/set-version.sh --only=server）"
+    fail "infra/docker-compose.yml 钉的是 :$DOCKER_TAG，pom 是 $MAVEN_VERSION；照 compose 起的人拉不到这一版（跑 bash scripts/set-version.sh --only=server）"
 elif [ "$WSL_TAG" != "$MAVEN_VERSION" ]; then
-    fail "deploy/docker-compose-wsl.yml 钉的是 :$WSL_TAG，pom 是 $MAVEN_VERSION（跑 bash scripts/set-version.sh --only=server）"
+    fail "infra/docker-compose-wsl.yml 钉的是 :$WSL_TAG，pom 是 $MAVEN_VERSION（跑 bash scripts/set-version.sh --only=server）"
 elif [ "$WSL_DOC_TAG" != "$MAVEN_VERSION" ]; then
-    fail "deploy/WSL测试速查.md 里的本地镜像名是 :$WSL_DOC_TAG，pom 是 $MAVEN_VERSION；照文档 buildx 出来的镜像 compose 会找不到（跑 bash scripts/set-version.sh --only=server）"
+    fail "infra/WSL测试速查.md 里的本地镜像名是 :$WSL_DOC_TAG，pom 是 $MAVEN_VERSION；照文档 buildx 出来的镜像 compose 会找不到（跑 bash scripts/set-version.sh --only=server）"
 else
     pass "服务端版本自洽: $MAVEN_VERSION（pom / 生产 compose / WSL compose / WSL 速查）"
 fi
@@ -92,8 +92,8 @@ else
 fi
 
 # Dockerfile 与 run-dev.sh 不许写死 jar 名：pom 的版本号一改，写死的那份就找不到 jar 了
-if grep -q 'pushbox-server-\*\.jar' "$ROOT_DIR/deploy/Dockerfile" \
-    && grep -q 'pushbox-server-\*\.jar' "$ROOT_DIR/deploy/run-dev.sh"; then
+if grep -q 'pushbox-server-\*\.jar' "$ROOT_DIR/infra/Dockerfile" \
+    && grep -q 'pushbox-server-\*\.jar' "$ROOT_DIR/infra/run-dev.sh"; then
     pass "Dockerfile 与 run-dev.sh 都按通配取 jar，不吃版本号"
 else
     fail "部署脚本里写死了 jar 文件名，版本号一改就找不到（应使用 pushbox-server-*.jar）"
@@ -124,7 +124,7 @@ fi
 # 只会让下一轮改版顺手删掉它、然后把这条闸判成"写法变了"。
 CI_BASELINE=$(grep -oE 'if tests < [0-9]+' "$ROOT_DIR/.github/workflows/ci.yml" | grep -oE '[0-9]+' | tail -1)
 TEST_COUNT_PATTERN='(core [0-9]+ \+ server [0-9]+|server [0-9]+ \+ core [0-9]+)'
-DOC_PATHS=(README.md docs/开发指南.md docs/测试指南.md 发布检查清单.md 发布准备报告.md CHANGELOG.md)
+DOC_PATHS=(README.md docs/开发指南.md docs/测试指南.md docs/release/发布检查清单.md docs/release/发布准备报告.md CHANGELOG.md)
 COUNT_HITS=$(git -C "$ROOT_DIR" grep -hhoE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | wc -l)
 COUNT_FILES=$(git -C "$ROOT_DIR" grep -lE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | wc -l)
 DOC_TOTALS=$(git -C "$ROOT_DIR" grep -hhoE "$TEST_COUNT_PATTERN" -- "${DOC_PATHS[@]}" | awk '{print $2 + $5}' | sort -un | tr '\n' ' ')
@@ -158,7 +158,7 @@ fi
 # site/ 与 Java 那条同因由排除：官网不写仓库内部用例数（2026-10-22 实测 5 个文件带计数，下限 3 够用）。
 CS_CI_BASELINE=$(grep -oE 'CS_BASELINE = [0-9]+' "$ROOT_DIR/.github/workflows/ci.yml" | grep -oE '[0-9]+' | tail -1)
 CS_KEYWORD_PATTERN='dotnet test|Windows 测试|C# 单测|C# 协议向量|冒烟命令'
-CS_SCAN_PATHS=(README.md docs/开发指南.md docs/测试指南.md docs/Windows开发环境安装教程.md docs/软件设计方案.md 发布检查清单.md 发布准备报告.md)
+CS_SCAN_PATHS=(README.md docs/开发指南.md docs/测试指南.md docs/Windows开发环境安装教程.md docs/软件设计方案.md docs/release/发布检查清单.md docs/release/发布准备报告.md)
 CS_LINES=$(git -C "$ROOT_DIR" grep -nE "$CS_KEYWORD_PATTERN" -- "${CS_SCAN_PATHS[@]}" \
     | grep -vE '2026-1[0-2]-[0-9]{2}' || true)
 CS_NUMS=$(printf '%s\n' "$CS_LINES" | grep -oE '[0-9]{3}[[:space:]]*/[[:space:]]*[0-9]{3}' | grep -oE '[0-9]{3}' | sort -un | tr '\n' ' ' || true)
@@ -183,7 +183,7 @@ fi
 # 镜像体积只在真构建过之后才知道（v1.1.0 实测 654 MB）。清单里不再单独列这一条，
 # 阈值由本脚本自己定义，所以这里只报实测数、不判失败：
 # "报了数"和"没人报"差别很大——后者会让下一个发版的人继续勾一条他以为过了的勾。
-IMAGE_REF=$(grep -m1 -E 'image: docker\.io/' "$ROOT_DIR/deploy/docker-compose.yml" | awk '{print $2}')
+IMAGE_REF=$(grep -m1 -E 'image: docker\.io/' "$ROOT_DIR/infra/docker-compose.yml" | awk '{print $2}')
 # 本机日常构建落的是 pushbox/server:<版本> 这个名字（compose 的 image: 只在拉 CI 产物时才用得上），
 # 所以两个名字都要试，否则脚本在开发机上永远报"判不了"，等于没加这条。
 LOCAL_REF="$IMAGE_REF"
@@ -219,7 +219,7 @@ section "检查生产环境密钥配置"
 # ① 只扫**取值行**（剥掉注释）：主 compose 里那段注释掉的拓扑 B 仍然合法地给 mysql/rustfs
 #    传 PB_DB_PASSWORD 之类的值——那是第三方镜像自己的口径，不是服务端的。
 #    PB_CADDY_HOST / PB_HTTP_PORT 同样排除：一个给 Caddy 容器，一个只是宿主侧端口映射。
-SERVER_ENV_HITS=$(sed 's/#.*//' "$ROOT_DIR/deploy/docker-compose.yml" "$ROOT_DIR/deploy/docker-compose.nas.yml" \
+SERVER_ENV_HITS=$(sed 's/#.*//' "$ROOT_DIR/infra/docker-compose.yml" "$ROOT_DIR/infra/docker-compose.nas.yml" \
     | grep -oE '\$\{?PB_[A-Z0-9_]+' | grep -vE 'PB_CADDY_HOST|PB_HTTP_PORT' | sort -u | tr '\n' ' ' || true)
 YML_ENV_HITS=$(grep -oE '\$\{PB_[A-Z0-9_]+' "$ROOT_DIR/server/src/main/resources/application.yml" | sort -u | tr '\n' ' ' || true)
 if [ -n "$SERVER_ENV_HITS$YML_ENV_HITS" ]; then
@@ -230,7 +230,7 @@ fi
 
 # ② 镜像里一个 ENV 都不该有。留一个"看起来无害"的默认值，就等于给下一个人留了一条
 #    "那就顺手填个值"的路，而镜像层里的东西删不掉：推出去之后改一个 ENV 就得重出 tag。
-if grep -qE '^ENV ' "$ROOT_DIR/deploy/Dockerfile"; then
+if grep -qE '^ENV ' "$ROOT_DIR/infra/Dockerfile"; then
     fail "Dockerfile 里又有 ENV 段了：镜像应当不带任何配置，第一次启动由安装页把配置写进 /app/data"
 else
     pass "镜像不烘焙任何配置（没有 ENV，也就没有占位值与\"填错一半\"的现场）"
@@ -292,12 +292,12 @@ fi
 # 判据也跟着简化成两条，都不需要 docker：
 #   ① 不许再出现 `\$`（那是给不带引号的 heredoc 用的写法，带引号之后会原样落进镜像变成字面反斜杠）；
 #   ② 原样取出就得过 `bash -n`（不再有"还原规则"，也就没有"还原规则写错了"这类失效）。
-if ! grep -q "^COPY <<'EOF' /app/entrypoint.sh$" "$ROOT_DIR/deploy/Dockerfile"; then
+if ! grep -q "^COPY <<'EOF' /app/entrypoint.sh$" "$ROOT_DIR/infra/Dockerfile"; then
     fail "Dockerfile 的 entrypoint heredoc 不是带引号的 <<'EOF'：不加引号时 BuildKit 会展开 \$ 并吃掉反斜杠，镜像里的脚本与仓库里读到的不是同一份"
 fi
-EP_HEREDOC=$(awk '/^COPY <<.EOF. \/app\/entrypoint\.sh$/{f=1;next} f && /^EOF$/{exit} f' "$ROOT_DIR/deploy/Dockerfile")
+EP_HEREDOC=$(awk '/^COPY <<.EOF. \/app\/entrypoint\.sh$/{f=1;next} f && /^EOF$/{exit} f' "$ROOT_DIR/infra/Dockerfile")
 if [ -z "$EP_HEREDOC" ]; then
-    fail "没从 deploy/Dockerfile 里取出 entrypoint 的 heredoc（那段的路径标记变了，这条闸和镜像一起失守）"
+    fail "没从 infra/Dockerfile 里取出 entrypoint 的 heredoc（那段的路径标记变了，这条闸和镜像一起失守）"
 else
     if printf '%s' "$EP_HEREDOC" | grep -q '[\\]\$'; then
         fail "entrypoint 里还有转义美元符：带引号的 heredoc 会把它原样送进镜像，脚本里就成了一个字面反斜杠"
@@ -317,7 +317,7 @@ fi
 # NAS 图形界面的「存储位置」直接由镜像的 VOLUME 渲染：少这一句，表单里一行都没有，用户只能靠读文档
 # 手动补。收敛成一个 /app/data 之后，表单里只有一行要选、chown 只 chown 一次、备份只指一个目录
 # （配置、图片、日志全在里面）。这条只查源码；发布后还要查 Hub 镜像的 config blob（见 CHANGELOG）。
-if grep -qE '^VOLUME \["/app/data"\]' "$ROOT_DIR/deploy/Dockerfile"; then
+if grep -qE '^VOLUME \["/app/data"\]' "$ROOT_DIR/infra/Dockerfile"; then
     pass "Dockerfile 声明了唯一的 VOLUME /app/data（config + media + logs 同属一处）"
 else
     fail "Dockerfile 的 VOLUME 不是单个 /app/data：飞牛/群晖的「存储位置」表单要么是多行、要么是空的"
@@ -326,8 +326,8 @@ fi
 # 图形界面把 /app/data 指到 NAS 共享文件夹时最容易撞上权限：绑定挂载带来宿主目录的属主（通常 root），
 # 而容器进程是 uid 10001。这一层必须留在 Java 之前判——Logback 在 Spring 起来之前就要打开
 # data/logs/pushbox-server.log，写不动的话容器只会吐一段没人读的 Permission denied 堆栈。
-if grep -q '不可写（容器内进程是 uid 10001）' "$ROOT_DIR/deploy/Dockerfile" \
-    && grep -q 'chown -R 10001:10001' "$ROOT_DIR/deploy/Dockerfile"; then
+if grep -q '不可写（容器内进程是 uid 10001）' "$ROOT_DIR/infra/Dockerfile" \
+    && grep -q 'chown -R 10001:10001' "$ROOT_DIR/infra/Dockerfile"; then
     pass "entrypoint 在启动 Java 前预检 /app/data 可写，并把 chown 的修法一起说出来"
 else
     fail "entrypoint 没预检数据目录：/app/data 绑到 root 属主目录时，容器只会吐 Logback 的 Permission denied 堆栈"
@@ -336,7 +336,7 @@ fi
 # 上面那条只查了 `^ENV `，但键名还能从别处漏进镜像：entrypoint 里 export、ARG 转 ENV、
 # CMD 里 -DPB_xxx。任何一种都会让照 docker inspect 猜配置的人以为"这个键还能填"，
 # 而它其实没人读。所以这里查得更死：整个 Dockerfile 里一个 PB_ 都不许出现。
-DOCKER_PB_HITS=$(grep -oE 'PB_[A-Z0-9_]+' "$ROOT_DIR/deploy/Dockerfile" | sort -u | tr '\n' ' ' || true)
+DOCKER_PB_HITS=$(grep -oE 'PB_[A-Z0-9_]+' "$ROOT_DIR/infra/Dockerfile" | sort -u | tr '\n' ' ' || true)
 if [ -n "$DOCKER_PB_HITS" ]; then
     fail "Dockerfile 里还有服务端配置键名：$DOCKER_PB_HITS —— 镜像不带配置，这些键现在没人读"
 else
@@ -365,32 +365,32 @@ else
     fail "安装页不再做连通性校验：填错的库地址/桶会先落盘，再在 Spring 启动时才炸，那时安装页已经关了"
 fi
 
-if [ -f "$ROOT_DIR/deploy/docker-compose.nas.yml" ]; then
+if [ -f "$ROOT_DIR/infra/docker-compose.nas.yml" ]; then
     # 只看值那一侧：注释里提到这种写法是解释"为什么不用它"，不该把自己判红（第一版没剥注释，
     # 结果被文件头那段说明触发了一条假 FAIL）。
-    if sed 's/#.*//' "$ROOT_DIR/deploy/docker-compose.nas.yml" | grep -q '\${'; then
+    if sed 's/#.*//' "$ROOT_DIR/infra/docker-compose.nas.yml" | grep -q '\${'; then
         fail "docker-compose.nas.yml 的**取值行**里出现插值：这本文件存在的意义就是\"没有 .env 也能 up\""
     else
         pass "docker-compose.nas.yml 零插值（改字面值就能在 NAS 上 up）"
     fi
 else
-    fail "缺 deploy/docker-compose.nas.yml：图形界面部署又只剩那套 \${VAR:?}"
+    fail "缺 infra/docker-compose.nas.yml：图形界面部署又只剩那套 \${VAR:?}"
 fi
 
 # prod.env.example 里剩下的键全部只服务第三方容器（mysql/rustfs）与 Caddy/监控，不再有服务端键。
 # 判据是通用的那一句："写进模板的每个键都必须有人消费"——旧模型下这条靠三处手写判据分别守
 # PB_SERVER_PORT / PB_STORAGE_TYPE / PB_SECURITY_INTERNAL_CIDRS，每加一个键就要再补一条，
 # 而漏补的症状都是同一类：容器"起来了"，端口没人听、图片一路 404、留空的准入却放进一整段网段。
-# 现在一把梭：模板里每个 ^KEY= 都要在 deploy/ 的某本文件里被引用过，否则它就是死开关。
+# 现在一把梭：模板里每个 ^KEY= 都要在 infra/ 的某本文件里被引用过，否则它就是死开关。
 ENV_CONSUMERS=(
-    "$ROOT_DIR/deploy/docker-compose.yml"
-    "$ROOT_DIR/deploy/docker-compose.monitoring.yml"
-    "$ROOT_DIR/deploy/docker-compose-wsl.yml"
-    "$ROOT_DIR/deploy/Caddyfile"
-    "$ROOT_DIR/deploy/deploy-wsl.sh"
+    "$ROOT_DIR/infra/docker-compose.yml"
+    "$ROOT_DIR/infra/docker-compose.monitoring.yml"
+    "$ROOT_DIR/infra/docker-compose-wsl.yml"
+    "$ROOT_DIR/infra/Caddyfile"
+    "$ROOT_DIR/infra/deploy-wsl.sh"
 )
 DEAD_ENV_KEYS=""
-for key in $(grep -oE '^[A-Z][A-Z0-9_]*=' "$ROOT_DIR/deploy/env/prod.env.example" | tr -d '=' | sort -u); do
+for key in $(grep -oE '^[A-Z][A-Z0-9_]*=' "$ROOT_DIR/infra/env/prod.env.example" | tr -d '=' | sort -u); do
     if ! grep -rq "$key" "${ENV_CONSUMERS[@]}" 2>/dev/null; then
         DEAD_ENV_KEYS="$DEAD_ENV_KEYS $key"
     fi
@@ -398,12 +398,12 @@ done
 if [ -n "$DEAD_ENV_KEYS" ]; then
     fail "prod.env.example 里有没人消费的键：$DEAD_ENV_KEYS —— 照模板填了也不生效（服务端配置走安装页，第三方容器的键要在 compose 里被引用）"
 else
-    pass "prod.env.example 里每个键都有人消费（deploy/ 里查得到引用）"
+    pass "prod.env.example 里每个键都有人消费（infra/ 里查得到引用）"
 fi
 
 # 服务端专属的键一个都不该再出现在模板里：它们读的入口已经删了，留着就是在教人填死开关。
 SERVER_ONLY_KEYS=$(grep -oE '^(PB_DB_URL|PB_DB_HOST|PB_DB_USERNAME|PB_STORAGE_TYPE|PB_S3_ENDPOINT|PB_S3_REGION|PB_S3_BUCKET|PB_S3_OBJECT_ENCRYPT|PB_S3_MASTER_KEY|PB_S3_MASTER_PASSPHRASE|PB_ALLOW_PLAINTEXT_MEDIA|PB_ADMIN_SECRET|PB_ADMIN_JWT_SECRET|PB_SERVER_PORT|PB_SECURITY_INTERNAL_CIDRS)=' \
-    "$ROOT_DIR/deploy/env/prod.env.example" | tr -d '=' | sort -u | tr '\n' ' ' || true)
+    "$ROOT_DIR/infra/env/prod.env.example" | tr -d '=' | sort -u | tr '\n' ' ' || true)
 if [ -n "$SERVER_ONLY_KEYS" ]; then
     fail "prod.env.example 里还有服务端专属键：$SERVER_ONLY_KEYS —— 这些键已经没人读了，它们的值改由安装页写进 data/config/pushbox.json"
 else
@@ -411,7 +411,7 @@ else
 fi
 
 # 检查 entrypoint.sh 是否存在
-if [ -f "$ROOT_DIR/deploy/Dockerfile" ] && grep -q "entrypoint.sh" "$ROOT_DIR/deploy/Dockerfile"; then
+if [ -f "$ROOT_DIR/infra/Dockerfile" ] && grep -q "entrypoint.sh" "$ROOT_DIR/infra/Dockerfile"; then
     pass "Docker 入口点验证脚本已配置"
 else
     fail "Docker 入口点验证脚本缺失"
@@ -429,9 +429,9 @@ fi
 # Caddyfile 的上游、compose 的端口映射与 healthcheck。改其中一处不改其余的症状是
 # "反代 502"或"探活永远失败"，都看不出根因是端口对不上。所以这里把四处绑在一起判。
 PORT_REFS_OK=1
-grep -q 'reverse_proxy pushbox-server:7404' "$ROOT_DIR/deploy/Caddyfile" || PORT_REFS_OK=0
-grep -q '"127.0.0.1:7404:7404"' "$ROOT_DIR/deploy/docker-compose.yml" || PORT_REFS_OK=0
-grep -q '/dev/tcp/127.0.0.1/7404' "$ROOT_DIR/deploy/docker-compose.yml" || PORT_REFS_OK=0
+grep -q 'reverse_proxy pushbox-server:7404' "$ROOT_DIR/infra/Caddyfile" || PORT_REFS_OK=0
+grep -q '"127.0.0.1:7404:7404"' "$ROOT_DIR/infra/docker-compose.yml" || PORT_REFS_OK=0
+grep -q '/dev/tcp/127.0.0.1/7404' "$ROOT_DIR/infra/docker-compose.yml" || PORT_REFS_OK=0
 grep -qE '^[[:space:]]*port: 7404$' "$ROOT_DIR/server/src/main/resources/application.yml" || PORT_REFS_OK=0
 if [ "$PORT_REFS_OK" = "1" ]; then
     pass "容器内端口 7404 四处一致（application.yml / Caddyfile 上游 / compose 映射 / compose 探活）"
@@ -442,13 +442,13 @@ fi
 # compose 的 ${VAR:?} 插值作用于整本文件，跟 profile 有没有激活无关：
 # 监控用的必填项留在主文件里，等于"不开 Grafana 也必须有 Grafana 口令"，up -d 直接解析失败。
 # 只认插值形态（\${GRAFANA_ADMIN_PASSWORD...），主文件里那段解释为什么挪走的注释不算命中。
-if grep -q '\${GRAFANA_ADMIN_PASSWORD' "$ROOT_DIR/deploy/docker-compose.yml"; then
+if grep -q '\${GRAFANA_ADMIN_PASSWORD' "$ROOT_DIR/infra/docker-compose.yml"; then
     fail "GRAFANA_ADMIN_PASSWORD 还在主 compose 文件里：只起服务端的部署会在解析阶段就被它卡死"
-elif [ -f "$ROOT_DIR/deploy/docker-compose.monitoring.yml" ] \
-  && grep -q '\${GRAFANA_ADMIN_PASSWORD' "$ROOT_DIR/deploy/docker-compose.monitoring.yml"; then
+elif [ -f "$ROOT_DIR/infra/docker-compose.monitoring.yml" ] \
+  && grep -q '\${GRAFANA_ADMIN_PASSWORD' "$ROOT_DIR/infra/docker-compose.monitoring.yml"; then
     pass "监控栈独立成一本文件，主文件的必填项只剩真必填的那几个"
 else
-    fail "找不到 deploy/docker-compose.monitoring.yml（或它没有接手 GRAFANA_ADMIN_PASSWORD）：prometheus/grafana 没有落脚的地方"
+    fail "找不到 infra/docker-compose.monitoring.yml（或它没有接手 GRAFANA_ADMIN_PASSWORD）：prometheus/grafana 没有落脚的地方"
 fi
 
 # 凭据明文会落在这些地方：
@@ -456,12 +456,12 @@ fi
 #     Access/Secret Key、加密口令与主钥，而且它按设计就是明文（用户明确要求不再假装
 #     "生产环境没有明文密码"）。工作目录随启动位置变：`mvn -pl server test` 落在 server/data/，
 #     直接跑 jar 落在仓库根的 data/，所以两个路径都要挡。
-#   deploy/env/local.env —— 开发机的凭据（只给 deploy-wsl.sh 与本地测试用）。
-#   deploy/.env / .env —— compose 的 --env-file，装的是第三方容器与 Caddy 的口令。
+#   infra/env/local.env —— 开发机的凭据（只给 deploy-wsl.sh 与本地测试用）。
+#   infra/.env / .env —— compose 的 --env-file，装的是第三方容器与 Caddy 的口令。
 #   .idea/ —— IDEA 把运行配置的 Environment variables 写进 workspace.xml。
 # 全靠 .gitignore 挡，所以"忽略规则还在"本身就是发布判据：少一行，下一次谁跑了一次安装页
 # 就等于把整份凭据提交上去了——而且它删不掉，公开仓的历史里会一直留着。
-for pat in 'deploy/env/local.env' '^\.env$' '^\.idea/' '^/data/' '^/server/data/'; do
+for pat in 'infra/env/local.env' '^\.env$' '^\.idea/' '^/data/' '^/server/data/'; do
     if grep -qE "$pat" "$ROOT_DIR/.gitignore"; then
         pass ".gitignore 仍然排除 $pat"
     else
@@ -485,15 +485,15 @@ fi
 # 模板、文档、脚本与站点里都不该出现真实主机地址（那本身就是可拼出拓扑的情报）。
 # 允许 CIDR 前缀形态（100.64.0.0、192.168.0.0 这类写在网络段说明里的），逐条排除。
 SCAN_TARGETS=(
-    "$ROOT_DIR/deploy/env/prod.env.example"
-    "$ROOT_DIR/deploy/部署快速参考.md"
-    "$ROOT_DIR/deploy/docker-compose.nas.yml"
-    "$ROOT_DIR/deploy/NAS部署指南.md"
-    "$ROOT_DIR/deploy/docker-compose.yml"
-    "$ROOT_DIR/deploy/Caddyfile"
-    "$ROOT_DIR/deploy/backup/backup.sh"
-    "$ROOT_DIR/deploy/ca/gen-ca.sh"
-    "$ROOT_DIR/deploy/probe"
+    "$ROOT_DIR/infra/env/prod.env.example"
+    "$ROOT_DIR/infra/部署快速参考.md"
+    "$ROOT_DIR/infra/docker-compose.nas.yml"
+    "$ROOT_DIR/infra/NAS部署指南.md"
+    "$ROOT_DIR/infra/docker-compose.yml"
+    "$ROOT_DIR/infra/Caddyfile"
+    "$ROOT_DIR/infra/backup/backup.sh"
+    "$ROOT_DIR/infra/ca/gen-ca.sh"
+    "$ROOT_DIR/infra/probe"
     "$ROOT_DIR/.github/workflows"
     "$ROOT_DIR/README.md"
     "$ROOT_DIR/docs"
@@ -524,9 +524,9 @@ else
 fi
 
 # 反向代理：主机名只从 .env 来，缺证书时的现象已经在 Caddyfile 顶部写清
-if grep -q '\$PB_CADDY_HOST' "$ROOT_DIR/deploy/Caddyfile" \
-    && grep -q 'PB_CADDY_HOST: ' "$ROOT_DIR/deploy/docker-compose.yml" \
-    && grep -q '^PB_CADDY_HOST=' "$ROOT_DIR/deploy/env/prod.env.example"; then
+if grep -q '\$PB_CADDY_HOST' "$ROOT_DIR/infra/Caddyfile" \
+    && grep -q 'PB_CADDY_HOST: ' "$ROOT_DIR/infra/docker-compose.yml" \
+    && grep -q '^PB_CADDY_HOST=' "$ROOT_DIR/infra/env/prod.env.example"; then
     pass "Caddy 主机名参数化到 PB_CADDY_HOST（改一处即可）"
 else
     fail "Caddy 主机名仍需在 Caddyfile 里多处手改，或 .env/compose 没接上 PB_CADDY_HOST"
@@ -535,7 +535,7 @@ fi
 # 7404 只能绑环回：公网流量必须走 Caddy（TLS、/actuator 屏蔽、请求体上限都在那层）。
 # 放开成 "7404:7404" 的代价是明文链路 + 绕过 Caddy 的全部限制，所以这里判死；
 # 真要手机直连调试走 docker-compose.nas.yml，那本文件是"局域网自用"的独立拓扑。
-if grep -q '"127.0.0.1:7404:7404"' "$ROOT_DIR/deploy/docker-compose.yml"; then
+if grep -q '"127.0.0.1:7404:7404"' "$ROOT_DIR/infra/docker-compose.yml"; then
     pass "主 compose 只把后端端口绑在环回（公网侧看不到 7404）"
 else
     fail "主 compose 没有把 7404 限制在环回：明文链路会绕过 Caddy 的 TLS 与 /actuator 屏蔽"
@@ -600,8 +600,8 @@ else
         fail "android/release-cert.sha256 不是 64 位小写十六进制（读到：$CERT_BASELINE）"
     elif ! grep -q 'release-cert.sha256' "$ROOT_DIR/.github/workflows/build-apk.yml"; then
         fail "build-apk.yml 没在读 android/release-cert.sha256，签名步退回了只判 debug"
-    elif ! grep -q "$CERT_BASELINE" "$ROOT_DIR/发布检查清单.md"; then
-        fail "发布检查清单.md 里的证书指纹与 android/release-cert.sha256（$CERT_BASELINE）不是同一串"
+    elif ! grep -q "$CERT_BASELINE" "$ROOT_DIR/docs/release/发布检查清单.md"; then
+        fail "docs/release/发布检查清单.md 里的证书指纹与 android/release-cert.sha256（$CERT_BASELINE）不是同一串"
     else
         pass "证书指纹基线单一来源且 CI 与清单一致（$CERT_BASELINE）"
     fi
@@ -777,7 +777,7 @@ REQUIRED_DOCS=(
     "README.md"
     "LICENSE"
     "CHANGELOG.md"
-    "发布检查清单.md"
+    "docs/release/发布检查清单.md"
     "docs/交互体验改进总结.md"
     "docs/R8混淆配置指南.md"
     "docs/代码签名指南.md"
@@ -793,7 +793,7 @@ for doc in "${REQUIRED_DOCS[@]}"; do
 done
 
 # 文档里写到的端点路径，必须真的能在 controller 注解里找到。
-# 这一条是 2026-10-20 那轮文档复核逼出来的：deploy/WSL测试速查.md 里的
+# 这一条是 2026-10-20 那轮文档复核逼出来的：infra/WSL测试速查.md 里的
 # /api/v1/admin/messages/search 从来没有存在过（真实路径是 GET /api/v1/admin/messages?q=），
 # docs/审计报告.md 又用 6 个抽查项写下"所有管理台端点完全一致"——两份文档互相引用，
 # 谁也没发现对端是个不存在的地址。写给人看的判据会腐烂，所以这条交给机器跑。
@@ -841,7 +841,7 @@ pb_norm_route() {
 pb_doc_routes() {
     grep -rhoP '/api/v1/[A-Za-z0-9_/{}.\-]*|(?<![\w/.-])(?:/message|/healthz|/ws)\b' \
         "$ROOT_DIR"/site/*.html "$ROOT_DIR"/README.md "$ROOT_DIR"/CHANGELOG.md \
-        "$ROOT_DIR"/发布检查清单.md "$ROOT_DIR"/docs/*.md "$ROOT_DIR"/deploy/*.md 2>/dev/null \
+        "$ROOT_DIR"/docs/release/*.md "$ROOT_DIR"/docs/*.md "$ROOT_DIR"/infra/*.md 2>/dev/null \
         | pb_norm_route | sort -u
 }
 

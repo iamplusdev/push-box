@@ -9,8 +9,8 @@
 ### 用户
 
 - 📖 [用户使用手册](docs/用户使用手册.md) - 安装、配置、使用流程、常见问题
-- 🐳 [Docker 部署](#-docker-部署) - 一个容器起步只要库地址和库口令；[deploy/部署快速参考.md](deploy/部署快速参考.md) 是同一套口径的速查
-- 🗄️ [NAS 部署指南](deploy/NAS部署指南.md) - 飞牛 / 群晖 / 1Panel 的图形界面里逐条填变量那种装法
+- 🐳 [Docker 部署](#-docker-部署) - 一个容器起步只要库地址和库口令；[infra/部署快速参考.md](infra/部署快速参考.md) 是同一套口径的速查
+- 🗄️ [NAS 部署指南](infra/NAS部署指南.md) - 飞牛 / 群晖 / 1Panel 的图形界面里逐条填变量那种装法
 - 🌐 [官网](https://iamplusdev.github.io/push-box/) - 项目介绍与下载链接（站点源码在仓库的 `site/`）
 
 ### 开发者
@@ -27,7 +27,7 @@
 
 ### 形态一：单容器起步（推荐，一个变量都不用给）
 
-镜像里**没有任何配置**——没有 `ENV`，没有必填变量，没有 `__SET_ME__` 占位值（见 [deploy/Dockerfile](deploy/Dockerfile)）。
+镜像里**没有任何配置**——没有 `ENV`，没有必填变量，没有 `__SET_ME__` 占位值（见 [infra/Dockerfile](infra/Dockerfile)）。
 第一次启动它自己在 7404 上开一个安装页，你在浏览器里把库地址、存储、管理台口令填进去，
 服务端把结果写进 `/app/data/config/pushbox.json` 然后**接着启动，不用重启容器**：
 
@@ -43,7 +43,7 @@ docker run -d --name pushbox \
 之所以不再走环境变量：NAS 的「创建容器」表单只能逐行填 ENV，于是"要填几项"变成了十几个键名与占位值的组合，
 填错任何一项的表现都是**容器起来了但半死**；而一个网页表单能把"库连不上"这种错当场说清楚，还能顺手把库建出来。
 
-不想敲命令、要在飞牛/群晖的「创建容器」表单里填的，照 [NAS 部署指南](deploy/NAS部署指南.md)：
+不想敲命令、要在飞牛/群晖的「创建容器」表单里填的，照 [NAS 部署指南](infra/NAS部署指南.md)：
 镜像声明了唯一一个 `VOLUME /app/data`，所以「存储位置」只有**一行**要选——把它指到 NAS 的共享文件夹，
 配置、图片、日志就都保住了；环境变量那一栏**一行都不用填**。
 
@@ -90,15 +90,15 @@ SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句
   entrypoint 的写入探针当场拒绝启动并把两种修法打出来（改用 named volume，或 `chown -R 10001:10001`）。
 - **端口以 `-p` 的左侧为准**，容器内固定 7404；`EXPOSE` 只是元数据。
 
-> 想自己出一份（比如机器在 ARM 上）：`docker build -f deploy/Dockerfile -t pushbox:local .`
+> 想自己出一份（比如机器在 ARM 上）：`docker build -f infra/Dockerfile -t pushbox:local .`
 > ——这条要克隆仓库，构建读的是仓库里的 `Dockerfile`，跟"跑起来"要的东西不是一回事。
 
 **重装或换机器**：安装页上有「从库里找回上一次的配置」，填对库凭据就能把整份配置拉回来
 （副本存在 `app_state.runtime_config_v1`）。不想用网页也可以直接写文件，模板见
-[deploy/pushbox.json.example](deploy/pushbox.json.example)，位置用 `--pb.config-file=/path/to/pushbox.json` 指定。
+[infra/pushbox.json.example](infra/pushbox.json.example)，位置用 `--pb.config-file=/path/to/pushbox.json` 指定。
 
 **只在 NAS 的图形界面里装（飞牛 / 群晖 / 1Panel，没有 `.env` 那一层）？**
-走 **[deploy/NAS部署指南.md](deploy/NAS部署指南.md)** + **[deploy/docker-compose.nas.yml](deploy/docker-compose.nas.yml)**：
+走 **[infra/NAS部署指南.md](infra/NAS部署指南.md)** + **[infra/docker-compose.nas.yml](infra/docker-compose.nas.yml)**：
 那本文件整本零插值，改一行端口映射就能起，剩下的全在安装页上填。
 
 ### 形态二：compose 完整生产形态（要反代 / 监控 / 自带库和桶时）
@@ -119,7 +119,7 @@ SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句
 
 ```bash
 git clone https://github.com/iamplusdev/push-box.git
-cd push-box/deploy
+cd push-box/infra
 
 # 模板里只有反代域名、宿主端口，以及拓扑 B/监控那几个第三方容器的口令
 cp env/prod.env.example .env
@@ -173,7 +173,7 @@ docker compose exec pushbox-server curl -s http://127.0.0.1:7404/healthz
 （值落在配置文件的 `security.internalCidrs`）。
 
 访问浏览器：
-- **Web 管理台**: `https://<PB_CADDY_HOST>/`——注意是**根路径**，不是 `/admin`。管理台 SPA 与 API 打在同一个镜像、由同一个进程在同一个端口上吐出来（`deploy/Dockerfile` 的 node 阶段把 `web-admin/dist` 拷进 jar 的 `classpath:/static/`，`SpaWebConfig` 负责 history 路由的深链回退），所以没有第二个端口、也没有独立的 nginx。用安装页里填的那个管理台口令登录；自签证书要先信任 `deploy/ca` 里那根 CA，或改用 `docker-compose.nas.yml` 那条直连 7404 的内网明文路径。
+- **Web 管理台**: `https://<PB_CADDY_HOST>/`——注意是**根路径**，不是 `/admin`。管理台 SPA 与 API 打在同一个镜像、由同一个进程在同一个端口上吐出来（`infra/Dockerfile` 的 node 阶段把 `web-admin/dist` 拷进 jar 的 `classpath:/static/`，`SpaWebConfig` 负责 history 路由的深链回退），所以没有第二个端口、也没有独立的 nginx。用安装页里填的那个管理台口令登录；自签证书要先信任 `infra/ca` 里那根 CA，或改用 `docker-compose.nas.yml` 那条直连 7404 的内网明文路径。
 - **运维端点**: `/healthz` 与 `/actuator/**` 只在容器环回、以及安装页「运维网段」里填的网段可读；Caddy 另外只 403 掉 `/actuator/*`。
 
 #### 步骤 5: 换成自己的域名 / 证书（可选）
@@ -184,9 +184,9 @@ docker compose exec pushbox-server curl -s http://127.0.0.1:7404/healthz
 PB_CADDY_HOST=pushbox.example.com
 ```
 
-证书两种口径，`deploy/Caddyfile` 顶部注释里都写了：
+证书两种口径，`infra/Caddyfile` 顶部注释里都写了：
 
-1. **内部自签 CA**（默认）：用 `deploy/ca/gen-ca.sh` 签发（域名走 `PUSHBOX_HOST`，纯 IP 走 `PUSHBOX_IP`，SAN 必须包含客户端实际连的那个地址），把 `pushbox.crt` / `pushbox.key` 放进 `deploy/certs/`，再把根 CA 装进各端信任（Windows 需要 `-user Root`，Android 需要用户在系统里安装）。
+1. **内部自签 CA**（默认）：用 `infra/ca/gen-ca.sh` 签发（域名走 `PUSHBOX_HOST`，纯 IP 走 `PUSHBOX_IP`，SAN 必须包含客户端实际连的那个地址），把 `pushbox.crt` / `pushbox.key` 放进 `infra/certs/`，再把根 CA 装进各端信任（Windows 需要 `-user Root`，Android 需要用户在系统里安装）。
 2. **公网可信证书**：删掉 Caddyfile 里的 `tls` 那行，让 Caddy 自己申请 Let's Encrypt；前提是 80/443 从公网可达、DNS 已指向这台机器。各端无需装证书。
 
 改完重启：
@@ -272,7 +272,7 @@ docker compose logs pushbox-server | grep -iE 'HikariPool|Access denied|Communic
 
 那两条已经能把"口令错 / 地址错 / 库名错"分开；**别在容器里现装 mysql 客户端**（容器跑 uid 10001，
 `apt-get update` 直接 `Permission denied`）。要手工敲 SQL 就去库所在那台机器上，详见
-[deploy/部署快速参考.md](deploy/部署快速参考.md) 的排查段。
+[infra/部署快速参考.md](infra/部署快速参考.md) 的排查段。
 
 改配置的办法就是上面那条：编辑 `/app/data/config/pushbox.json` 再 `docker restart`，
 或者删掉它回安装页重填（安装页的「测试连接」按钮能先把口令对不对判清楚）。
@@ -294,17 +294,17 @@ docker compose logs pushbox-server | grep -iE 'HikariPool|Access denied|Communic
 JAVA_HOME=/path/to/jdk-21 mvn -B -DskipTests package
 
 # 2) 起服务端。第一次启动没有配置文件，它自己在 7404 上开一个安装页然后停在那里
-bash deploy/run-dev.sh
+bash infra/run-dev.sh
 ```
 
 浏览器打开 http://127.0.0.1:7404/ ，在表单里填库地址/端口/库名/用户名/密码，勾不勾对象存储，管理台口令，加密口令。提交前它会**真连一次库和桶**，连不上就当场说清是哪一项。提交成功后配置写进 `server/data/config/pushbox.json`（这个目录已 gitignore——里面有明文口令），**同一个进程接着启动 Spring，不需要重启**。之后再启动就直接读那份文件、不再出现安装页。
 
 ```bash
 # 3) 验收探针
-node deploy/probe/p0-e2e.mjs
+node infra/probe/p0-e2e.mjs
 ```
 
-要重装或换机器：安装页上有「从库里找回上一次的配置」，填对库凭据就能把整份配置拉回来（配置副本存在 `app_state.runtime_config_v1`）。想指另一份配置文件用 `--pb.config-file=/path/to/pushbox.json`，模板见 `deploy/pushbox.json.example`。
+要重装或换机器：安装页上有「从库里找回上一次的配置」，填对库凭据就能把整份配置拉回来（配置副本存在 `app_state.runtime_config_v1`）。想指另一份配置文件用 `--pb.config-file=/path/to/pushbox.json`，模板见 `infra/pushbox.json.example`。
 
 发一条消息试试：
 
@@ -322,15 +322,19 @@ curl -sS http://127.0.0.1:7404/message -H 'Content-Type: application/json' \
 ```
 core/       Java 加密与协议库（X25519 / Ed25519 / AES-GCM 帧通道 / canonical 签名）
 server/     Spring Boot 服务端：入站 API、设备与频道、WS 下发、抓取转存、搜索、治理
+web-admin/  Web 管理台（Vue 3 + Element Plus），打进服务端 jar 的 classpath:/static/
 android/    Android 客户端（Kotlin + Compose），Gradle 工程
 windows/    Windows 客户端（.NET 8 + WPF）
-deploy/     探针、Dockerfile、compose、Caddyfile、自签 CA、备份脚本
-docs/       设计文档、用户指南、开发指南
+infra/      探针、Dockerfile、compose、Caddyfile、自签 CA、备份脚本
+assets/     多端共用的图标与导出稿（Android 自适应图标、Web favicon、商店图）
+contracts/  跨端契约；testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
+docs/       设计文档、用户指南、开发指南；docs/release/ 放发布清单与准备报告
 site/       官网静态站点源码（零构建，可直接 file:// 打开；线上地址 https://iamplusdev.github.io/push-box/）
-testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
+scripts/    构建与发版脚本（release*.sh、set-version.sh、install-page-smoke.sh）
+output/     各端编译产物（jar / apk / exe），不入库，由 release 脚本写入
 ```
 
-`core/` 与 `server/` 是同一个 Maven reactor；`android/` 与 `windows/` 各有独立构建体系。三端**不是三份协议实现**：Java 与 Kotlin 共享同一份 `core` 源码，C# 靠 `testvectors/vectors.json` 逐字节对账。
+`core/` 与 `server/` 是同一个 Maven reactor；`android/` 与 `windows/` 各有独立构建体系。三端**不是三份协议实现**：Java 与 Kotlin 共享同一份 `core` 源码，C# 靠 `contracts/testvectors/vectors.json` 逐字节对账。
 
 ---
 
@@ -352,7 +356,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 | 跑法 | 判什么 |
 |------|--------|
 | `JAVA_HOME=… mvn -B -pl core,server test` | 服务端与加密库（**331/331**，core 43 + server 288）。不再 source 任何环境变量：配置读的是 surefire 工作目录下的 `server/data/config/pushbox.json`（就是安装页写出的那份）。分两档门控——只需连得上库的 13 个类挂 `databaseReady`，开发机上照跑；要真桶的 media 5 个类挂 `objectStorageReady`，本地存储模式下跳过。所以本机是 **298 执行 + 33 跳过**，而 `mvn test` 的退出码仍然是 0 |
-| `node deploy/probe/p0-e2e.mjs` | 端到端协议（**0 失败**；条数以脚本末行的 `N/N` 为准） |
+| `node infra/probe/p0-e2e.mjs` | 端到端协议（**0 失败**；条数以脚本末行的 `N/N` 为准） |
 | `cd android && ./gradlew :app:assembleDebug` | Android 编译通过 |
 | `cd web-admin && npm ci && npm run build` | 管理台 `vue-tsc` 类型检查与 `dist/` 产物 |
 | `dotnet test windows/PushBox.sln` | C# 协议向量 + 客户端逻辑（**554/554**，去掉会话筛选用例后） |
@@ -371,7 +375,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 2. **正文不进日志。** 入站 body、`content`、`summary`、搜索结果片段都不得出现在任何 appender 输出里。
 3. **绝不绕过证书校验。** 找不到 `ServerCertificateCustomValidationCallback` 等钩子是设计如此。
 4. **已读游标只增不减。** 客户端必须自己保 `MAX(...)`，否则会把别的端重新点亮红点。
-5. **改了协议字段要三处同步：** `core/Frames.java`、`android/net/Wire.kt`、`deploy/probe/p0-e2e.mjs`。
+5. **改了协议字段要三处同步：** `core/Frames.java`、`android/net/Wire.kt`、`infra/probe/p0-e2e.mjs`。
 
 ---
 
@@ -381,7 +385,7 @@ testvectors/ 由 core 单测产出，供 Windows 侧逐字节对账
 - **服务端库里是明文**：这是刻意的，只有这样搜索、摘要、抓图才能工作。
 - **端到端加密已被否决**：代价是"服务端不能搜索、不能生成摘要、不能抓图"。
 - **投递单位是"设备"不是"Space"**：同一个 `device_id` 的新连接会顶掉旧的那条——把身份文件拷到另一台机器得到的是"轮流持有同一条连接"，不是"两台设备"。
-- **Web 管理台面和业务 API 挂在同一个端口上，默认公网可达**：`/api/v1/admin/*` 前面只有登录口令加一把 24 小时的 HS256 JWT；`deploy/Caddyfile` 只 403 掉 `/actuator/*`，服务端 `InternalAccessFilter` 的白名单也只覆盖 `/healthz` 与 `/actuator/**`。所以"管理台在内网"不是软件给的保证，是部署者要做的事（收紧办法见 [SECURITY.md](SECURITY.md) 的「部署侧该自己做的事」与 `deploy/Caddyfile` 里那段注释示例）。
+- **Web 管理台面和业务 API 挂在同一个端口上，默认公网可达**：`/api/v1/admin/*` 前面只有登录口令加一把 24 小时的 HS256 JWT；`infra/Caddyfile` 只 403 掉 `/actuator/*`，服务端 `InternalAccessFilter` 的白名单也只覆盖 `/healthz` 与 `/actuator/**`。所以"管理台在内网"不是软件给的保证，是部署者要做的事（收紧办法见 [SECURITY.md](SECURITY.md) 的「部署侧该自己做的事」与 `infra/Caddyfile` 里那段注释示例）。
 - **那把管理台 JWT 不能刷新、也不能吊销**：签名钥是配置文件里独立的 `admin.jwtKey`（安装页不让你填，服务端自动生成并回写），所以改登录口令 `admin.password` 不会让已签出去的 token 失效；能做的事只有等它按 `exp` 自然过期（≤24h），或换掉 `admin.jwtKey`（代价是所有会话都要重新登录）。口令被刷的按 IP 锁定是**进程内 Caffeine**（`AbuseControlService.adminLoginAttempts`，代码注释里写明了"登录没有对应的库行可写"）——重启清零、多实例不共享。
 
 详见 [软件设计方案 §1](docs/软件设计方案.md)。
@@ -399,7 +403,7 @@ GitHub Pages（线上地址 <https://iamplusdev.github.io/push-box/>）。六个
 
 | 工作流 | 触发 | 产出 |
 |--------|------|------|
-| `docker-publish.yml` | push main（仅 `server/**`、`core/**`、`web-admin/**`、`pom.xml`、`deploy/**`）/ `server-v*` 或 `v*` 标签 / 手动 | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`：标签上打本次的 `X.Y.Z` / `X.Y` / `latest`，main 上只打 `main`/`sha-*`（版本标签必须不可变）。构建前先跑版本闸门——tag、`pom.xml`、compose 三者版本号不一致就直接红，不会推出去一个自称某版、里面跑着另一版的镜像。手动触发默认是 **dry-run**（只构建不推），用它可以在不碰 Hub 的前提下验 `DOCKERHUB_*` 这对 secrets。**`v*` 标签事件首跑 2026-10-22 绿**（run `39724347017`，tag `v1.1.0`）：「版本号一致性闸门」「Docker metadata」「Build and push」「本次的标签清单」四步全 success，即 `1.1.0`/`1.1`/`latest` 三个标签随 buildx 一起推出。Hub 标签清单已用 WSL 里的 Hub 凭据实查（Windows 宿主仍连不上 `hub.docker.com`，WSL 可连）：当页是 `1.1.5` / `1.1` / `latest` / `main` / `sha-a478f0e` / `1.1.4` / `sha-2d8f3b0` / `1.1.3` / `sha-d8c1486` / `sha-d4a889d`——这次没有删旧版本标签。**组件标签首跑 2026-10-22 亦绿**（run `39763487572`，tag `server-v1.1.2`，推出 `1.1.2` / `1.1` / `latest`）；**v1.1.3 补丁链同日绿**（run `39767681288`，tag `server-v1.1.3`，推出 `1.1.3` / `1.1` / `latest`，Hub config blob 复核 `Volumes` 为两个持久化目录）；**v1.1.4 同日绿**（run `39779506621`，tag `server-v1.1.4`，推出 `1.1.4` / `1.1` / `latest`，首次带上 GUI 占位 ENV；该镜像有一处"主钥被占位口令误杀"的缺陷）；**v1.1.5 修复链同日绿**（run `39780463627`，tag `server-v1.1.5`，推出 `1.1.5` / `1.1` / `latest`，从 Hub 拉回镜像复核 entrypoint 与源码渲染结果 md5 一致） |
+| `docker-publish.yml` | push main（仅 `server/**`、`core/**`、`web-admin/**`、`pom.xml`、`infra/**`）/ `server-v*` 或 `v*` 标签 / 手动 | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`：标签上打本次的 `X.Y.Z` / `X.Y` / `latest`，main 上只打 `main`/`sha-*`（版本标签必须不可变）。构建前先跑版本闸门——tag、`pom.xml`、compose 三者版本号不一致就直接红，不会推出去一个自称某版、里面跑着另一版的镜像。手动触发默认是 **dry-run**（只构建不推），用它可以在不碰 Hub 的前提下验 `DOCKERHUB_*` 这对 secrets。**`v*` 标签事件首跑 2026-10-22 绿**（run `39724347017`，tag `v1.1.0`）：「版本号一致性闸门」「Docker metadata」「Build and push」「本次的标签清单」四步全 success，即 `1.1.0`/`1.1`/`latest` 三个标签随 buildx 一起推出。Hub 标签清单已用 WSL 里的 Hub 凭据实查（Windows 宿主仍连不上 `hub.docker.com`，WSL 可连）：当页是 `1.1.5` / `1.1` / `latest` / `main` / `sha-a478f0e` / `1.1.4` / `sha-2d8f3b0` / `1.1.3` / `sha-d8c1486` / `sha-d4a889d`——这次没有删旧版本标签。**组件标签首跑 2026-10-22 亦绿**（run `39763487572`，tag `server-v1.1.2`，推出 `1.1.2` / `1.1` / `latest`）；**v1.1.3 补丁链同日绿**（run `39767681288`，tag `server-v1.1.3`，推出 `1.1.3` / `1.1` / `latest`，Hub config blob 复核 `Volumes` 为两个持久化目录）；**v1.1.4 同日绿**（run `39779506621`，tag `server-v1.1.4`，推出 `1.1.4` / `1.1` / `latest`，首次带上 GUI 占位 ENV；该镜像有一处"主钥被占位口令误杀"的缺陷）；**v1.1.5 修复链同日绿**（run `39780463627`，tag `server-v1.1.5`，推出 `1.1.5` / `1.1` / `latest`，从 Hub 拉回镜像复核 entrypoint 与源码渲染结果 md5 一致） |
 | `build-apk.yml` | push main（仅 `android/**`、`core/**`（`:pbcore` 直接编译共享 core）等 Android 路径）/ `android-v*` 或 `v*` 标签 | 只出 `assembleRelease`（R8 + 签名），用 `apksigner verify` 把关后上传 `pushbox-release-*.apk`；标签时发 Release。没配 keystore 时构建直接失败，不再退化成"发一只 debug 包"。**标签发 Release 首跑 2026-10-22 绿**（run `39724346953`）：`Verify release APK signature` 与 `Publish to GitHub Release` 两步 success，资产 `pushbox-release-v1.1.0.apk`（12.8 MB）已挂到 Release 页；**组件标签首跑同日绿**（run `39763487166`，`android-v1.1.2`，资产 `pushbox-release-1.1.2.apk`） |
 | `build-msi.yml` | push main（仅 `windows/**` 等 Windows 路径）/ `windows-v*` 或 `v*` 标签 | `windows-latest` 上 `dotnet publish self-contained win-x64` + Inno Setup 出 `setup.exe`，上传 artifact；标签时发 Release。**标签首跑 2026-10-22 绿**（run `39724347008`），资产 `PushBox-Setup-1.1.0-win-x64.exe`（58.7 MB）；`Sign installer` 仍 skipped——**安装包未签名**（`CODESIGN_*` 那对 secrets 未配）；**组件标签首跑同日绿**（run `39763487499`，`windows-v1.1.2`，资产 `PushBox-Setup-1.1.2-win-x64.exe`） |
 | `update-dockerhub-description.yml` | push main 且改动含 `README.md`（带 `paths:` 过滤的两个之一，另一个是 `site-deploy.yml`） | 把 `README.md` 同步为 Docker Hub 仓库说明。**2026-10-22 第一次跑绿**（run `39720441754`，push `main`、head `ab5c9fb7`，改动含 `README.md`）。此前它空了一整版：唯一那次 `main` 推送是"新建分支"（`before` 是全零），GitHub 算不出改动文件集，带 `paths:` 的它被跳过、另外四个照跑；因为从没被登记过，连网页上的「Run workflow」都不存在，只能等一次改到 `README.md` 的常规推送（排查过程与四条证据见 `发布检查清单.md`「Hub 仓库说明」）。**Hub 上的说明正文本机没复核到**——`hub.docker.com` 从这台机器三条路都是超时，这一句只有 CI 那一步的退出码背书 |
@@ -437,7 +441,7 @@ GitHub Pages（线上地址 <https://iamplusdev.github.io/push-box/>）。六个
 >
 > **2026-10-22 晚：分端发布兑现，旧包清空**。`server-v1.1.2` / `android-v1.1.2` / `windows-v1.1.2` 三条组件标签流水线各自跑绿（run `39763487572` / `39763487166` / `39763487499`），GitHub 上只留两个客户端 Release：`android-v1.1.2`（`pushbox-release-1.1.2.apk`，12.8 MB）、`windows-v1.1.2`（`PushBox-Setup-1.1.2-win-x64.exe`，58.7 MB，仍未签名）；服务端只推镜像。`v1.1.0` / `v1.1.1` 的 Release 与标签、本地 `v1.0.0` 标签已删，Hub 上只剩 `1.1.2` / `1.1` / `latest` / `main` / `sha-9f8e201`——上一段说的"v1.1.0 页面首行标签写错"随页面删除不复存在。更新检查用线上列表实测：Windows 客户端代码选中 `windows-v1.1.2`，Android 同一套选取口径选中 `android-v1.1.2`；两端在真机/桌面上的更新弹窗仍未见人点过，官网排版也仍未见人眼复核。
 >
-> **2026-10-22 晚补丁：v1.1.3 只修镜像挂载元数据**。飞牛「创建容器」的「存储位置」一栏按镜像的 `Config.Volumes` 渲染，v1.1.2 没声明 `VOLUME`，所以那一栏没有任何行。v1.1.3 在 `deploy/Dockerfile` 声明 `/app/data/media` 与 `/app/logs`，发布后从 Hub 的 config blob 复核到 `Volumes` 正是这两项；`S3` 仍刻意不预置（AK/SK 是凭据，半套又会误导），要用就在表单里加七行（**`v1.1.4` 起改为把凭据键烘焙成 `__SET_ME__` 占位值，让表单直接显示可编辑行、entrypoint 拒绝未替换的占位值；`v1.1.3` 及更早仍是旧行为**）。`server-v1.1.3` 只触发服务端链（run `39767681288`），当时 Hub 上只剩 `1.1.3` / `1.1` / `latest` / `main` / `sha-d8c1486`，旧的 `1.1.2` 与 `sha-9f8e201` 已删。**边界**：飞牛表单本身仍没有实测，只验到镜像元数据；Android/Windows 版本仍是 1.1.2。
+> **2026-10-22 晚补丁：v1.1.3 只修镜像挂载元数据**。飞牛「创建容器」的「存储位置」一栏按镜像的 `Config.Volumes` 渲染，v1.1.2 没声明 `VOLUME`，所以那一栏没有任何行。v1.1.3 在 `infra/Dockerfile` 声明 `/app/data/media` 与 `/app/logs`，发布后从 Hub 的 config blob 复核到 `Volumes` 正是这两项；`S3` 仍刻意不预置（AK/SK 是凭据，半套又会误导），要用就在表单里加七行（**`v1.1.4` 起改为把凭据键烘焙成 `__SET_ME__` 占位值，让表单直接显示可编辑行、entrypoint 拒绝未替换的占位值；`v1.1.3` 及更早仍是旧行为**）。`server-v1.1.3` 只触发服务端链（run `39767681288`），当时 Hub 上只剩 `1.1.3` / `1.1` / `latest` / `main` / `sha-d8c1486`，旧的 `1.1.2` 与 `sha-9f8e201` 已删。**边界**：飞牛表单本身仍没有实测，只验到镜像元数据；Android/Windows 版本仍是 1.1.2。
 >
 > **2026-10-22 再补两版：v1.1.4 上表单、v1.1.5 修主钥路径**。v1.1.4（run `39779506621`）把五枚凭据键以 `__SET_ME__` 烘焙进镜像 ENV，GUI 的「环境变量」页因此直接出现可改的行；发布后发现只配 `PB_S3_MASTER_KEY` 的用户会被那行占位口令误判成"两个来源同时配了"而拒绝启动。v1.1.5（run `39780463627`）在 entrypoint 的二选一检查前把占位值 `unset` 掉，并用 Hub 上的 `1.1.5` 镜像实跑过主钥场景（日志出"主钥长度验证通过"、没有"只能二选一"）；镜像内 `/app/entrypoint.sh` 与源码渲染结果的 md5 同为 `dd70ee6aca3bc69b39c71a1360ca30d2`。**Hub 上没有删旧标签**：`1.1.5` / `1.1` / `latest` / `main` / `sha-a478f0e` / `1.1.4` / `sha-2d8f3b0` / `1.1.3` / `sha-d8c1486` / `sha-d4a889d` 都在。**边界**：图形界面的实际渲染仍没有实机截图，只验到镜像 config；Android/Windows 版本仍是 1.1.2。
 

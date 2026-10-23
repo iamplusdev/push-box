@@ -85,8 +85,8 @@ SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句</co
       <b>构建并启动，第一次会停在安装页上</b>
       <pre class="code" data-code="bash"><code>export JAVA_HOME=/path/to/jdk-21    # 机器默认的 JAVA_HOME 常常还是 JDK 8
 mvn -B -DskipTests package
-bash deploy/run-dev.sh              # 监听 7404</code></pre>
-      <span class="sub">没有配置文件时进程先开一个安装页然后停在那里，<b>不会退出</b>。换端口、改单项配置一律往后加参数：<code>bash deploy/run-dev.sh --server.port=8081 --pb.s3.delete-grace=2s</code>（命令行优先级高于配置文件）。</span>
+bash infra/run-dev.sh              # 监听 7404</code></pre>
+      <span class="sub">没有配置文件时进程先开一个安装页然后停在那里，<b>不会退出</b>。换端口、改单项配置一律往后加参数：<code>bash infra/run-dev.sh --server.port=8081 --pb.s3.delete-grace=2s</code>（命令行优先级高于配置文件）。</span>
     </li>
     <li>
       <b>在浏览器里填配置</b>
@@ -104,7 +104,7 @@ bash deploy/run-dev.sh              # 监听 7404</code></pre>
     </li>
     <li>
       <b>可选：跑一次端到端自检</b>
-      <pre class="code" data-code="bash"><code>cd deploy/probe &amp;&amp; npm install      # 只需一次
+      <pre class="code" data-code="bash"><code>cd infra/probe &amp;&amp; npm install      # 只需一次
 node p0-e2e.mjs                     # 默认打 127.0.0.1:7404
 PB_BASE=http://127.0.0.1:8081 node p0-e2e.mjs   # 端口不同时自己指</code></pre>
       <span class="sub">它模拟一台设备走完整条链路：握手、注册、发消息、收帧、补拉、图片。末行 <b>N/N 且 0 失败</b> 才算这套装对了。它会在库里留下测试 Space 和设备，别对生产库跑。</span>
@@ -162,7 +162,7 @@ SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句</co
       <span class="sub">管理台在<b>根路径 <code>/</code></b>（不是 <code>/admin</code>），登录口令就是安装页里填的那一个。JWT 签名钥不用你填，服务端自动生成并回写配置文件——所以没有"两个密钥必须不同且各 32 字节"这种要记的东西了。然后「频道 → 新建」——频道号和密钥就是要填进推送工具的那一对，<b>密钥只在创建和重置的那一刻显示一次</b>。</span>
     </li>
   </ol>
-  <p>在 NAS 的图形界面（飞牛 / 群晖 / 1Panel）里装时没有 <code>.env</code> 这一层，而这一版正好也不需要它：<b>「存储位置」只有一行</b>——把容器内 <code>/app/data</code> 映射到 NAS 上一个文件夹（镜像声明了唯一一个 <code>VOLUME</code>，较新的表单会带出容器内路径，宿主文件夹仍要你选；建好后先 <code>sudo chown -R 10001:10001 &lt;那个文件夹&gt;</code>，否则入口脚本会当场判死并把这句修法打出来；留空则删容器时配置、图片、日志一起没），<b>「环境变量」一行都不用填</b>。剩下的全在浏览器那张表单上。逐步说明见仓库的 <code>deploy/NAS部署指南.md</code>，compose 版见 <code>deploy/docker-compose.nas.yml</code>。</p>
+  <p>在 NAS 的图形界面（飞牛 / 群晖 / 1Panel）里装时没有 <code>.env</code> 这一层，而这一版正好也不需要它：<b>「存储位置」只有一行</b>——把容器内 <code>/app/data</code> 映射到 NAS 上一个文件夹（镜像声明了唯一一个 <code>VOLUME</code>，较新的表单会带出容器内路径，宿主文件夹仍要你选；建好后先 <code>sudo chown -R 10001:10001 &lt;那个文件夹&gt;</code>，否则入口脚本会当场判死并把这句修法打出来；留空则删容器时配置、图片、日志一起没），<b>「环境变量」一行都不用填</b>。剩下的全在浏览器那张表单上。逐步说明见仓库的 <code>infra/NAS部署指南.md</code>，compose 版见 <code>infra/docker-compose.nas.yml</code>。</p>
 
   <h2 id="prod-compose">要反代 / 监控 / 自带库和桶时：compose 形态</h2>
   <p><b>为什么这一条要克隆仓库而上面不用</b>：<code>docker-compose.yml</code>、<code>Caddyfile</code>、<code>docker-compose.monitoring.yml</code> 和那几段 sidecar 定义都是<b>文件</b>，它们装不进 <code>pushbox</code> 镜像里。只要一个容器时用不到它们。<code>.env</code> 现在<b>只装第三方容器的口令</b>（mysql、rustfs、grafana）与反代域名——服务端的配置一项都不在里面。</p>
@@ -170,7 +170,7 @@ SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句</co
     <li>
       <b>取 compose 与配置模板</b>
       <pre class="code" data-code="bash"><code>git clone https://github.com/iamplusdev/push-box.git
-cd push-box/deploy
+cd push-box/infra
 cp env/prod.env.example .env        # .env 不提交</code></pre>
       <span class="sub">仓库里只要这几本书，机器上不用装 JDK 和 Maven——跑起来的那份是 Hub 上的镜像。只起服务端 + Caddy 时 <code>.env</code> 里<b>必填的只有 <code>PB_CADDY_HOST</code></b>；其余几个键分别只在取消注释 mysql / rustfs 服务段、或挂上监控那本文件时才需要，它们喂的是那些第三方镜像。</span>
     </li>
@@ -209,8 +209,8 @@ docker compose up -d</code></pre>
   <ol class="steps">
     <li>
       <b>签一套证书（在一台管理机上跑，不在部署机上）</b>
-      <pre class="code" data-code="bash"><code>PUSHBOX_HOST=pushbox.internal PUSHBOX_IP=&lt;部署机IP&gt; deploy/ca/gen-ca.sh
-# 只把 certs/pushbox.crt、pushbox.key、pushbox_ca.crt 拷到部署机的 deploy/certs/
+      <pre class="code" data-code="bash"><code>PUSHBOX_HOST=pushbox.internal PUSHBOX_IP=&lt;部署机IP&gt; infra/ca/gen-ca.sh
+# 只把 certs/pushbox.crt、pushbox.key、pushbox_ca.crt 拷到部署机的 infra/certs/
 # 根 CA 私钥 pushbox_ca.key 离线保存：不进仓库、不上部署机</code></pre>
     </li>
     <li>
@@ -235,7 +235,7 @@ docker compose up -d</code></pre>
       <b>一条命令把库和图都备走</b>
       <pre class="code" data-code="bash"><code>MYSQL_HOST=&lt;DB_HOST&gt; PB_DB_PASSWORD=... PB_S3_ACCESS_KEY=... \
 AGE_RECIPIENT=&lt;age 或 ssh 公钥&gt; [RUSTFS_DATA_DIR=/path/to/data/rustfs] \
-  deploy/backup/backup.sh</code></pre>
+  infra/backup/backup.sh</code></pre>
       <span class="sub">这里那几个 <code>PB_*</code> 是<b>备份脚本自己的入参</b>（值就是安装页里填的那几项，可以从 <code>/app/data/config/pushbox.json</code> 里抄），不是服务端读的环境变量——服务端一个环境变量都不读。产物是 <code>pushbox-&lt;UTC&gt;.sql.gz.age</code> 与 <code>rustfs-&lt;UTC&gt;.tar.age</code>：库用一致性快照导出不锁表，导出后立刻加密。因为库里存的是明文，异地上传前必须加密；图片只有一份，在桶或那个目录里，丢了不可恢复。<b>加密口令/主钥也要一起备</b>——KEK 不可轮换，丢了等于旧图片全废。挂 cron 或 systemd timer 定时跑。</span>
     </li>
   </ol>

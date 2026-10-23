@@ -11,10 +11,10 @@ using PushBox.Windows.Media;
 using PushBox.Windows.Net;
 using PushBox.Windows.Sync;
 
-// 真服务体检（§12 P3）：与 deploy/probe/p0-e2e.mjs 同一个定位，只不过这里跑的是 PC 客户端自己的类。
+// 真服务体检（§12 P3）：与 infra/probe/p0-e2e.mjs 同一个定位，只不过这里跑的是 PC 客户端自己的类。
 // 单元测试里的服务端是脚本（vectors.json 的字节 + 测试自己封的盒），这里把它换成真的 Java 服务端：
 // 真 nonce、真验签、真密封盒、真广播。跑法：
-//   bash deploy/run-dev.sh --server.port=8081
+//   bash infra/run-dev.sh --server.port=8081
 //   dotnet run --project windows/PushBox.LiveCheck -- http://127.0.0.1:8081
 // 每跑一次在开发库里多出一个 Space 和两台设备，与 node 探针同样的代价。
 Console.OutputEncoding = Encoding.UTF8;
@@ -183,7 +183,7 @@ catch (Exception e)
 // ⑨⑩ W14 的两发 DELETE：这一层只有真服务端能给——单测里的 canonical 是我们自己算的，
 // 签到底验没验过是脚本在迁就我们。两发都故意打在"服务端没有这些行"上，因为本次体检的消息只落在两端本地库里：
 // 单条那发的正确回答是 404 hint=message（401 才是签名不对），整会话那发的正确回答是 deleted=0 的 200
-// （幂等，不报 404）。服务端有真行的那一支由 deploy/probe 的 ⑪/⑱ 覆盖，这里不重复建频道与推送。
+// （幂等，不报 404）。服务端有真行的那一支由 infra/probe 的 ⑪/⑱ 覆盖，这里不重复建频道与推送。
 try
 {
     var gone = await CatchAsync(() => new DeviceClient()
@@ -214,7 +214,7 @@ catch (Exception e)
 // 单测里的服务端是我们自己写的脚本：字段名 channel_no / secret / subscribed / subscribed_only
 // 打错任何一个字母，两边都会照样绿，所以这两条必须打在真 Java 服务端上。
 // 这里走 REST 历史而不是 WS 实时帧：过滤逻辑两条路径共用 ChannelService.readScope，
-// 历史这一条是确定性读数，不必把判据挂在连接时序上（实时那半由 deploy/probe 的 ㉓ 覆盖）。
+// 历史这一条是确定性读数，不必把判据挂在连接时序上（实时那半由 infra/probe 的 ㉓ 覆盖）。
 try
 {
     var client = new DeviceClient();

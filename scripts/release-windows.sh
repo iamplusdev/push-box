@@ -103,7 +103,7 @@ else
 fi
 
 # ---- 4. 写版本号 ----
-pb_step "4/6 写版本号"
+pb_step "4/6 写版本号并收产物"
 if [ "$PB_DRY_RUN" = 1 ]; then
   pb_info "[dry-run] 本来会跑：bash scripts/set-version.sh --only=windows $PB_TARGET"
 else
@@ -116,6 +116,16 @@ else
     exit 1
   fi
   pb_ok "csproj 与 Inno 都是 $PB_TARGET"
+
+  # 重出一份带新版本号的安装包收进 output/。第 3 步那一份还是旧版本；
+  # 缺 Inno Setup 6 时只跑 publish、不出 exe，与第 3 步的容忍口径一致。
+  pb_info "按 $PB_TARGET 重出安装包并收进 output/"
+  if ( cd "$PB_ROOT" && bash windows/installer/build-installer.sh ); then
+    pb_collect "$(ls "$PB_ROOT"/windows/installer/Output/PushBox-Setup-*-win-x64.exe 2>/dev/null | head -1)" \
+      windows-exe "PushBox-Setup-$PB_TARGET-win-x64.exe"
+  else
+    pb_warn "安装包没重出（多半是缺 Inno Setup 6），output/ 这轮没有 exe；CI 出的是 $PB_TARGET 那版"
+  fi
 fi
 
 # ---- 5. 提交与打标签 ----

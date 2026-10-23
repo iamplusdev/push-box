@@ -2,10 +2,10 @@
 // 自己生成 X25519/Ed25519 密钥、按 §4.3/§4.4 逐字节复刻签名与帧加密，因此这条链路一旦跑通，
 // Android 侧只剩 UI 与存储，不再会有协议层意外。
 //
-// 用法：先 bash deploy/run-dev.sh，再 node deploy/probe/p0-e2e.mjs
+// 用法：先 bash infra/run-dev.sh，再 node infra/probe/p0-e2e.mjs
 // PB_BASE 默认打本机标准端口 7404（与 base application.yml、prod 的 ${PB_SERVER_PORT:7404} 同一个默认值）。
 // 这会真建空间与频道，所以那个端口上跑着别人手上的实例时，先另起一个自己用完就关的：
-//   bash deploy/run-dev.sh --server.port=8081  &&  PB_BASE=http://127.0.0.1:8081 node deploy/probe/p0-e2e.mjs
+//   bash infra/run-dev.sh --server.port=8081  &&  PB_BASE=http://127.0.0.1:8081 node infra/probe/p0-e2e.mjs
 import crypto from 'node:crypto'
 import http from 'node:http'
 import WebSocket from 'ws'
@@ -447,8 +447,8 @@ async function main() {
       + ` 删除后=${gone.status}，跨组=${foreign.status}`)
 
   // ---- ⑬ 会话密钥跨界（§4.3 ratchet）。需要服务端配合缩短阈值：
-  //       bash deploy/run-dev.sh --pb.ws.rotate-after-frames=3
-  //       PB_ROTATE_AFTER_FRAMES=3 node deploy/probe/p0-e2e.mjs
+  //       bash infra/run-dev.sh --pb.ws.rotate-after-frames=3
+  //       PB_ROTATE_AFTER_FRAMES=3 node infra/probe/p0-e2e.mjs
   const rotateAt = Number(process.env.PB_ROTATE_AFTER_FRAMES ?? 0)
   if (rotateAt > 0) {
     const fromSeq = unseal((await api('/api/v1/messages',
@@ -473,7 +473,7 @@ async function main() {
   }
 
   // ---- ⑭ D24 图文同步（§4.5 合并窗口）：一条 message 帧带齐 media[]，窗口外的图才补 media_ready
-  //       想强制走"窗口到期先发正文"这条分支：bash deploy/run-dev.sh --pb.notify.media-wait=200ms
+  //       想强制走"窗口到期先发正文"这条分支：bash infra/run-dev.sh --pb.notify.media-wait=200ms
   const mediaFrom = unseal((await api('/api/v1/messages',
     { query: 'after_seq=0&limit=1', device: a })).json, a.keys.enc.privateKey).latest_seq
   const mSink = a.connect(mediaFrom)
@@ -560,9 +560,9 @@ async function main() {
       + ` 跨组=${foreignMedia.status}，size=medium=${badSize.status}`)
 
   // ---- ⑯ tombstone → 宽限期后 media sweep 真删对象（§4.5）。需要服务端配合缩短节奏：
-  //       bash deploy/run-dev.sh --pb.s3.delete-grace=2s --pb.s3.purge-initial-delay=1s \
+  //       bash infra/run-dev.sh --pb.s3.delete-grace=2s --pb.s3.purge-initial-delay=1s \
   //         --pb.s3.purge-interval=3s
-  //       PB_PURGE_WAIT_MS=30000 node deploy/probe/p0-e2e.mjs
+  //       PB_PURGE_WAIT_MS=30000 node infra/probe/p0-e2e.mjs
   const purgeWait = Number(process.env.PB_PURGE_WAIT_MS ?? 0)
   if (purgeWait > 0) {
     const tombstoned = await api(`/api/v1/messages/${good.json.id}`, { method: 'DELETE', device: a })
@@ -700,9 +700,9 @@ async function main() {
   // ---- ⑲ 抓取失败重试（§4.5 B2b）：远端 5xx 只代表这一次没抓到，sweep 会在 retry-max 内再抓，
   //       抓到就原地补一条 media_ready（同 id 同 seq，不重复通知）。
   //       需要服务端配合放开本机图床白名单并加快巡检节奏：
-  //         bash deploy/run-dev.sh --pb.media.allow-hosts=127.0.0.1:7799 \
+  //         bash infra/run-dev.sh --pb.media.allow-hosts=127.0.0.1:7799 \
   //           --pb.media.retry-initial-delay=1s --pb.media.retry-interval=5s
-  //         PB_RETRY_WAIT_MS=40000 node deploy/probe/p0-e2e.mjs
+  //         PB_RETRY_WAIT_MS=40000 node infra/probe/p0-e2e.mjs
   const retryWait = Number(process.env.PB_RETRY_WAIT_MS ?? 0)
   if (retryWait > 0) {
     const retryPort = Number(process.env.PB_RETRY_PORT ?? 7799)

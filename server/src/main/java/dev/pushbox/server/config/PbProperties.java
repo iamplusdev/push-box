@@ -50,7 +50,7 @@ public class PbProperties {
 
   /**
    * §4.4/§5.1 入站面。刻意没有 {@code require-https-in-prod} 这类开关：传输加密是 Caddy 的职责
-   * （见 deploy/Caddyfile 的 tls + 301），应用既看不到真实的客户端协议，也没有能力拒绝，
+   * （见 infra/Caddyfile 的 tls + 301），应用既看不到真实的客户端协议，也没有能力拒绝，
    * 留一个看起来能管、实际没人读的键比不管更危险。
    */
   public static class Ingest {

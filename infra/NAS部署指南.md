@@ -2,10 +2,10 @@
 
 > 目标：**复制一份 YAML、up 起来、在浏览器里填一张表**，服务就起来了。
 > 这一版镜像里**一个服务端环境变量都没有**：没有 `ENV`、没有必填变量、没有 `__SET_ME__` 占位值
-> （见 [deploy/Dockerfile](Dockerfile)）。库地址、库口令、要不要对象存储、加密口令、管理台口令，
+> （见 [infra/Dockerfile](Dockerfile)）。库地址、库口令、要不要对象存储、加密口令、管理台口令，
 > 全都在**首次启动弹出的安装页**里填；提交后落盘成容器里的 `/app/data/config/pushbox.json`，
 > **同一个进程接着启动 Spring，不用重启容器**。
-> 这条路径与 `deploy/docker-compose.yml` 的区别写在 [软件设计方案](../docs/软件设计方案.md) D76：
+> 这条路径与 `infra/docker-compose.yml` 的区别写在 [软件设计方案](../docs/软件设计方案.md) D76：
 > 那一本面向"有 `.env`、有 Caddy 反代、外接对象存储"的生产拓扑；这一本面向"一台 NAS、一个库、
 > 图片落在卷里"的自用拓扑。只想起一个容器、不建 Compose 项目的 `docker run` 写法见
 > [README「Docker 部署」形态一](../README.md)；面向使用者的说明在
@@ -21,7 +21,7 @@
 - **Hub 上的镜像只有 `linux/amd64` 一种架构**：发布工作流那一步没有传 `platforms`
   （`.github/workflows/docker-publish.yml` 的 `Build and push`），构建机是 x86_64 就只出 x86_64。
   飞牛 2026 年 2 月起有 ARM 公测版，ARM 机型拉 Hub 镜像会得到 `no matching manifest for
-  linux/arm64/v8`——那种机器请自己在那台机器上 `docker build -f deploy/Dockerfile .`
+  linux/arm64/v8`——那种机器请自己在那台机器上 `docker build -f infra/Dockerfile .`
   （这一本 Dockerfile 是多阶段构建，ARM 上现场跑 npm + Maven，比 amd64 慢不少）。
   这一条是从工作流文件读出来的，**没有在 ARM 机器上实测过**。
 
@@ -50,7 +50,7 @@ SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句
 ## 2. 路径 A：已有 MySQL，起一个容器（默认走法）
 
 「Docker」→ 左侧「Compose」→「新增项目」→ 填项目名、选 YAML 保存位置，然后把
-[deploy/docker-compose.nas.yml](docker-compose.nas.yml) 整本粘进去，「部署 / up」。
+[infra/docker-compose.nas.yml](docker-compose.nas.yml) 整本粘进去，「部署 / up」。
 
 **这一版不用改任何一行**：那本文件里零 `${VAR}` 插值、零环境变量，镜像也不带配置。
 up 之后浏览器打开 `http://<NAS_IP>:7404/`，看到的就是安装页。
@@ -193,7 +193,7 @@ docker network inspect <项目名>_default -f '{{range .IPAM.Config}}{{.Subnet}}
 两条路：
 
 - 直接编辑那份 JSON 再重启容器。配置文件在容器里是 `/app/data/config/pushbox.json`
-  （宿主上就是那个卷里的同名文件），字段名与默认值见 [deploy/pushbox.json.example](pushbox.json.example)。
+  （宿主上就是那个卷里的同名文件），字段名与默认值见 [infra/pushbox.json.example](pushbox.json.example)。
 - 或者把那个文件删掉，下次启动就回到安装页，用「从数据库找回上次配置」把上次那份捞回来改
   （配置副本存在 `app_state.runtime_config_v1`，填对库凭据就能拉回整份 JSON）。
 
@@ -231,13 +231,13 @@ docker network inspect <项目名>_default -f '{{range .IPAM.Config}}{{.Subnet}}
   compose 的 environment 或 NAS 表单里，不如收敛成一个文件，容器内权限 `rw-------`）。
   所以**那份文件、或整个卷，要跟着数据库一起备份**；加密口令丢了等于图片全丢且不可恢复。
 - 只换镜像版本、不动卷 → 数据照用。删容器不删卷 → 数据还在；`docker compose down -v` 会把卷一起删掉。
-- 生产那套 `deploy/backup/backup.sh`（mysqldump + age 加密）入参里那几个 `PB_DB_*`/`PB_S3_*`
+- 生产那套 `infra/backup/backup.sh`（mysqldump + age 加密）入参里那几个 `PB_DB_*`/`PB_S3_*`
   是**脚本自己的入参**，不是服务端读的环境变量（服务端一个环境变量都不读）；值可以从
   `/app/data/config/pushbox.json` 里抄。本地存储模式下把媒体目录指向上面那个 Mountpoint 即可。
 
 ## 7. 这一节的验证边界
 
-**新模型的事实来源是代码**，不是实机截图：`deploy/Dockerfile`（零服务端 ENV、一个
+**新模型的事实来源是代码**，不是实机截图：`infra/Dockerfile`（零服务端 ENV、一个
 `VOLUME ["/app/data"]`、entrypoint 只剩写入探针）、`InstallServer`（安装页的校验规则与连通性检查）、
 `RuntimeConfig`（配置文件的字段名与默认值）、`docker-compose.nas.yml`（零插值、纯 TCP healthcheck）。
 本文里每一条具体命令、路径、字段名、默认值、错误话术都出自这几处。

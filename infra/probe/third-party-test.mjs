@@ -1,5 +1,5 @@
 // 第三方入站接口测试：用真实 curl 调 POST /message，Node 模拟设备收帧验证端到端投递。
-// 用法：先 bash deploy/run-dev.sh，再 node deploy/probe/third-party-test.mjs
+// 用法：先 bash infra/run-dev.sh，再 node infra/probe/third-party-test.mjs
 // 可选环境变量：PB_BASE（默认 http://127.0.0.1:7404）、PB_CURL（默认 curl）
 import crypto from 'node:crypto'
 import fs from 'node:fs'

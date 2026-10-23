@@ -131,6 +131,20 @@ pb_confirm() {
   case "$ans" in y|Y|yes|YES) return 0 ;; *) pb_info "已取消"; return 1 ;; esac
 }
 
+# ---- 产物 ----
+# 各端编译结果统一收进 output/（在 .gitignore 里）。调用点都在版本号写完之后：
+# 第 3 步那个包是拿来冒烟测试的，名字里还是上一版，直接拷会让文件名与内容对不上。
+pb_collect() {
+  local src="$1" sub="$2" name="$3"
+  if [ ! -f "$src" ]; then
+    pb_warn "没有产物可收：$src"
+    return 1
+  fi
+  mkdir -p "$PB_ROOT/output/$sub"
+  cp -f "$src" "$PB_ROOT/output/$sub/$name"
+  pb_ok "产物已收进 output/$sub/$name（$(du -h "$PB_ROOT/output/$sub/$name" | cut -f1)）"
+}
+
 # ---- 远端 ----
 # 只推 github：gitee 与 gitea 不在授权范围内（维护者明确说过），要推自己手动来。
 PB_REMOTE="github"

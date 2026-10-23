@@ -326,7 +326,7 @@ class CryptoVectorsTest {
     String configured = System.getProperty("pushbox.vectors.path");
     // 落在仓库里而不是 target/：target 会被 mvn clean 抹掉，而这份文件是 P3 Windows 端的开工前提，
     // 它必须像契约一样能被检出、被 diff。-D 参数留给 CI 覆盖。
-    Path path = Path.of(configured != null ? configured : "../testvectors/vectors.json");
+    Path path = Path.of(configured != null ? configured : "../contracts/testvectors/vectors.json");
     try {
       Files.createDirectories(path.toAbsolutePath().getParent());
     } catch (Exception e) {

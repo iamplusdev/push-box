@@ -133,7 +133,7 @@ if want server; then
     fi
 
     # 7. Docker Compose 镜像标签（生产与 WSL 测试两份都要同步，否则 tag 漂移）
-    for COMPOSE in "$ROOT_DIR/deploy/docker-compose.yml" "$ROOT_DIR/deploy/docker-compose-wsl.yml"; do
+    for COMPOSE in "$ROOT_DIR/infra/docker-compose.yml" "$ROOT_DIR/infra/docker-compose-wsl.yml"; do
         if [ -f "$COMPOSE" ]; then
             sed -i.bak -E "s#(image: (docker\.io/iamplusdev/push-box|pushbox/server)):[^ ]*#\1:$VERSION#" "$COMPOSE"
             rm -f "${COMPOSE}.bak"
@@ -143,7 +143,7 @@ if want server; then
 
     # 同一份本地镜像标签还抄在排障文档里（那条 `buildx --load` 命令必须产出 compose-wsl 期望的同一个 tag，
     # 否则照文档构建完 compose 还是找不到镜像）。它不归 compose 那个循环管，所以单独覆盖这一种写法。
-    for DOC in "$ROOT_DIR/deploy/WSL测试速查.md"; do
+    for DOC in "$ROOT_DIR/infra/WSL测试速查.md"; do
         if [ -f "$DOC" ]; then
             sed -i.bak -E "s#pushbox/server:[0-9]+\.[0-9]+\.[0-9]+#pushbox/server:$VERSION#g" "$DOC"
             rm -f "${DOC}.bak"

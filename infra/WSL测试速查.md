@@ -24,7 +24,7 @@ wsl docker info        # 起不来说明 Docker Desktop 没在跑，或没给这
 `wsl-test.env` 不存在就先抄一份模板再填（**这个文件不入库**，里面有真口令）：
 
 ```bash
-cd deploy
+cd infra
 cp wsl-test.env.example wsl-test.env
 ```
 
@@ -35,13 +35,13 @@ cp wsl-test.env.example wsl-test.env
 顺序不能换：**桶不会自动出现**，`setup` 之前它必须已经在了。
 
 ```bash
-cd deploy
+cd infra
 ./deploy-wsl.sh build && ./deploy-wsl.sh up && ./deploy-wsl.sh bucket && ./deploy-wsl.sh setup
 ```
 
 | 子命令 | 做什么 |
 |--------|--------|
-| `build` | `docker compose -f docker-compose-wsl.yml build pushbox-server`（用 `deploy/Dockerfile`，构建上下文是仓库根） |
+| `build` | `docker compose -f docker-compose-wsl.yml build pushbox-server`（用 `infra/Dockerfile`，构建上下文是仓库根） |
 | `up` | 起 MySQL 8.4 + RustFS + 服务端 + Caddy。服务端会**停在安装页上**，这是正常的 |
 | `bucket` | 在 RustFS 上建桶。借 `amazon/aws-cli` 跑在 rustfs 自己的网络命名空间里（compose 没给 rustfs 发布端口，而 `minio/mc` 已从 Docker Hub 下架） |
 | `setup` | 把 `wsl-test.env` 拼成 JSON 提交给安装页，然后等 `/healthz` 通 |
@@ -53,7 +53,7 @@ cd deploy
 手工等价（脚本坏了或想看清楚每一步时在 WSL 里跑）：
 
 ```bash
-cd /mnt/d/Projects/Android/PushBox/deploy
+cd /mnt/d/Projects/Android/PushBox/infra
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY   # Docker 代理不通时先清
 docker compose -f docker-compose-wsl.yml --env-file wsl-test.env build pushbox-server
 docker compose -f docker-compose-wsl.yml --env-file wsl-test.env up -d
@@ -61,7 +61,7 @@ docker compose -f docker-compose-wsl.yml --env-file wsl-test.env ps
 ```
 
 **没有 `mkdir data/mysql`、没有 `chown`、不要 `rm -rf data/*`**：服务端与两个存储都是 named volume
-（`server_data` / `mysql_data` / `rustfs_data`），只有 prometheus 与 grafana 用 `deploy/data/` 下的绑定挂载。
+（`server_data` / `mysql_data` / `rustfs_data`），只有 prometheus 与 grafana 用 `infra/data/` 下的绑定挂载。
 刻意不把服务端那份挂成宿主目录——`deploy-wsl.sh` 多半跑在 `/mnt/d` 上，drvfs 不支持 `chown`，
 宿主目录属主进不了 10001，entrypoint 的写入探针会直接拒绝启动。清数据用 `clean`，不是 `rm`。
 
@@ -74,7 +74,7 @@ docker compose -f docker-compose-wsl.yml --env-file wsl-test.env ps
 否则 compose 找不到镜像又去拉远端：
 
 ```bash
-docker buildx build --network=host -f deploy/Dockerfile -t pushbox/server:1.1.5 --load .
+docker buildx build --network=host -f infra/Dockerfile -t pushbox/server:1.1.5 --load .
 ```
 
 `--network=host` 是为了躲开下面 Q3 那个 IPv6 坑，它只影响构建，不进镜像、不影响运行时网络。
@@ -125,7 +125,7 @@ LiveCheck 12/12，入站 `POST /message` 带一张内网图片走到 `media_obje
 口令从 `wsl-test.env` 读，别写进命令行历史，也别贴进聊天：
 
 ```bash
-cd /mnt/d/Projects/Android/PushBox/deploy
+cd /mnt/d/Projects/Android/PushBox/infra
 ADMIN_PASSWORD="$(sed -n 's/^ADMIN_PASSWORD=//p' wsl-test.env | tr -d '\r')"
 
 TOKEN=$(curl -s -X POST http://localhost:7404/api/v1/admin/login \

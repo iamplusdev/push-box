@@ -9,7 +9,7 @@ namespace PushBox.Windows.Sync;
 
 /// <summary>
 /// The socket, as far as <see cref="PushConnection"/> cares. Pulling it out is what lets the §5.3
-/// handshake be tested frame by frame against testvectors/vectors.json without a server, and the
+/// handshake be tested frame by frame against contracts/testvectors/vectors.json without a server, and the
 /// assertions there are the ones that decide whether a forged handshake is refused.
 /// </summary>
 public interface IPushTransport

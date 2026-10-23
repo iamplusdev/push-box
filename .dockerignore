@@ -1,4 +1,4 @@
-# 构建上下文里真正被 COPY 的只有 pom.xml、core/src、server/src（deploy/Dockerfile 由
+# 构建上下文里真正被 COPY 的只有 pom.xml、core/src、server/src（infra/Dockerfile 由
 # compose 的 dockerfile: 单独读取，不在上下文内）。其余全排除——尤其 android/ 与 */target/，
 # 带上它们只会让每次 build 先传几个 GB。
 .git
@@ -12,8 +12,10 @@ android/
 windows/
 site/
 docs/
-testvectors/
-deploy/
+assets/
+output/
+contracts/testvectors/
+infra/
 
 **/target/
 **/build/

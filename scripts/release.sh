@@ -257,5 +257,6 @@ cat <<EOF
 📊 收尾
    推送状态     $( [ "$PB_PUSH" = 1 ] && echo "已推 github（工作流已经开始跑）" || echo "只在本地：git push github $(pb_current_branch) && git push github <标签>" )
    工作流复核   https://github.com/iamplusdev/push-box/actions
-   发布后请照 发布检查清单.md 的「发布后监控」逐条走一遍
+   发布后请照 docs/release/发布检查清单.md 的「发布后监控」逐条走一遍
+   本地产物     output/ 下按端存放（jar / apk / exe），全是这一轮版本号重出的那一份
 EOF

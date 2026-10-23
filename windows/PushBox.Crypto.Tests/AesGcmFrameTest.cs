@@ -12,7 +12,7 @@ public class AesGcmFrameTest
     public void AesGcm_EncryptDecrypt_MatchesVector()
     {
         // Read vectors.json
-        var vectorsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "testvectors", "vectors.json");
+        var vectorsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "contracts", "testvectors", "vectors.json");
         var json = File.ReadAllText(vectorsPath);
         using var doc = JsonDocument.Parse(json);
         var outputs = doc.RootElement.GetProperty("outputs");
@@ -66,7 +66,7 @@ public class AesGcmFrameTest
     [Fact]
     public void AesGcm_TamperedCiphertext_ShouldFail()
     {
-        var vectorsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "testvectors", "vectors.json");
+        var vectorsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "contracts", "testvectors", "vectors.json");
         var json = File.ReadAllText(vectorsPath);
         using var doc = JsonDocument.Parse(json);
         var outputs = doc.RootElement.GetProperty("outputs");

@@ -8,7 +8,7 @@ body:
       value: |
         先确认两件事，能省掉一轮往返：
         1. `/healthz` 的 `storage` 只校验"配置项非空"，**既不探端点可达也不探桶是否存在**。
-           报"存储相关"问题请用 `mc ls` 或 `aws s3api head-bucket` 判桶（命令见 deploy/部署快速参考.md「桶要建一次」），别拿 `/healthz` 当证据。
+           报"存储相关"问题请用 `mc ls` 或 `aws s3api head-bucket` 判桶（命令见 infra/部署快速参考.md「桶要建一次」），别拿 `/healthz` 当证据。
         2. 服务端库里是明文、端上正文不加密，这是设计取舍（见 SECURITY.md），不是缺陷。
   - type: dropdown
     id: surface

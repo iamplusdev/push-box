@@ -8,14 +8,14 @@ build/
 !android/gradle/wrapper/gradle-wrapper.jar
 
 # 本机凭据与联调配置，绝不入库
-deploy/env/local.env
-deploy/env/*.env
+infra/env/local.env
+infra/env/*.env
 # WSL 联调那套也是同一性质：值本身是测试值，但进了公开仓就等于把"这套部署的口令位长什么样"发出去，
 # 而且 copy-paste 是双向的——总有人把测试 env 直接当模板用在真机上。入库的是 .example。
-deploy/wsl-test.env
+infra/wsl-test.env
 # 但上面那两条会顺手盖掉模板，模板是必须入库的
-!deploy/env/*.env.example
-!deploy/wsl-test.env.example
+!infra/env/*.env.example
+!infra/wsl-test.env.example
 application-local.yml
 .env
 local.properties
@@ -30,10 +30,10 @@ android/dev/
 
 # compose 里 mysql/rustfs/prometheus/grafana 的 bind mount 宿主目录。
 # pushbox-server 的日志用的是 named volume，不落在这里。
-deploy/data/
+infra/data/
 
 # 本地文件系统存储数据（安装页里没勾「改用对象存储」时图片落这里）
-deploy/media/
+infra/media/
 
 .idea/
 *.iml
@@ -65,6 +65,10 @@ android/.kotlin/
 # 图片那层长成 data/media/media/<msg_id>/0.bin：多出来的一层是对象键自带的 `media/` 前缀，不是配错了目录。
 /data/
 /server/data/
+
+# 产物层：release 脚本把各端编译结果收进这里（jar / apk / exe），仓库只留 .gitkeep
+/output/*
+!/output/.gitkeep
 
 # 真机截图与验收现场，每次跑都换一批名字；留本机当证据，不入库
 /.tmp-shot/

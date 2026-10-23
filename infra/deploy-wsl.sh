@@ -50,7 +50,7 @@ check_docker() {
     fi
     if [ ! -f "$ENV_FILE" ]; then
         log_error "缺 $ENV_FILE"
-        log_error "  cp deploy/wsl-test.env.example deploy/wsl-test.env  然后按本机情况填值"
+        log_error "  cp infra/wsl-test.env.example infra/wsl-test.env  然后按本机情况填值"
         exit 1
     fi
 }

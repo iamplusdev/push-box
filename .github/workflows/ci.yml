@@ -44,10 +44,10 @@ jobs:
           - 3306:3306
       rustfs:
         image: rustfs/rustfs:latest
-        # 环境变量名与 deploy/docker-compose-wsl.yml 一致。端口按镜像自己的口径：
+        # 环境变量名与 infra/docker-compose-wsl.yml 一致。端口按镜像自己的口径：
         # rustfs/rustfs:latest 监听 9000（S3 API）与 9001（Console）。
         # 远端那台存储机是在 7101 上跑的（§11.1 实测过），别把 7101 当成 RustFS 的默认端口 ——
-        # 这个错在 deploy/wsl-test.env 里存了整整一版测试环境：healthz 的 storage 只判"配置非空"，
+        # 这个错在 infra/wsl-test.env 里存了整整一版测试环境：healthz 的 storage 只判"配置非空"，
         # 所以 http://rustfs:7101 一路显示 up，直到第一条带图的消息才会撞成 failed。
         env:
           RUSTFS_ACCESS_KEY: ci-s3-access-key
@@ -125,7 +125,7 @@ jobs:
           echo "::error::MySQL 90 秒内没就绪"
           exit 1
 
-      # 桶不会自动出现：仓库里没有建桶的地方（deploy/compose 都没有），历史联调用的那只桶是当年手工建的。
+      # 桶不会自动出现：仓库里没有建桶的地方（infra/compose 都没有），历史联调用的那只桶是当年手工建的。
       # 不建桶的话第一条带图消息才会报错，而 CI 里没有那条消息 —— 所以在这里显式建，把运维缺口也钉住。
       # 客户端用 runner 自带的 AWS CLI（Ubuntu 24.04 镜像 Readme 实测预装 2.37.13），不再拉 mc 镜像：
       # minio/mc 已经从 Docker Hub 下架（hub.docker.com/v2/repositories/minio/mc 实测 404），

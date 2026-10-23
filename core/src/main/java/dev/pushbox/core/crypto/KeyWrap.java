@@ -43,7 +43,7 @@ public final class KeyWrap {
 
   /**
    * SSE-C 还要求 key-MD5：AWS SDK v2 的这一版不会替我们算，缺这个头 RustFS 直接拒
-   * （实测见 deploy/probe/rustfs-capability.mjs）。MD5 在这里只是协议规定的校验和，不是密码学强度。
+   * （实测见 infra/probe/rustfs-capability.mjs）。MD5 在这里只是协议规定的校验和，不是密码学强度。
    */
   public static String sseKeyMd5Header(byte[] dataKey) {
     try {

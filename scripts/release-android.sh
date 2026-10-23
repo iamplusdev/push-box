@@ -127,7 +127,7 @@ else
 fi
 
 # ---- 4. 写版本号 ----
-pb_step "4/6 写版本号"
+pb_step "4/6 写版本号并收产物"
 if [ "$PB_DRY_RUN" = 1 ]; then
   pb_info "[dry-run] 本来会跑：bash scripts/set-version.sh --only=android $PB_TARGET"
 else
@@ -135,6 +135,12 @@ else
   actual_code="$(pb_intree_version_code || true)"
   [ "$actual_code" = "$target_code" ] || { pb_fail "versionCode 写成了 $actual_code，期望 $target_code"; exit 1; }
   pb_ok "versionName=$PB_TARGET versionCode=$actual_code"
+
+  # 重出一份带新版本号的 APK 收进 output/。第 3 步已经验过签名与构建，但那一份还是旧版本号。
+  pb_info "按 $PB_TARGET 重出 release APK 并收进 output/"
+  ( cd "$PB_ROOT/android" && ./gradlew :app:assembleRelease --no-daemon ) \
+    || { pb_fail "重出 APK 失败；版本号已在工作区、尚未提交，修完重跑本脚本"; exit 1; }
+  pb_collect "$PB_ROOT/android/app/build/outputs/apk/release/app-release.apk" android-apk "pushbox-release-$PB_TARGET.apk"
 fi
 
 # ---- 5. 提交与打标签 ----

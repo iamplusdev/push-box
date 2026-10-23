@@ -133,11 +133,17 @@ else
 fi
 
 # ---- 4. 写版本号 ----
-pb_step "4/6 写版本号"
+pb_step "4/6 写版本号并收产物"
 if [ "$PB_DRY_RUN" = 1 ]; then
   pb_info "[dry-run] 本来会跑：bash scripts/set-version.sh --only=server $PB_TARGET"
 else
   ( cd "$PB_ROOT" && bash scripts/set-version.sh --only=server "$PB_TARGET" ) || { pb_fail "写版本号失败"; exit 1; }
+
+  # 重出一份带新版本号的 jar 收进 output/。第 3 步的包已经证明能跑，但它的名字还是旧版本。
+  pb_info "按 $PB_TARGET 重出 jar 并收进 output/"
+  ( cd "$PB_ROOT" && mvn -B -pl server -am -DskipTests package ) \
+    || { pb_fail "重出包失败；版本号已在工作区、尚未提交，修完重跑本脚本"; exit 1; }
+  pb_collect "$(ls "$PB_ROOT"/server/target/pushbox-server-*.jar | head -1)" server-jar "pushbox-server-$PB_TARGET.jar"
 fi
 
 # ---- 5. 提交与打标签 ----

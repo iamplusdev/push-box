@@ -15,7 +15,7 @@
 #      对象存储填 http://rustfs:9000（rustfs/rustfs:latest 监听 9000(S3)/9001(Console)，
 #      而拓扑 A 那台在跑的实例挂在 7101；填错端口不会立刻报错，要到第一条带图的消息才炸）。
 #      桶 pushbox 不会自动出现，需要建一次：mc mb local/pushbox，没有 mc 时用
-#      aws s3api create-bucket --bucket pushbox（两种命令都写在 deploy/部署快速参考.md「桶要建一次」）。
+#      aws s3api create-bucket --bucket pushbox（两种命令都写在 infra/部署快速参考.md「桶要建一次」）。
 #   C. 不接对象存储 —— 安装页里不勾「改用对象存储」，图片与头像落在同一个卷的 media/ 下。
 #
 # 监控栈（prometheus + grafana）单独一本文件，想要监控时才多传一个 -f：
@@ -23,7 +23,7 @@
 # 为什么不留在本文件里挂 profile：见 docker-compose.monitoring.yml 顶部说明。
 #
 # 还在用环境变量的只有第三方镜像（mysql / rustfs / grafana）——那是它们自己的口径，
-# 取值从 .env 来（见 deploy/env/prod.env.example），禁止写进本文件、禁止提交。
+# 取值从 .env 来（见 infra/env/prod.env.example），禁止写进本文件、禁止提交。
 
 name: pushbox
 
@@ -31,7 +31,7 @@ services:
   pushbox-server:
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
+      dockerfile: infra/Dockerfile
     # 引用 CI 推到 Docker Hub 的那个名字，本文件同时留 build: 段：镜像在远端存在就拉，
     # 拉不到（自己 fork、离线、改了代码）才本地编。
     image: docker.io/iamplusdev/push-box:1.1.5
@@ -63,7 +63,7 @@ services:
     # 注意它并**不**让 /healthz 变可读：经过端口映射的连接在容器里看到的源地址是网桥网关（172.x.0.1），
     # 不是 127.0.0.1，InternalAccessFilter 照样回 404。要从宿主读 /healthz 只有两条路：exec 进容器用
     # /dev/tcp 或 curl，或在安装页的「运维网段」里填这套网络实际分到的子网
-    # （判据与命令见 deploy/部署快速参考.md「验收」）。
+    # （判据与命令见 infra/部署快速参考.md「验收」）。
     # 端口写死 7404：它是安装页里的默认值，容器内改端口要同步改这里的映射与 Caddyfile 的上游，
     # 三处一起动才不出"容器起了但没人监听映射端口"的怪事——所以文档口径是"容器里别改，要改改宿主映射"。
     # 需要"手机直连明文 7404"调试时再放开下面那行，代价很清楚：明文链路 + 绕过 Caddy 的

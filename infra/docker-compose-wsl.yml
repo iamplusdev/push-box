@@ -1,14 +1,14 @@
 # WSL Docker 测试环境 - 完整独立部署（拓扑 B）：MySQL + RustFS + PushBox Server + Caddy
 #
 # 服务端不读环境变量，所以 pushbox-server 那一段没有 environment:。配置从安装页来：
-# 容器起来后停在安装页上，deploy-wsl.sh 的 `setup` 子命令会把 deploy/wsl-test.env 里那几个测试值
+# 容器起来后停在安装页上，deploy-wsl.sh 的 `setup` 子命令会把 infra/wsl-test.env 里那几个测试值
 # POST 到 /api/v1/setup —— 走的是和真人点「保存并启动」完全相同的一条路，所以这套栈顺带就是
 # 安装页的端到端验证。手工来也一样：浏览器打开 http://localhost:7404/ 自己填。
 #
 # 环境变量在这本文件里只剩两类：
 #   · 第三方镜像自己的（mysql / rustfs / grafana）——它们只认这个；
 #   · 宿主侧的端口映射（PB_HTTP_PORT）——不进容器。
-# 取值都从 deploy/wsl-test.env 来（--env-file 传进去，那份文件不入库）。
+# 取值都从 infra/wsl-test.env 来（--env-file 传进去，那份文件不入库）。
 
 name: pushbox-test
 
@@ -16,7 +16,7 @@ services:
   pushbox-server:
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
+      dockerfile: infra/Dockerfile
     image: pushbox/server:1.1.5
     volumes:
       # 与主文件同口径：一个 named volume 装下 config/ + media/ + logs/。
@@ -87,7 +87,7 @@ services:
   # 端口填错在保存之前就会被拦下来。
   # 桶不会自动创建，首次部署补一次（rustfs 镜像里没有 S3 客户端；`minio/mc` 已从 Docker Hub 下架，实测 404）。
   # 这份 compose 不给 rustfs 发布端口，所以客户端要借 rustfs 自己的网络命名空间才够得着 127.0.0.1:9000：
-  #   docker run --rm --network container:"$(docker compose -f deploy/docker-compose-wsl.yml ps -q rustfs)" \
+  #   docker run --rm --network container:"$(docker compose -f infra/docker-compose-wsl.yml ps -q rustfs)" \
   #     -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION=us-east-1 \
   #     amazon/aws-cli --endpoint-url http://127.0.0.1:9000 s3api create-bucket --bucket pushbox
   #   有 mc 的话同理：mc alias set pb http://127.0.0.1:9000 <AK> <SK> && mc mb pb/pushbox
