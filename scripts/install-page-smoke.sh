@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# 安装页冒烟：真起一次 fat jar，验三件只有"跑起来的进程"才验得到的事。
+# 安装页冒烟：真起一次 fat jar，验四件只有"跑起来的进程"才验得到的事。
 #
-#   ① 没有配置文件时安装页真的起得来（端口、页面资源都在）；
-#   ② 表单校验先于任何网络（库地址空着就直接被点名，不会去连）；
-#   ③ 连不上库时**一个字节都不落盘**，且错误是"连不上"而不是"找不到驱动"。
+#   ① 没有配置文件时安装页真的起得来（端口、页面资源、注入的监听端口都在）；
+#   ② 未配置时除了安装页都 302 回 `/`（同端口复用的那条判据，而不是 404）；
+#   ③ 表单校验先于任何网络（库地址空着就直接被点名，不会去连）；
+#   ④ 连不上库时**一个字节都不落盘**，且错误是"连不上"而不是"找不到驱动"。
 #
-# 为什么单测照不出 ③：`DriverManager` 初始化时用**系统类加载器**跑 ServiceLoader，
+# 为什么单测照不出 ④：`DriverManager` 初始化时用**系统类加载器**跑 ServiceLoader，
 # 而 Spring Boot 把 mysql-connector 放在 `BOOT-INF/lib/` 下，只有 LaunchedClassLoader
 # 看得见——于是安装页（它在 Spring 之前跑）直接 getConnection 会报
 # "No suitable driver found"。`mvn test` 与 IDE 跑的都是 exploded classpath，
@@ -20,7 +21,7 @@
 #   JAVA_HOME=/d/Apps/DE/Java/jdk-21.0.8 bash scripts/install-page-smoke.sh
 #
 # 不需要 MySQL、不需要桶、不碰仓库里的任何 data/ 目录：配置文件指到 mktemp 出来的临时目录，
-# 而且这三条判据全都是"失败路径"，本来就一个字节都不该写。
+# 而且后两条判据走的是"失败路径"，本来就一个字节都不该写。
 
 set -uo pipefail
 
@@ -112,35 +113,45 @@ fi
 
 # ① 页面真的在，而且是安装页而不是别的什么 200。
 body="$(curl -s --max-time 5 "http://127.0.0.1:$PORT/")"
-if grep -q "PushBox 安装" <<<"$body" && grep -q 'id="dbHost"' <<<"$body"; then
-    pass "① 安装页起来了，表单字段在（$(wc -c <<<"$body" | tr -d ' ') 字节）"
+if grep -q "PushBox 安装" <<<"$body" && grep -q 'id="dbHost"' <<<"$body" \
+   && grep -q "name=\"pb-install-port\" content=\"$PORT\"" <<<"$body"; then
+    pass "① 安装页起来了，表单字段与真实端口都在（$(wc -c <<<"$body" | tr -d ' ') 字节）"
 else
-    fail "① 端口 $PORT 上有 200，但不是安装页（没有「PushBox 安装」或 dbHost 字段）"
+    fail "① 端口 $PORT 上有 200，但不是安装页（缺「PushBox 安装」、dbHost 或注入端口）"
 fi
 
-# ② 校验先于网络：库地址空着就该被点名，而不是去连一个空地址。
+# ② 未配置时只有安装页：管理台的路由一律 302 回 `/`，而不是 404 或一片 200+HTML。
+#    同端口复用的前提就是"同一地址在配置前后都能打开"。
+redirect="$(curl -s -o /dev/null --max-time 5 -w '%{http_code} %{redirect_url}' "http://127.0.0.1:$PORT/dashboard")"
+if [ "$redirect" = "302 http://127.0.0.1:$PORT/" ]; then
+    pass "② 未配置时 /dashboard 302 回安装页"
+else
+    fail "② /dashboard 期望 302 回 /，实际：$redirect"
+fi
+
+# ③ 校验先于网络：库地址空着就该被点名，而不是去连一个空地址。
 resp="$(curl -s --max-time 10 -X POST "http://127.0.0.1:$PORT/api/v1/setup" \
         -H 'Content-Type: application/json' --data "$PAYLOAD_INVALID")"
 if grep -q '"ok":false' <<<"$resp" && grep -q '数据库地址不能为空' <<<"$resp"; then
-    pass "② 表单校验先跑：库地址空着当场被点名"
+    pass "③ 表单校验先跑：库地址空着当场被点名"
 else
-    fail "② 空库地址没被 validate() 拦下，回的是：$resp"
+    fail "③ 空库地址没被 validate() 拦下，回的是：$resp"
 fi
 
-# ③ 驱动装得上、连接失败说得清、且不落盘。这一条是本脚本存在的理由。
+# ④ 驱动装得上、连接失败说得清、且不落盘。这一条是本脚本存在的理由。
 resp="$(curl -s --max-time 30 -X POST "http://127.0.0.1:$PORT/api/v1/setup" \
         -H 'Content-Type: application/json' --data "$PAYLOAD_UNREACHABLE")"
 if grep -q 'No suitable driver' <<<"$resp"; then
-    fail "③ fat jar 里没装上 MySQL 驱动（InstallServer.loadMysqlDriver 失效了）：$resp"
+    fail "④ fat jar 里没装上 MySQL 驱动（InstallServer.loadMysqlDriver 失效了）：$resp"
 elif grep -q '"ok":false' <<<"$resp" && grep -q '连不上数据库' <<<"$resp"; then
-    pass "③ 驱动找到了、连接失败被说成「连不上数据库」"
+    pass "④ 驱动找到了、连接失败被说成「连不上数据库」"
 else
-    fail "③ 期望「连不上数据库」，实际回的是：$resp"
+    fail "④ 期望「连不上数据库」，实际回的是：$resp"
 fi
 if [ -e "$CONFIG" ]; then
-    fail "③ 连不上库却把配置写盘了（$CONFIG）：半份配置比让人重填一遍更糟"
+    fail "④ 连不上库却把配置写盘了（$CONFIG）：半份配置比让人重填一遍更糟"
 else
-    pass "③ 连不上库时一个字节都没落盘"
+    pass "④ 连不上库时一个字节都没落盘"
 fi
 
 echo

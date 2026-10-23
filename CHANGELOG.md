@@ -20,6 +20,16 @@
 - **管理台从"两把钥"变成一个口令**：`admin.password`（≥8 字符，**留空 = 管理台整个关闭**，`AdminAuthController` 的 403「管理台未启用」不变），签名钥 `admin.jwtKey` 由 `RuntimeConfig#normalize()` 首次启动自动生成并回写。部署者不再需要生成两个强随机值并记住它们必须不同。
 - **配置副本落库**：启动后整份配置抄进 `app_state.runtime_config_v1`，重装或换机器时只带库凭据就能把上次的配置拉回来改（**KEK 不在副本里**，它从来不落库，那一栏得手工重填）。
 
+### 同一个端口上的交接：安装页 → 管理台
+
+安装页和服务本来就共用一个端口，这一轮把"访问者手上的那个地址"也接上了：
+
+- **未配置时非根路径 302 回安装页**。`/dashboard`、`/login`、`/admin` 这些地址在"还没配置"期间原来都是 404（只有 `/` 是表单），收藏夹里的管理台地址在首次部署时等于死链。现在一律 `302 Location: /` + `Cache-Control: no-store`，配置完同一个地址自然就是管理台。
+- **安装页注入真实监听端口**。表单里有一个「端口」，提交后服务端会改在**新端口**上起 Spring；页面要判断"端口到底改没改"，不能拿 `location.port` 比——容器把宿主 7405 映射到容器 7404 时它是 7405，反代在 443 时它是空串。所以在页面里放 `<meta name="pb-install-port" content="__INSTALL_PORT__">`，由 `InstallServer` 在吐出 HTML 时替换成实际监听端口（直接双击打开模板文件时回退到 `location.port`，页面仍可用）。
+- **保存成功后同源轮询、就绪再跳转**。`POST /api/v1/setup` 成功只代表配置落盘，Spring 还在起；页面每 600ms（首轮之后 1s）取一次同源 `/`，最多 60 次，解析出管理台的挂载点就 `location.replace('/')`，超时则留一句"稍后刷新本页就能进入管理台"。**端口改过时不跳**：服务端会改在新端口上启动，旧端口这一页跳过去只会连不上，所以直接给出 `http://<host>:<新端口>/`。
+
+这一条在真实浏览器里第一次跑就抓到一个假阳性，`mvn test` 抓不到：判据第一版写的是 `html.indexOf('id="app"')`，而**这段判据代码本身就在安装页里**——取回来的安装页 HTML 因此天然含有 `id="app"` 这几个字节；再加上安装页 `stop(1)` 留出的一秒宽限，保存后第一轮轮询必然把自己认成管理台，`location.replace('/')` 立刻刷新、表单被清空，看起来像"点保存就丢掉配置"。修法是把判据从字符串换成 DOM：`new DOMParser().parseFromString(html, 'text/html').getElementById('app')`。单测同时补了一条"安装页里不许出现 `<div id="app"`"，把"安装页不能带 SPA 挂载点"变成显式契约。
+
 ### 删掉的
 
 - 全部服务端 `PB_*` 键，**连兼容别名一起删、不留过渡期**（留别名等于留两套真值）。
@@ -48,9 +58,9 @@
 
 ### 验证
 
-- **Java 全量 331 条（core 43 + server 288，298 执行 + 33 跳过）、0 失败 0 错误**，BUILD SUCCESS。新增用例集中在 `setup/`：`RuntimeConfigTest` 10 + `InstallServerTest` 14 + `RuntimeConfigEnvironmentPostProcessorTest` 5 = 29 条；同时删掉 `DevCredentialsGuardTest` 10 与 `ProdPlaintextMediaGuardTest` 7，净 `+12`（319 → 331）。
+- **Java 全量 332 条（core 43 + server 289，299 执行 + 33 跳过）、0 失败 0 错误**，BUILD SUCCESS。新增用例集中在 `setup/`：`RuntimeConfigTest` 10 + `InstallServerTest` 15 + `RuntimeConfigEnvironmentPostProcessorTest` 5 = 30 条；同时删掉 `DevCredentialsGuardTest` 10 与 `ProdPlaintextMediaGuardTest` 7，净 `+13`（319 → 332）。`InstallServerTest` ⑮ 是真起一次 `HttpServer` 的交接判据：`GET /` 200 且 meta 里是实际端口、`/dashboard` `/login` `/admin` 三条 302 且 `Location: /`。
 - **`scripts/release-verify.sh` 84 通过 / 0 失败 / 2 警告**（两条警告是"本机没有 docker CLI 判不了镜像体积"与"工作区有未提交文件"）。本轮新增第 8 节「检查发布脚本」8 条判据，判的是**形状**（五个脚本都在、都过 `bash -n`、三端各自"本地测试那一步的行号 < 写版本号那一步的行号"、`PB_REMOTE` 唯一取值 `github`、没有任何一行把 `push` 与 `gitee`/`gitea` 写在一起、`PB_PUSH` 初值是 0）——这些脚本自己不会被任何工作流触发，坏了没人替你发现。**六条都做过负测**：把 `set-version` 那行挪到测试之前、在 `release-windows.sh` 末尾塞半截 `if`、`PB_REMOTE` 改 `gitee`、`PB_PUSH` 改 1、往 `release-android.sh` 塞一行 `git push gitee main`、把 `release.sh` 挪走，六种改法逐个把对应判据判红，恢复后与备份逐字节相同、闸门回绿。写它时踩到一次自指：判据本来用 `scripts/release*.sh` 这个 glob 扫，把 `release-verify.sh` 自己也扫进去了，而它的判据文本里同时写着 `push` 与 `gitee`，第一跑就把自己判红——改成只扫那五个文件名（与 compose 那条 `${VAR:?}` 判据同一类失效：给人读的说明文字被自己的闸门当成违规）。
-- **发布脚本本身验到哪儿**：`release.sh` 的 `--list`、单端 / 多端 / `--all` 的 `--dry-run`、显式旧版本号被判死、部分成功部分失败时的统计与"剩下的端该跑哪条命令"提示、`--bump=minor` 与 `--push` 的参数转发，都实跑过；服务端那一步（`3/6`）是把脚本里那段**原样抽出来真跑的**——`mvn -B -pl server -am test` 出 331 条 / 33 跳过 / 298 执行、与 `ci.yml` 基线相等，`web-admin` 构建出非空 `dist/index.html`，`release-verify.sh` 零 FAIL。**Android 与 Windows 那两步没有真跑过**（`gradlew :app:assembleRelease` + `apksigner` 比指纹、`dotnet test` + 数 trx + `build-installer.sh`），判据是照 `ci.yml` / `build-apk.yml` 抄的，只过了 `bash -n` 与 dry-run；也**没有创建过任何提交或标签、没有推过任何远端**。
+- **发布脚本本身验到哪儿**：`release.sh` 的 `--list`、单端 / 多端 / `--all` 的 `--dry-run`、显式旧版本号被判死、部分成功部分失败时的统计与"剩下的端该跑哪条命令"提示、`--bump=minor` 与 `--push` 的参数转发，都实跑过；服务端那一步（`3/6`）是把脚本里那段**原样抽出来真跑的**——`mvn -B -pl :pushbox-server -am test` 出 332 条 / 33 跳过 / 299 执行、与 `ci.yml` 基线相等，`web-admin` 构建出非空 `dist/index.html`，`release-verify.sh` 零 FAIL。**Android 与 Windows 那两步没有真跑过**（`gradlew :app:assembleRelease` + `apksigner` 比指纹、`dotnet test` + 数 trx + `build-installer.sh`），判据是照 `ci.yml` / `build-apk.yml` 抄的，只过了 `bash -n` 与 dry-run；也**没有创建过任何提交或标签、没有推过任何远端**。
 - **WSL Docker 上真跑了一次安装页全流程**：从改过的源码重建镜像 → `docker compose up` → 删掉容器里的 `pushbox.json` 把安装页重新武装 → `deploy/deploy-wsl.sh setup` 把表单值 POST 进去 → 在容器内 `/app/data/config/pushbox.json` 里确认 `media.allowHosts` 等字段真的落盘 → `/healthz` 200 → `PushBox.LiveCheck` 12/12 → 入站 `POST /message` 带一张内网图片。上面那三条缺陷就是这么照出来的，`mvn test` 一条都抓不到。图片链路终态：`media_objects.status=ready`、`enc_mode=sse-c`、`length(sse_key_wrapped)=61`、`size=79`、`object_key` 非空，`senders.avatar_key` 也非空；桶里那份 `xl.meta` 既没有 PNG 魔数也没有 `IHDR`，落盘确实是密文。顺带验到两条设计行为：同一 URL 的第二条消息按 sha256 复用了前一条的 `object_key`；先前 `ssrf_blocked` 的那一行在放行主机进配置之后被重试器自己救回了 `ready`。
 - **加密媒体的读侧仍然没验**：`/api/v1/media/{msgId}/{idx}` 与 `/api/v1/avatars/{token}` 都要 `DeviceGuard` 的设备签名，curl 复现不出来，而 `LiveCheck` ⑦ 只覆盖 404/hint 那条路；真要桶的那 5 个 IT 类挂在 `objectStorageReady` 上，本机没跑。
 - **端点闸补了一处盲区**：它原来只从 `web/*.java` 的 `@*Mapping` 与 `registry.addHandler` 提路由，而 `POST /api/v1/setup` 是 `InstallServer` 用 JDK HttpServer 的 `createContext` 注册的、跑在 Spring 之前，永远不会有注解——闸门因此把文档里那个**真实存在**的端点判成"代码里找不到"。修法是把 `createContext("/api…")` 也纳入提取（只收 `/api` 开头的，同一个 `createContext` 还注册了表单页 `/`，那不是接口路径）。
@@ -58,7 +68,7 @@
 
 ### 未做 / 边界
 
-- **安装页在浏览器里的实际渲染没看过**：本轮端到端是脚本直接 POST `/api/v1/setup`，没有真人点过表单；飞牛/群晖的「存储位置」表单只剩一行之后长什么样，也还没看。
+- **安装页的浏览器渲染与自动跳转已实测（2026-10-23）**：本地 fat jar + 隔离 MySQL（宿主 3307）、jar 监听 8081，在浏览器里真实填表、点「测试连接」、提交，页面自动跳到 `http://127.0.0.1:8081/login`，管理台登录页正常渲染。**没走到的两支**：表单里把端口改成另一个值（服务端会换端口启动，代码只提示新地址、不跳转，这条分支没有在浏览器里点过）、飞牛/群晖的「存储位置」表单只剩一行之后长什么样。
 - **从旧版本（≤1.1.5，只读环境变量）回退不是改一行 image tag**：旧镜像不认 `pushbox.json`，得把整套 `PB_*` 重新配齐，且加密口令必须与新配置里那一份**逐字相同**，否则旧封装钥解不开（症状是图片集体 404）。反方向没有这个问题。
 - ARM 机型仍然没验（发布工作流没传 `platforms`，Hub 上是 amd64）。
 - 未实现 KEK 轮换或旧对象重封装。

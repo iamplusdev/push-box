@@ -100,8 +100,11 @@ public class InstallServer {
   private void handlePage(HttpExchange exchange) throws IOException {
     String path = exchange.getRequestURI().getPath();
     if (!"/".equals(path) && !"/index.html".equals(path)) {
-      respond(exchange, 404, "text/plain; charset=utf-8",
-          "PushBox 还没配置完，只有安装页在监听。".getBytes(StandardCharsets.UTF_8));
+      // 没配置完时这里只有安装页：收藏的 /dashboard、旧书签的 /admin 都回同一张表单，
+      // 而不是一句 404——部署者手上那个地址本来就该一直能用。
+      exchange.getResponseHeaders().set("Location", "/");
+      exchange.getResponseHeaders().set("Cache-Control", "no-store");
+      exchange.sendResponseHeaders(302, -1);
       return;
     }
     byte[] html = readPage();
@@ -115,7 +118,14 @@ public class InstallServer {
 
   private byte[] readPage() {
     try (InputStream in = InstallServer.class.getResourceAsStream(PAGE_RESOURCE)) {
-      return in == null ? null : in.readAllBytes();
+      if (in == null) {
+        return null;
+      }
+      // 页面要知道"自己此刻是从哪个端口出来的"——容器把 7405 映射到 7404 时，
+      // location.port 是 7405，拿它判断"端口改没改"会误报。真实监听端口只有这里有。
+      return new String(in.readAllBytes(), StandardCharsets.UTF_8)
+          .replace("__INSTALL_PORT__", Integer.toString(port))
+          .getBytes(StandardCharsets.UTF_8);
     } catch (IOException e) {
       return null;
     }

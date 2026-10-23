@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="pb-install-port" content="__INSTALL_PORT__">
 <title>PushBox 安装</title>
 <style>
   :root {
@@ -59,7 +60,7 @@
 <div class="wrap">
   <header>
     <h1>PushBox 安装</h1>
-    <p>填完点「保存并启动」，服务端会立刻接着启动，不需要重启容器。带 <b>*</b> 的必填，其余留空即用默认值。</p>
+    <p>填完点「保存并启动」，服务端会立刻接着启动，不需要重启容器；启动完成后本页自动切到管理台。带 <b>*</b> 的必填，其余留空即用默认值。</p>
   </header>
 
   <section>
@@ -184,6 +185,13 @@
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var msg = $('msg');
+  // 这次安装页真正监听的端口（服务端注入）。location.port 在容器端口映射下是宿主那侧，
+  // 拿它比"端口改没改"会把 7405→7404 误判成改过端口。
+  var installPort = (function () {
+    var meta = document.querySelector('meta[name="pb-install-port"]');
+    var n = meta ? parseInt(meta.getAttribute('content'), 10) : NaN;
+    return isNaN(n) ? (parseInt(location.port, 10) || 80) : n;
+  })();
 
   function say(text, kind) { msg.textContent = text || ''; msg.className = kind || 'info'; }
 
@@ -262,6 +270,26 @@
     if (text) { button.textContent = text; }
   }
 
+  // 保存成功后安装页只剩约一秒，接着 Spring 在同一端口上启动。轮询同源根路径，
+  // 解析出管理台的挂载点就整页换过去；期间连接被重置是正常的。
+  function waitForAdmin(attempt) {
+    if (attempt >= 60) {
+      say('配置已保存，但服务端还没就绪。稍后刷新本页就能进入管理台。', 'info');
+      return;
+    }
+    setTimeout(function () {
+      fetch('/', { cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+        // 按元素判，不按字符串判：安装页自己的脚本里也有一模一样的字面量，
+        // 而安装页还会在这一秒的交接期里继续返回 200。
+        if (new DOMParser().parseFromString(html, 'text/html').getElementById('app')) {
+          location.replace('/');
+          return;
+        }
+        waitForAdmin(attempt + 1);
+      }).catch(function () { waitForAdmin(attempt + 1); });
+    }, attempt === 0 ? 600 : 1000);
+  }
+
   $('testDb').addEventListener('click', function () {
     var b = this, old = b.textContent;
     busy(b, true, '测试中…'); say('正在连接数据库…');
@@ -287,10 +315,14 @@
     post('', config).then(function (r) {
       if (!r.ok) { say(r.error, 'err'); busy(b, false, old); return; }
       busy(b, true, '已保存');
-      var same = config.port === (parseInt(location.port, 10) || 80);
-      say(same ? r.message + '（本页稍后会自动变成登录页）'
-               : r.message + ' 端口改成了 ' + config.port + '，请打开 http://' + location.hostname + ':' + config.port + '/',
-           'ok');
+      if (config.port !== installPort) {
+        // 服务端会改在表单填的新端口上启动，本页（旧端口）跳过去只会连不上。
+        say(r.message + ' 端口改成了 ' + config.port + '，请打开 http://' + location.hostname + ':' + config.port + '/',
+            'ok');
+        return;
+      }
+      say(r.message + ' 正在等待服务端就绪，完成后本页会自动跳转…', 'ok');
+      waitForAdmin(0);
     }).catch(function (e) { say('请求失败：' + e, 'err'); busy(b, false, old); });
   });
 })();

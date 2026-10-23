@@ -91,7 +91,7 @@ bash infra/run-dev.sh              # 监听 7404</code></pre>
     <li>
       <b>在浏览器里填配置</b>
       <pre class="code" data-code="text"><code>http://127.0.0.1:7404/</code></pre>
-      <span class="sub">填库地址/端口/库名/用户名/密码，勾不勾对象存储，管理台口令。<b>「测试连接」按钮先单独判库</b>，提交整份配置时它还会真连一次库和桶——任何一项不过就不写文件、把原因回给你，所以不存在"配了一半"这种状态。提交成功后配置落进 <code>apps/server/data/config/pushbox.json</code>（已 gitignore，权限 600），<b>同一个进程接着启动，不用重启</b>；之后再启动就直接读文件，安装页不再出现。</span>
+      <span class="sub">填库地址/端口/库名/用户名/密码，勾不勾对象存储，管理台口令。<b>「测试连接」按钮先单独判库</b>，提交整份配置时它还会真连一次库和桶——任何一项不过就不写文件、把原因回给你，所以不存在"配了一半"这种状态。提交成功后配置落进 <code>apps/server/data/config/pushbox.json</code>（已 gitignore，权限 600），<b>同一个进程接着启动，不用重启</b>；服务端就绪后页面会<b>自己跳到管理台</b>。之后再启动就直接读文件，安装页不再出现；没配置完时打开别的路径（如 <code>/dashboard</code>）也会 302 回安装页。</span>
     </li>
     <li>
       <b>确认它起来了</b>

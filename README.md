@@ -29,7 +29,7 @@
 
 镜像里**没有任何配置**——没有 `ENV`，没有必填变量，没有 `__SET_ME__` 占位值（见 [infra/Dockerfile](infra/Dockerfile)）。
 第一次启动它自己在 7404 上开一个安装页，你在浏览器里把库地址、存储、管理台口令填进去，
-服务端把结果写进 `/app/data/config/pushbox.json` 然后**接着启动，不用重启容器**：
+服务端把结果写进 `/app/data/config/pushbox.json` 然后**接着启动，不用重启容器**；启动完成后安装页会**自己跳到管理台**，不用手动刷新：
 
 ```bash
 docker run -d --name pushbox \
@@ -38,7 +38,7 @@ docker run -d --name pushbox \
   docker.io/iamplusdev/push-box:latest
 ```
 
-然后浏览器打开 http://127.0.0.1:7404/ ——看到的就是安装页。
+然后浏览器打开 http://127.0.0.1:7404/ ——看到的就是安装页。没配置完时，`/dashboard`、`/login` 这些地址也会 302 回这一页，所以同一个地址在配置前后一直能用。
 
 之所以不再走环境变量：NAS 的「创建容器」表单只能逐行填 ENV，于是"要填几项"变成了十几个键名与占位值的组合，
 填错任何一项的表现都是**容器起来了但半死**；而一个网页表单能把"库连不上"这种错当场说清楚，还能顺手把库建出来。
@@ -297,7 +297,7 @@ JAVA_HOME=/path/to/jdk-21 mvn -B -DskipTests package
 bash infra/run-dev.sh
 ```
 
-浏览器打开 http://127.0.0.1:7404/ ，在表单里填库地址/端口/库名/用户名/密码，勾不勾对象存储，管理台口令，加密口令。提交前它会**真连一次库和桶**，连不上就当场说清是哪一项。提交成功后配置写进 `apps/server/data/config/pushbox.json`（这个目录已 gitignore——里面有明文口令），**同一个进程接着启动 Spring，不需要重启**。之后再启动就直接读那份文件、不再出现安装页。
+浏览器打开 http://127.0.0.1:7404/ ，在表单里填库地址/端口/库名/用户名/密码，勾不勾对象存储，管理台口令，加密口令。提交前它会**真连一次库和桶**，连不上就当场说清是哪一项。提交成功后配置写进 `apps/server/data/config/pushbox.json`（这个目录已 gitignore——里面有明文口令），**同一个进程接着启动 Spring，不需要重启**；服务端就绪后安装页自动跳到管理台（端口框改了的话会提示去新地址，而不是往旧端口跳）。之后再启动就直接读那份文件、不再出现安装页。
 
 ```bash
 # 3) 验收探针
@@ -357,7 +357,7 @@ output/       各端编译产物（jar / apk / exe），不入库，由 release 
 
 | 跑法 | 判什么 |
 |------|--------|
-| `JAVA_HOME=… mvn -B -pl :pushbox-core,:pushbox-server test` | 服务端与加密库（**331/331**，core 43 + server 288）。不再 source 任何环境变量：配置读的是 surefire 工作目录下的 `apps/server/data/config/pushbox.json`（就是安装页写出的那份）。分两档门控——只需连得上库的 13 个类挂 `databaseReady`，开发机上照跑；要真桶的 media 5 个类挂 `objectStorageReady`，本地存储模式下跳过。所以本机是 **298 执行 + 33 跳过**，而 `mvn test` 的退出码仍然是 0 |
+| `JAVA_HOME=… mvn -B -pl :pushbox-core,:pushbox-server test` | 服务端与加密库（**332/332**，core 43 + server 289）。不再 source 任何环境变量：配置读的是 surefire 工作目录下的 `apps/server/data/config/pushbox.json`（就是安装页写出的那份）。分两档门控——只需连得上库的 13 个类挂 `databaseReady`，开发机上照跑；要真桶的 media 5 个类挂 `objectStorageReady`，本地存储模式下跳过。所以本机是 **299 执行 + 33 跳过**，而 `mvn test` 的退出码仍然是 0 |
 | `node infra/probe/p0-e2e.mjs` | 端到端协议（**0 失败**；条数以脚本末行的 `N/N` 为准） |
 | `cd apps/android && ./gradlew :app:assembleDebug` | Android 编译通过 |
 | `cd apps/web-admin && npm ci && npm run build` | 管理台 `vue-tsc` 类型检查与 `dist/` 产物 |
@@ -435,7 +435,7 @@ GitHub Pages（线上地址 <https://iamplusdev.github.io/push-box/>）。六个
 **用户点确认才下载**——下载完 Android 拉系统安装面板让用户再确认一次，Windows 下
 `PushBox-Setup-*-win-x64.exe` 后静默覆盖安装并提示重启；手动检查与冷启动发现都汇到同一只确认框。检查只在「冷启动静默查一次」和「设置里手动点检查」两处触发（未认证限额 60 次/小时/IP，不进轮询），冷启动那趟还受设置里「启动时自动检查更新」开关门控（默认开）。走的是公开 https，与自建的业务服务器无关。
 
-两处 CI 专属适配（都不改本地开发用的文件）：`gradle-wrapper.properties` 已经写死官方 `services.gradle.org` 发行包，CI 上不再需要临时改写；APK 质量闸是"能编出来、签上名，且证书指纹等于 `apps/android/release-cert.sha256` 里钉的基线"——换 key 会让老用户卸载重装、历史消息全丢，所以这一步直接判红而不是只打印。服务端测试**已经进 CI 了**——`ci.yml` 用 service container 起真 MySQL 8.4（带 `--ngram_token_size=2`）与真 RustFS，并当场写一份 `apps/server/data/config/pushbox.json` 指过去；本机没有桶也能跑掉 294 条，只有真要桶的 33 条 media 用例跳过，而 CI 上跳过必须为 0。早先"因为依赖外部存储所以不放 CI"的说法已经作废。
+两处 CI 专属适配（都不改本地开发用的文件）：`gradle-wrapper.properties` 已经写死官方 `services.gradle.org` 发行包，CI 上不再需要临时改写；APK 质量闸是"能编出来、签上名，且证书指纹等于 `apps/android/release-cert.sha256` 里钉的基线"——换 key 会让老用户卸载重装、历史消息全丢，所以这一步直接判红而不是只打印。服务端测试**已经进 CI 了**——`ci.yml` 用 service container 起真 MySQL 8.4（带 `--ngram_token_size=2`）与真 RustFS，并当场写一份 `apps/server/data/config/pushbox.json` 指过去；本机没有桶也能跑掉 299 条，只有真要桶的 33 条 media 用例跳过，而 CI 上跳过必须为 0。早先"因为依赖外部存储所以不放 CI"的说法已经作废。
 
 > **2026-10-20 深夜：门禁这条链第一次在 GitHub runner 上全绿**——`ci.yml` 对 `publish` 的 dispatch（`run 39377846888`，head `60c86ad`）四个 job 全 success，其中「等 RustFS 就绪并建桶」与「断言 DB 闸门用例真的执行了」（`skipped == 0` 且用例数 ≥ 261）都是第一次真跑到；`build-apk.yml` 同日 dispatch（`run 39376573834`，同一个 head）也全绿，`Verify release APK signature` 这一步第一次真签出并验了名。**当天最后一次 dispatch（`run 39381072797`，head `5293801`）又把签名步升级成"证书 SHA-256 必须等于 `apps/android/release-cert.sha256` 里的基线"并且绿了**，所以"CI 出的包用的就是那把正式 key"是 CI 自己验过的事实，不再靠间接推断。**这一路是四次 dispatch 逐段红出来的，四个根因都不在本仓代码里**：建桶步原来拉的 `minio/mc` 镜像在 Docker Hub 已取不到（→ 404，`dl.min.io` 的 mc 二进制 → 410 Gone），改用 runner 预装的 AWS CLI v2；`android-actions/setup-android@v3` 要装同样已下架的 legacy `tools` 包，改用 runner 预装 SDK 加一步"现读 `compileSdk`、断言 platform 与 build-tools 在位"的入镜检查；KSP 插件 marker 报"六个仓库都找不到"的根因是 runner 打 `maven.aliyun.com` 的三个仓库**整片 502**（境外数据中心 IP 被拒，本机在墙内看不见，所以本地一直绿），现已改成默认只走官方源、开发机在 `apps/android/local.properties` 加 `pb.maven.cnMirror=true` 才插回镜像（见 `docs/开发指南.md`）；最后一步红在 `ANDROID_KEYSTORE_BASE64` 不是标准 base64（`Illegal base64 character 2d`，`2d` 就是 `-`，`certutil -encode` 的 PEM 包头产物就是这个形状），重存后通过，判据写在 `build-apk.yml` 文件头与 `发布检查清单.md`。
 >

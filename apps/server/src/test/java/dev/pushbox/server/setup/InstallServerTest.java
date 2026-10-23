@@ -151,7 +151,13 @@ class InstallServerTest {
         assertThat(html).as("表单缺 %s 这一项", id).contains("id=\"" + id + "\"");
       }
       assertThat(html).contains("/api/v1/setup");
+      // 这个占位符由 InstallServer 返回前换成真实监听端口；占位符本身刻意不带 PB_ 前缀，
+      // 否则会撞上"页面里不出现任何环境变量键名"那条闸。
+      assertThat(html).contains("name=\"pb-install-port\" content=\"__INSTALL_PORT__\"");
       assertThat(html).doesNotContain("PB_");
+      // 自动跳转按"解析后有没有 #app 元素"判断；安装页自己不能有这个挂载点，
+      // 否则交接期里它返回的 200 会被当成管理台，刷新一下就把轮询打断。
+      assertThat(html).doesNotContain("<div id=\"app\"");
     }
   }
 
@@ -253,6 +259,59 @@ class InstallServerTest {
     config = valid();
     config.getMedia().setAllowHosts(List.of("*.lan"));
     assertThat(server.validate(config)).isNotNull();
+  }
+
+  @Test
+  @DisplayName("⑮ 未配置时非根路径 302 回 /，且页面里注入的是真实监听端口")
+  void unconfiguredServerRedirectsEverythingToTheForm(@TempDir java.nio.file.Path dir) throws Exception {
+    int port;
+    try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
+      port = probe.getLocalPort();
+    }
+    java.nio.file.Path path = dir.resolve("pushbox.json");
+    InstallServer installing = offline(path, port);
+    Thread waiting = new Thread(installing::awaitConfiguration, "install-page");
+    waiting.start();
+    try {
+      awaitListening(port);
+      java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+          .followRedirects(java.net.http.HttpClient.Redirect.NEVER).build();
+
+      java.net.http.HttpResponse<String> page = client.send(
+          java.net.http.HttpRequest.newBuilder(
+              java.net.URI.create("http://127.0.0.1:" + port + "/")).build(),
+          java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(page.statusCode()).isEqualTo(200);
+      // location.port 在容器端口映射下是宿主那一侧，页面必须拿到服务端真实监听的那个。
+      assertThat(page.body()).contains("<meta name=\"pb-install-port\" content=\"" + port + "\">");
+
+      for (String wrong : new String[] {"/dashboard", "/login", "/admin"}) {
+        java.net.http.HttpResponse<String> redirected = client.send(
+            java.net.http.HttpRequest.newBuilder(
+                java.net.URI.create("http://127.0.0.1:" + port + wrong)).build(),
+            java.net.http.HttpResponse.BodyHandlers.ofString());
+        assertThat(redirected.statusCode()).as(wrong).isEqualTo(302);
+        assertThat(redirected.headers().firstValue("Location")).as(wrong).contains("/");
+      }
+
+      // 收尾：写一份合法配置让安装页自己退出，免得 interrupt 在测试输出里留一段栈。
+      RuntimeConfig config = valid();
+      config.setPort(port);
+      java.net.http.HttpResponse<String> saved = client.send(
+          java.net.http.HttpRequest.newBuilder(
+              java.net.URI.create("http://127.0.0.1:" + port + "/api/v1/setup"))
+              .header("Content-Type", "application/json")
+              .POST(java.net.http.HttpRequest.BodyPublishers.ofString(
+                  dev.pushbox.core.protocol.Json.write(config)))
+              .build(),
+          java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(saved.body()).contains("\"ok\":true");
+      waiting.join(java.time.Duration.ofSeconds(10));
+      assertThat(waiting.isAlive()).as("写盘后安装页没有退出").isFalse();
+    } finally {
+      waiting.interrupt();
+      waiting.join(java.time.Duration.ofSeconds(5));
+    }
   }
 
   /** 安装页是在 awaitConfiguration() 里面才起监听的，所以得先确认它真的在听。 */  private static void awaitListening(int port) throws InterruptedException {
