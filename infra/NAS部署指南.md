@@ -16,7 +16,7 @@
 - **镜像标签没有 `v`**。Hub 上打的是 `X.Y.Z` / `X.Y` / `latest`（发布工作流从 `pom.xml` 现读版本号）。
   写 `push-box:v1.1.5` 或 `push-box:server-v1.1.5` 都会报 manifest unknown。
 - **PushBox 不自带数据库**，且必须是 **MySQL 8.0 或 8.4**。第一版迁移用了 `utf8mb4_0900_ai_ci`
-  与 `FULLTEXT ... WITH PARSER ngram`（`server/src/main/resources/db/migration/V1__init.sql`），
+  与 `FULLTEXT ... WITH PARSER ngram`（`apps/server/src/main/resources/db/migration/V1__init.sql`），
   这两样 5.7 都没有；中文全文搜索还要求实例带 `ngram_token_size=2`。8.0/8.4 两个实例上都实测过迁移可过。
 - **Hub 上的镜像只有 `linux/amd64` 一种架构**：发布工作流那一步没有传 `platforms`
   （`.github/workflows/docker-publish.yml` 的 `Build and push`），构建机是 x86_64 就只出 x86_64。

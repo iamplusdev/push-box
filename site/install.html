@@ -91,7 +91,7 @@ bash infra/run-dev.sh              # 监听 7404</code></pre>
     <li>
       <b>在浏览器里填配置</b>
       <pre class="code" data-code="text"><code>http://127.0.0.1:7404/</code></pre>
-      <span class="sub">填库地址/端口/库名/用户名/密码，勾不勾对象存储，管理台口令。<b>「测试连接」按钮先单独判库</b>，提交整份配置时它还会真连一次库和桶——任何一项不过就不写文件、把原因回给你，所以不存在"配了一半"这种状态。提交成功后配置落进 <code>server/data/config/pushbox.json</code>（已 gitignore，权限 600），<b>同一个进程接着启动，不用重启</b>；之后再启动就直接读文件，安装页不再出现。</span>
+      <span class="sub">填库地址/端口/库名/用户名/密码，勾不勾对象存储，管理台口令。<b>「测试连接」按钮先单独判库</b>，提交整份配置时它还会真连一次库和桶——任何一项不过就不写文件、把原因回给你，所以不存在"配了一半"这种状态。提交成功后配置落进 <code>apps/server/data/config/pushbox.json</code>（已 gitignore，权限 600），<b>同一个进程接着启动，不用重启</b>；之后再启动就直接读文件，安装页不再出现。</span>
     </li>
     <li>
       <b>确认它起来了</b>
@@ -244,7 +244,7 @@ AGE_RECIPIENT=&lt;age 或 ssh 公钥&gt; [RUSTFS_DATA_DIR=/path/to/data/rustfs] 
   <ol class="steps">
     <li>
       <b>装上 APK</b>
-      <span class="sub">安装包放在 <a href="https://github.com/iamplusdev/push-box/releases">GitHub Releases</a>，找 <code>pushbox-release-&lt;版本号&gt;.apk</code>。还没有对应版本时先从源码编：<code>cd android &amp;&amp; ./gradlew :app:assembleDebug</code>，再 <code>adb install -r</code>。</span>
+      <span class="sub">安装包放在 <a href="https://github.com/iamplusdev/push-box/releases">GitHub Releases</a>，找 <code>pushbox-release-&lt;版本号&gt;.apk</code>。还没有对应版本时先从源码编：<code>cd apps/android &amp;&amp; ./gradlew :app:assembleDebug</code>，再 <code>adb install -r</code>。</span>
     </li>
     <li>
       <b>首启填服务器地址</b>
@@ -264,7 +264,7 @@ AGE_RECIPIENT=&lt;age 或 ssh 公钥&gt; [RUSTFS_DATA_DIR=/path/to/data/rustfs] 
   <ol class="steps">
     <li>
       <b>运行安装包</b>
-      <span class="sub">安装包同样在 <a href="https://github.com/iamplusdev/push-box/releases">GitHub Releases</a>，文件名 <code>PushBox-Setup-&lt;版本号&gt;-win-x64.exe</code>（每个 Release 页上就是本次那一个），装在当前用户的 <code>%LOCALAPPDATA%\Programs\PushBox</code>，不需要管理员权限，也不需要先装 .NET。第一次双击时 SmartScreen 会先挡一道「Windows 保护了你的电脑」，点<b>更多信息 → 仍要运行</b>即可。自己编译：<code>bash windows/installer/build-installer.sh</code>（需要 Inno Setup 6）。</span>
+      <span class="sub">安装包同样在 <a href="https://github.com/iamplusdev/push-box/releases">GitHub Releases</a>，文件名 <code>PushBox-Setup-&lt;版本号&gt;-win-x64.exe</code>（每个 Release 页上就是本次那一个），装在当前用户的 <code>%LOCALAPPDATA%\Programs\PushBox</code>，不需要管理员权限，也不需要先装 .NET。第一次双击时 SmartScreen 会先挡一道「Windows 保护了你的电脑」，点<b>更多信息 → 仍要运行</b>即可。自己编译：<code>bash apps/windows/installer/build-installer.sh</code>（需要 Inno Setup 6）。</span>
     </li>
     <li>
       <b>首启填服务器地址并接入</b>

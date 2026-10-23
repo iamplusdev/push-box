@@ -316,7 +316,7 @@ GET /api/v1/avatars/{sha256_hex(sender_id)}</code></pre>
   <p>「看起来实现了」与「逐字节一致」是两件事。按这个顺序对：</p>
   <ul>
     <li><b>测试向量</b>：<code>contracts/testvectors/vectors.json</code>，固定输入配固定期望输出，覆盖签名、REST 鉴权、密封盒、帧、棘轮与摘要。跨语言对齐只认这一份。</li>
-    <li><b>参考实现</b>：<code>core/</code>（Java，三端共用）与 Windows 的 C# 加密层。</li>
+    <li><b>参考实现</b>：<code>packages/core/</code>（Java，三端共用）与 Windows 的 C# 加密层。</li>
     <li><b>跑一次端到端自检</b>：起好服务端后照 <a href="install.html#server">安装与部署</a> 那一步跑一遍，它模拟一台设备走完整条链路。</li>
   </ul>
   <p>实时下发（握手、帧类型、断线补拉、密钥轮换）不在这一页，见 <a href="protocol.html">长连接与加密</a>。</p>

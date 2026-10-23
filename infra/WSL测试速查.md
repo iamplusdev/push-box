@@ -108,7 +108,7 @@ docker exec pushbox-test-pushbox-server-1 cat /app/data/config/pushbox.json
 
 ### 3.3 十二条判据的真服务体检
 
-`windows/PushBox.LiveCheck` 是控制台项目（xunit 2.5 没有运行时 skip，所以做成能自己起服务端的形式），
+`apps/windows/PushBox.LiveCheck` 是控制台项目（xunit 2.5 没有运行时 skip，所以做成能自己起服务端的形式），
 它在自己那个 8081 上跑 ①–⑫。**别把 7404 上手动起的实例停掉**：那是别人的，体检用 8081。
 
 ### 3.4 最近一次实测（2026-10-23）

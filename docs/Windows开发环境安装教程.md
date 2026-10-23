@@ -3,7 +3,7 @@
 > 适用范围：PushBox P3 Windows 客户端（设计方案 §8、§10.1 选型）。
 > 目录约定沿用本机现状：运行时/SDK 装 `D:\Apps\DE`，IDE/GUI 工具装 `D:\Apps\DT`。
 > 本教程基于 2026-10-14 勘察 + 2026-10-15 实测安装：`.NET SDK 8.0.426` 已装进 `D:\Apps\DE\Net`、winget v1.29.380 可用；IDE 用已装的 Rider，可执行文件在 `D:\Apps\DT\JetBrains\JetBrains Rider 2026.2.3.1\bin\rider64.exe`（**目录名里 "JetBrains" 出现两次不是笔误**）。Visual Studio 未装（Rider 路线不需要）；Inno Setup 6.7.3 已装（实测走 `winget install JRSoftware.InnoSetup`，`--location` 对它有效，落在 **`D:\Apps\DE\Inno Setup 6`**——目录名带空格，装法与踩坑见 §5.1）。
-> **进度：本教程已全部走完（§1–§5）**，`windows/` 下 `dotnet test` 554/554 绿，设计方案 §8.4 的 **W1–W15**（四原语 + WS 信封 + REST canonical/密封盒 + 帧 DTO 绑定 + DPAPI 身份 + 首启两屏 + §5.3 全流程长连接 + SQLite/FTS5 本地库 + `SyncEngine` 退避重连与补拉 + `ReadReporter` 已读上报 + `MediaLoader` 服务端代理取图 + `SearchService`/`SearchText` 两段搜索合并 + WPF 双栏 UI 骨架：§9.1 token 落 `ResourceDictionary`、§9.2 Markdown 支持集与气泡/图位度量、§9.3 的"N 条新消息"胶囊 + 系统集成：`H.NotifyIcon.Wpf` 托盘、裸 WinRT Toast（头像/摘要/两颗按钮、`pushbox:` 协议点回会话）、`Settings/ClientSettings` 落盘、`HKCU\...\Run` 自启与静默时段 + 删除与清空：`Sync/DeleteReporter` 的乐观移除 + 回滚票 + 确认后驱逐媒体缓存，两发 §5.2 签名 DELETE + 发布与隐私收尾：`Logging/` 的 Serilog 滚动日志全文脱敏与崩溃上报关闭、`windows/installer/` 的 Inno Setup 无人值守安装包、§5.4 的自签 CA 根证书接入口径）已落地，P3 的 vectors 闸口已开，**且 §12 P3 的十二条判据已在真服务端上跑过（`PushBox.LiveCheck` 12/12）**；§8.4 之后又补了 §5.2 的频道接入面（设置 → 频道：用频道号 + 密钥接入、取消接入、逐设备「只接收已接入的频道」开关，判据 ⑪⑫）。**P3 至此没有待办模块**；剩下的只有 §8.4 W12 那两处**刻意未完成**（会话行头像仍是首字占位、§9.3 的 200ms 骨架屏），不是缺陷清单。
+> **进度：本教程已全部走完（§1–§5）**，`apps/windows/` 下 `dotnet test` 554/554 绿，设计方案 §8.4 的 **W1–W15**（四原语 + WS 信封 + REST canonical/密封盒 + 帧 DTO 绑定 + DPAPI 身份 + 首启两屏 + §5.3 全流程长连接 + SQLite/FTS5 本地库 + `SyncEngine` 退避重连与补拉 + `ReadReporter` 已读上报 + `MediaLoader` 服务端代理取图 + `SearchService`/`SearchText` 两段搜索合并 + WPF 双栏 UI 骨架：§9.1 token 落 `ResourceDictionary`、§9.2 Markdown 支持集与气泡/图位度量、§9.3 的"N 条新消息"胶囊 + 系统集成：`H.NotifyIcon.Wpf` 托盘、裸 WinRT Toast（头像/摘要/两颗按钮、`pushbox:` 协议点回会话）、`Settings/ClientSettings` 落盘、`HKCU\...\Run` 自启与静默时段 + 删除与清空：`Sync/DeleteReporter` 的乐观移除 + 回滚票 + 确认后驱逐媒体缓存，两发 §5.2 签名 DELETE + 发布与隐私收尾：`Logging/` 的 Serilog 滚动日志全文脱敏与崩溃上报关闭、`apps/windows/installer/` 的 Inno Setup 无人值守安装包、§5.4 的自签 CA 根证书接入口径）已落地，P3 的 vectors 闸口已开，**且 §12 P3 的十二条判据已在真服务端上跑过（`PushBox.LiveCheck` 12/12）**；§8.4 之后又补了 §5.2 的频道接入面（设置 → 频道：用频道号 + 密钥接入、取消接入、逐设备「只接收已接入的频道」开关，判据 ⑪⑫）。**P3 至此没有待办模块**；剩下的只有 §8.4 W12 那两处**刻意未完成**（会话行头像仍是首字占位、§9.3 的 200ms 骨架屏），不是缺陷清单。
 
 ---
 
@@ -98,7 +98,7 @@ dotnet nuget add source "D:\Apps\DE\NuGet\v3-feed" -n local-cache   # 仅镜像�
 1. 打开 `D:\Apps\DT\JetBrains\JetBrains Rider 2026.2.3.1\bin\rider64.exe`（**注意目录名是 `JetBrains Rider …`，父目录已经叫 `JetBrains`，看着像重复但不是笔误**）。
 2. 首次启动若提示安装 ".NET SDK" 工具窗口，点 "Configure"，把 Toolchain 指到 `D:\Apps\DE\Net\dotnet.exe`（Rider 有时探测不到自定义位置，手动指定即可）。本机 `DOTNET_ROOT` 与 `PATH` 已配好，一般能自动探测到 8.0.426。
 3. WPF 项目由 Rider 原生支持（XAML 编辑器 + 预览），无需额外插件。
-4. **打开 `windows\PushBox.sln`，不要打开仓库根目录** —— 根下同时存在 Maven 与 Gradle 工程，IDE 会误索引（见 §D27 的构建分治）。
+4. **打开 `apps\windows\PushBox.sln`，不要打开仓库根目录** —— 根下同时存在 Maven 与 Gradle 工程，IDE 会误索引（见 §D27 的构建分治）。
 
 代价说明：Rider 是付费软件（有 30 天试用 / 开源许可）。你本机已有，直接用即可。
 
@@ -121,11 +121,11 @@ winget install Microsoft.VisualStudio.2022.Community --override `
 
 ## 3. 建工程与冒烟验证（✅ 已于 2026-10-15 完成）
 
-Windows 客户端源码按设计方案的多语言分治结构放仓库内的 `windows/`（与 `server/`、`android/` 并列；Java 侧 Maven + Android 侧 Gradle，C# 侧自带 sln/csproj 不参与前两者）。
+Windows 客户端源码按设计方案的多语言分治结构放仓库内的 `apps/windows/`（与 `apps/server/`、`apps/android/` 并列；Java 侧 Maven + Android 侧 Gradle，C# 侧自带 sln/csproj 不参与前两者）。
 
 ```powershell
 cd D:\Projects\Android\PushBox
-mkdir windows; cd windows
+mkdir -p apps/windows; cd apps/windows
 dotnet new wpf -n PushBox.Windows
 dotnet new xunit -n PushBox.Crypto.Tests
 dotnet new sln -n PushBox
@@ -159,7 +159,7 @@ dotnet run --project PushBox.Windows
 设计方案 §13 把"vectors 全绿才准写 UI"定为 P3 第一道闸。加密库**实测用 BouncyCastle，不是 NSec**（NSec 26.4.0 只支持 `net9.0`，25.4.0 的密钥构造 API 反直觉；细节与另外五个坑记在设计方案 §8.2 的实测记录里）：
 
 ```powershell
-cd D:\Projects\Android\PushBox\windows\PushBox.Crypto.Tests
+cd D:\Projects\Android\PushBox\apps\windows\PushBox.Crypto.Tests
 dotnet add package BouncyCastle.Cryptography
 # AES-256-GCM 用 BCL 内置的 System.Security.Cryptography.AesGcm，不引包
 ```
@@ -178,13 +178,13 @@ dotnet add package BouncyCastle.Cryptography
 | `PushConnectionTest.cs` | §5.3 一条连接的完整流程（25 例）：`auth` canonical 与 `ws_auth_sig_b64` 逐项相等、`kx` 的 64 字节被签串与 `kx_sig_b64` 相等、TOFU 指纹（不匹配时 `auth` 帧压根没发出）、向量信封解成绑定后的 `message` 帧、帧序号跳号判死、静默超时判死 | `Sync/PushConnection.cs`（+ `WsCanonical.cs`、脚本化的 `FakePushTransport`） |
 | `DeviceStoreTest.cs` | §3.3 本地库（17 例）：临时目录里建真 db 文件、重开进程原样恢复会话/消息/游标、分页按 seq 正序不重不漏、未读数由 `last_read_seq` 现算、tombstone 三形态（单条 / 整会话 / 整频道）、FTS5 trigram 与短查询的 LIKE 兜底、反向钉住"表里没有一列像在存凭据" | `Data/DeviceStore.cs`（`Microsoft.Data.Sqlite` 8.0.32，自带 FTS5 + trigram） |
 
-后两条依赖 `vectors.json` 里 2026-10-15 新加的 `rest_auth` / `sealed_box` 两段。向量的权威来源始终是 Java 侧，**要改协议或补向量就动 `core/src/test/java/dev/pushbox/core/crypto/CryptoVectorsTest.java` 再重新导出**，不要在 C# 里造期望值：
+后两条依赖 `vectors.json` 里 2026-10-15 新加的 `rest_auth` / `sealed_box` 两段。向量的权威来源始终是 Java 侧，**要改协议或补向量就动 `packages/core/src/test/java/dev/pushbox/core/crypto/CryptoVectorsTest.java` 再重新导出**，不要在 C# 里造期望值：
 
 ```powershell
 # 默认 JAVA_HOME 是 JDK 1.8，不覆盖会成片报乱码语法错
 $env:JAVA_HOME = "D:\Apps\DE\Java\jdk-21.0.8"
 cd D:\Projects\Android\PushBox
-D:\Apps\DE\Maven\apache-maven-3.9.15\bin\mvn.cmd -B -o -pl core test   # 实测 26/26 绿，顺带重写 contracts\testvectors\vectors.json
+D:\Apps\DE\Maven\apache-maven-3.9.15\bin\mvn.cmd -B -o -pl :pushbox-core test   # 实测 26/26 绿，顺带重写 contracts\testvectors\vectors.json
 ```
 
 回归与继续开发：
@@ -211,9 +211,9 @@ winget install --id JRSoftware.InnoSetup --silent --location "D:\Apps\DE\Inno Se
 
 `Languages\` 里**没有 `ChineseSimplified.isl`**（官方分发只带 29 种语言，简体中文属于 unofficial translators，要单独下载再放进去）。所以 `PushBox.iss` 挂的是自带的 `Default.isl`：向导按钮是英文，而**我们自己 authored 的那几句**（任务勾选项、`[Run]` 那一行、卸载时的清理说明）是中文。静默安装两种都不出现，不影响"无人值守"这条验收；要整本中文向导就是补一个 `.isl` + 改 `[Languages]` 一行。
 
-### 5.2 打包：`bash windows/installer/build-installer.sh`
+### 5.2 打包：`bash apps/windows/installer/build-installer.sh`
 
-两步在一个脚本里（`--skip-publish` 只重编 .iss）：`dotnet publish -c Release -r win-x64 --self-contained true` → `ISCC.exe /DMyAppVersion=<版本> PushBox.iss` → `windows/installer/Output/PushBox-Setup-<版本>-win-x64.exe`。三个决定和它们的理由：
+两步在一个脚本里（`--skip-publish` 只重编 .iss）：`dotnet publish -c Release -r win-x64 --self-contained true` → `ISCC.exe /DMyAppVersion=<版本> PushBox.iss` → `apps/windows/installer/Output/PushBox-Setup-<版本>-win-x64.exe`。三个决定和它们的理由：
 
 | 决定 | 理由 |
 |------|------|
@@ -226,7 +226,7 @@ winget install --id JRSoftware.InnoSetup --silent --location "D:\Apps\DE\Inno Se
 ### 5.3 无人值守验收（2026-10-15 实测）
 
 ```powershell
-"D:\Projects\Android\PushBox\windows\installer\Output\PushBox-Setup-1.0.0-win-x64.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+"D:\Projects\Android\PushBox\apps\windows\installer\Output\PushBox-Setup-1.0.0-win-x64.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ```
 
 | 量什么 | 实测 |
@@ -277,7 +277,7 @@ Android 那一侧的对应口径（根 CA 打进 `network_security_config`、不
 | `NETSDK1100: Windows 桌面平台不支持` | 缺 `Microsoft.WindowsDesktop.App` 运行时，或 TFM 少了 `-windows` |
 | `error NETSDK1147: 找不到 framework 'Microsoft.WindowsDesktop.App'` | 只装了 Runtime 没装 SDK，或 `DOTNET_ROOT` 指错目录 |
 | Rider 报 "no .NET SDK found" | §2A：手动把 toolchain 指到 `D:\Apps\DE\Net\dotnet.exe` |
-| Rider 打开仓库根目录后卡索引/满屏红 | 根目录是 Maven + Gradle 工程，Rider 不认；只打开 `windows\PushBox.sln` |
+| Rider 打开仓库根目录后卡索引/满屏红 | 根目录是 Maven + Gradle 工程，Rider 不认；只打开 `apps\windows\PushBox.sln` |
 | NuGet 还原失败但浏览器能开站 | 公司机代理；`dotnet nuget` 走系统代理，必要时 `http_proxy` 环境变量 |
 | `NU1202: 包 NSec.Cryptography 26.4.0 与 net8.0-windows10.0.19041 不兼容` | 最新版 NSec 只支持 `net9.0`；本项目改用 `BouncyCastle.Cryptography`（见 §4） |
 | `FormatException: The input is not a valid Base-64 string` | `vectors.json` 的 `*_b64` 是 **URL-safe base64 且无 padding**（含 `-`/`_`），要先换字符再补 `=` |
@@ -302,11 +302,11 @@ Android 那一侧的对应口径（根 CA 打进 `network_security_config`、不
 - [x] `dotnet --list-runtimes` 含 `Microsoft.WindowsDesktop.App`（实测 8.0.32）
 - [x] `DOTNET_ROOT` + `PATH` 已写入用户环境变量
 - [x] NuGet 缓存在 `D:\Apps\DE\NuGet\packages`
-- [x] `windows/PushBox.sln` 三个项目建好（`PushBox.Windows` / `PushBox.Crypto.Tests` / W9 起的 `PushBox.LiveCheck`），TFM 为 `net8.0-windows10.0.19041.0`
+- [x] `apps/windows/PushBox.sln` 三个项目建好（`PushBox.Windows` / `PushBox.Crypto.Tests` / W9 起的 `PushBox.LiveCheck`），TFM 为 `net8.0-windows10.0.19041.0`
 - [x] `dotnet test` 554/554 绿（撤掉「全部/未读/已读」筛选时连带删了 `MainModelTest` 里那两条筛选用例，556 → 554；P3 开工闸口已开，见设计方案 §13；含 W3b 的 restAuth canonical 与密封盒、W3c 帧绑定、W4/W5 身份与首启、W6 的整条 §5.3 握手 25 例、W7 的本地库 17 例、W8 的同步引擎 20 例、W9 的已读上报 12 例、W10 的媒体链路 36 例、W11 的搜索 34 例、W12 的 UI 骨架 80 例（`MainModelTest` 23 + `MarkdownTest` 18 + `MarkdownViewTest` 11 + `ThemeTest` 8 + `BubbleViewTest` 8 + `MediaStripTest` 7 + `AvatarTest` 4 + `MainWindowTest` 1，其中后四类要在 STA 线程上构造可视对象，跑法见设计方案 §8.3 与 §8.2 第 36–37 条）、W13 的系统集成 132 例（`SystemIntegrationTest` 32 + `AlertPolicyTest` 31 + `ToastProtocolTest` 22 + `ClientSettingsTest` 18 + `ToastPlanTest` 15 + `ToastXmlTest` 10，另给 `DeviceStoreTest`/`SyncEngineTest`/`MainModelTest`/`MainWindowTest` 各补一条；这一批**都不需要真托盘、真注册表与真 toast**，只有 `SystemIntegrationTest` 里那三条用的是真命名管道——而"第二个实例"必须换一条线程去抢那把 mutex，同线程抢必赢，见 §8.2 第 41 条）；W14 的删除与清空 37 例（`DeleteReporterTest` 12（新文件）+ `DeviceClientTest` 9 + `DeviceStoreTest` 7 + `MainModelTest` 6 + `MainWindowTest` 3：两发签名 DELETE 的面相、乐观与回滚的时序、回滚票那三条"不许按平别人新值"的规则，用的还是假 handler 与临时目录，不需要真服务端——`infra/probe` ⑪/⑯/⑰/⑱ 已经拿真 HTTP 把服务端那几支验过）；W15 的日志与隐私 38 例（`AppLogTest` 11：白名单事件落成一行、按天分文件写进和数据库同一个私有目录、**把整个 log 目录 grep 一遍找不到任何正文片段**、崩溃留痕只留抛出那一行而不留它旁边那句话、日志目录写不了就"没有留痕"而不是把应用一起带下去；`PrivacyGateTest` 15：正文尺寸的键名不分大小写、裸值吃到行尾而带引号的值只吃自己、JSON 与 URL query 两种形状、词中词不误伤、hex 与 base64 两把密钥形状、恢复码短于 .NET 的任何一种形状所以把剩下那几道墙逐条钉住、异常只贡献类型与抛出位置；`LogWiringTest` 12：补拉被拒、吊销停机、身份文件读不出、删除被拒、缓存落盘失败、通知与搜索各条路上"日志里只可能出现码和游标"——这一批用 `[Collection("AppLog")]` 关掉并行，因为日志是进程级的，并发跑会互相染上别人的行）
-- [x] 真服务体检 12/12：`bash infra/run-dev.sh --server.port=8081`（自己叫起来的实例，跑完只杀自己的 PID；7404 上是使用者手动起的那个，不碰）→ `dotnet run --project windows/PushBox.LiveCheck -- http://127.0.0.1:8081`（第 ⑦ 条是 W10 的签名取图，打真 `MediaController`；第 ⑧ 条是 W11 那种"用户真会打出来的词"——中文 + 空格 + `%` + `&` 一起进 query，打真 `SearchController`；第 ⑨/⑩ 条是 W14 的两发签名 DELETE，故意打在服务端并没有的行上，量的是"404 `hint=message` 不回滚"与"`deleted=0` 读成幂等成功"这两条解读；第 ⑪/⑫ 条是 §5.2 接入面：`subscribed` 必须**逐设备**读得对（自建的真、别人建的假，两台各看各的），以及开了「只接收已接入的频道」之后未接入那条频道的消息要在**长连接与 REST 历史两处同时消失**、接入后回来、关掉立刻全收。这一轮就是 ② 抓到一个真缺陷：`resume_gap` 判据拿的是全局 `MAX(seq)`，别的 Space 推够 2000 条之后新 Space 永远等不到 `resume_ok`，改成本组行高（见设计方案 §8.2 第 65 条））
-- [x] 通知那条路的真机体检（2026-10-15 实测通过）：`dotnet run --project windows/PushBox.Windows -- --notify-smoke 输出文件`。它会写两处 HKCU（AUMID 与 `pushbox:` 协议处理器，都指向**当前这个 exe**），跑完桌面右下应弹出两条测试通知；输出文件里实测 `registered=True`、`scheme=True`、`setting=Enabled`、`delivered=2 suppressed=0 failure=-`，把静默窗开成整天后 `quiet_info=Silent quiet_error=HeadsUp`。**开机自启默认关，这条体检不碰 `HKCU\...\Run`**；唯一还需要人点一下的是"在真弹出的那条通知上按打开会话，看窗口有没有落到那一条会话"（`HandleTarget` 之后的每一步都有用例，只有系统把协议处理器叫起来这一段没有）
+- [x] 真服务体检 12/12：`bash infra/run-dev.sh --server.port=8081`（自己叫起来的实例，跑完只杀自己的 PID；7404 上是使用者手动起的那个，不碰）→ `dotnet run --project apps/windows/PushBox.LiveCheck -- http://127.0.0.1:8081`（第 ⑦ 条是 W10 的签名取图，打真 `MediaController`；第 ⑧ 条是 W11 那种"用户真会打出来的词"——中文 + 空格 + `%` + `&` 一起进 query，打真 `SearchController`；第 ⑨/⑩ 条是 W14 的两发签名 DELETE，故意打在服务端并没有的行上，量的是"404 `hint=message` 不回滚"与"`deleted=0` 读成幂等成功"这两条解读；第 ⑪/⑫ 条是 §5.2 接入面：`subscribed` 必须**逐设备**读得对（自建的真、别人建的假，两台各看各的），以及开了「只接收已接入的频道」之后未接入那条频道的消息要在**长连接与 REST 历史两处同时消失**、接入后回来、关掉立刻全收。这一轮就是 ② 抓到一个真缺陷：`resume_gap` 判据拿的是全局 `MAX(seq)`，别的 Space 推够 2000 条之后新 Space 永远等不到 `resume_ok`，改成本组行高（见设计方案 §8.2 第 65 条））
+- [x] 通知那条路的真机体检（2026-10-15 实测通过）：`dotnet run --project apps/windows/PushBox.Windows -- --notify-smoke 输出文件`。它会写两处 HKCU（AUMID 与 `pushbox:` 协议处理器，都指向**当前这个 exe**），跑完桌面右下应弹出两条测试通知；输出文件里实测 `registered=True`、`scheme=True`、`setting=Enabled`、`delivered=2 suppressed=0 failure=-`，把静默窗开成整天后 `quiet_info=Silent quiet_error=HeadsUp`。**开机自启默认关，这条体检不碰 `HKCU\...\Run`**；唯一还需要人点一下的是"在真弹出的那条通知上按打开会话，看窗口有没有落到那一条会话"（`HandleTarget` 之后的每一步都有用例，只有系统把协议处理器叫起来这一段没有）
 - [x] `dotnet run --project PushBox.Windows` 起窗成功（实测 exe 起进程后按该 PID 终止；`App.OnStartup` 已改为按是否已注册路由到首启两屏 / 主窗，见设计方案 §7.5）
-- [x] Inno Setup 6.7.3 已装进 `D:\Apps\DE\Inno Setup 6`，打包与无人值守验收跑通（2026-10-15 实测）：`bash windows/installer/build-installer.sh` → `windows/installer/Output/PushBox-Setup-0.1.0-win-x64.exe`（56MB）→ `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` 装 / 覆盖装 / 卸载三段退出码全 0，全程无 UAC，`{app}` 里 269 本顶层文件（递归 477）中五本运行时 DLL 齐全（self-contained 的直接证据），卸载只清指向 `{app}` 的那三处 HKCU 且**保留** `%LOCALAPPDATA%\PushBox`。详见 §5.2、§5.3
+- [x] Inno Setup 6.7.3 已装进 `D:\Apps\DE\Inno Setup 6`，打包与无人值守验收跑通（2026-10-15 实测）：`bash apps/windows/installer/build-installer.sh` → `apps/windows/installer/Output/PushBox-Setup-0.1.0-win-x64.exe`（56MB）→ `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` 装 / 覆盖装 / 卸载三段退出码全 0，全程无 UAC，`{app}` 里 269 本顶层文件（递归 477）中五本运行时 DLL 齐全（self-contained 的直接证据），卸载只清指向 `{app}` 的那三处 HKCU 且**保留** `%LOCALAPPDATA%\PushBox`。详见 §5.2、§5.3
 - [x] 自签 CA 三态实测（2026-10-15，一次性 CA + Node HTTPS 靶子 + 临时 .NET 探针，跑完全部拆除）：根没装 → REST 与 WS 都被拒（`PartialChain` / `SSL connection could not be established`）；`certutil -addstore -user Root` 之后**新进程**两侧都通；**已在跑的进程不回头重读根存储**，必须退出重启。详见 §5.4
 - [ ] IDE 里能识别 csproj 并打断点
