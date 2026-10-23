@@ -455,6 +455,8 @@ Java 侧共享源码（`:pbcore` 直接编译它），它动了会不会连累�
 > **2026-10-22 晚补丁：v1.1.3 只修镜像挂载元数据**。飞牛「创建容器」的「存储位置」一栏按镜像的 `Config.Volumes` 渲染，v1.1.2 没声明 `VOLUME`，所以那一栏没有任何行。v1.1.3 在 `infra/Dockerfile` 声明 `/app/data/media` 与 `/app/logs`，发布后从 Hub 的 config blob 复核到 `Volumes` 正是这两项；`S3` 仍刻意不预置（AK/SK 是凭据，半套又会误导），要用就在表单里加七行（**`v1.1.4` 起改为把凭据键烘焙成 `__SET_ME__` 占位值，让表单直接显示可编辑行、entrypoint 拒绝未替换的占位值；`v1.1.3` 及更早仍是旧行为**）。`server-v1.1.3` 只触发服务端链（run `39767681288`），当时 Hub 上只剩 `1.1.3` / `1.1` / `latest` / `main` / `sha-d8c1486`，旧的 `1.1.2` 与 `sha-9f8e201` 已删。**边界**：飞牛表单本身仍没有实测，只验到镜像元数据；Android/Windows 版本仍是 1.1.2。
 >
 > **2026-10-22 再补两版：v1.1.4 上表单、v1.1.5 修主钥路径**。v1.1.4（run `39779506621`）把五枚凭据键以 `__SET_ME__` 烘焙进镜像 ENV，GUI 的「环境变量」页因此直接出现可改的行；发布后发现只配 `PB_S3_MASTER_KEY` 的用户会被那行占位口令误判成"两个来源同时配了"而拒绝启动。v1.1.5（run `39780463627`）在 entrypoint 的二选一检查前把占位值 `unset` 掉，并用 Hub 上的 `1.1.5` 镜像实跑过主钥场景（日志出"主钥长度验证通过"、没有"只能二选一"）；镜像内 `/app/entrypoint.sh` 与源码渲染结果的 md5 同为 `dd70ee6aca3bc69b39c71a1360ca30d2`。**Hub 上没有删旧标签**：`1.1.5` / `1.1` / `latest` / `main` / `sha-a478f0e` / `1.1.4` / `sha-2d8f3b0` / `1.1.3` / `sha-d8c1486` / `sha-d4a889d` 都在。**边界**：图形界面的实际渲染仍没有实机截图，只验到镜像 config；Android/Windows 版本仍是 1.1.2。
+>
+> **2026-10-23：v1.1.6 发出去过，同日整条发布线重置回 1.1.0**。上午 `bash scripts/release.sh --component=server --push --yes` 发了服务端 v1.1.6（tag `server-v1.1.6` @ `d8d6476`，Hub 上 `1.1.6` / `1.1` / `latest` 同 digest），这是安装页配置模型第一次随版本发布，Android / Windows 当时仍是 1.1.2。**当天下午这条线被主动撤销**：Hub 上的标签在此之前已被手动清光（WSL 复查 `count: 0`、五枚单查全 404），GitHub 上留着一段"号排在后面、镜像根本不在"的半截历史不如重来——三端版本号统一写回 **1.1.0**，历史 tag 与两条客户端 Release 由维护者删除，下一个真正发出去的版本就是 `server-v1.1.0` / `android-v1.1.0` / `windows-v1.1.0`。**这次重置的代价要写明白**：Android 的 `versionCode` 由 `major*10000 + minor*100 + patch` 推导，1.1.0 得 10100，比已发出的 1.1.2 的 10102 小，已装 1.1.2 的设备覆盖安装会撞 `INSTALL_FAILED_VERSION_DOWNGRADED`，**必须先卸载重装**。**读上面那几条 2026-10-22 记录的方式**：它们的 Hub 标签清单、Release 资产、run 号全是**当轮实查快照**，不代表现在的仓库状态；本轮实测（Maven 332 / dotnet 554 / 安装页冒烟 5-0 / 闸门 88-0）与执行顺序记在 CHANGELOG 第三十六轮。
 
 ---
 
@@ -476,8 +478,8 @@ Java 侧共享源码（`:pbcore` 直接编译它），它动了会不会连累�
 
 ---
 
-**文档版本**：v1.1.5  
-**最后更新**：2026-10-22  
+**文档版本**：v1.1.0（2026-10-23 发布线重置：三端号统一写回 1.1.0，1.1.1–1.1.6 的历史 tag 与 Release 撤销，见 CHANGELOG 第三十六轮）  
+**最后更新**：2026-10-23  
 **主分支**：main  
 **官网**：<https://iamplusdev.github.io/push-box/>（源码在 `site/`，改 `site/**` 推到 `main` 就自动发布）  
 **仓库**：[GitHub](https://github.com/iamplusdev/push-box.git)（主仓，Issue 与 CI 都在这边）| [Gitee](https://gitee.com/iamplus/push-box.git)（手动同步的国内镜像，可能落后主仓）

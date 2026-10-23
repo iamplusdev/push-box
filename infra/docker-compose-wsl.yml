@@ -17,7 +17,7 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile
-    image: pushbox/server:1.1.6
+    image: pushbox/server:1.1.0
     volumes:
       # 与主文件同口径：一个 named volume 装下 config/ + media/ + logs/。
       # 测试栈刻意不用 ./data 绑定挂载——deploy-wsl.sh 多半跑在 /mnt/d 上，drvfs 不支持 chown，

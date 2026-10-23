@@ -7,6 +7,46 @@
 
 ---
 
+---
+
+## 未发布 —— 发布线重置：三端版本号回到 1.1.0，历史标签与 Release 撤销（第三十六轮）
+
+> 起点是上一轮收尾时的一条事实：Docker Hub 上的标签已被手动清光（复查 `count: 0`、单查全 404），而 GitHub 上还挂着 `server-v1.1.2`…`server-v1.1.6` 五枚服务端标签与两条客户端 Release。留下一条"号在后面、镜像不在"的半截发布线，比重新开始更难解释——维护者拍板**整条线回到 1.1.0 重发**，历史标签与历史 Release 全部撤销，Hub 上从这一枚起算。
+
+### 版本号写入（本轮已完成）
+
+- `bash scripts/set-version.sh 1.1.0`（scope=all）一次写满：Maven 反应堆三份 pom、`apps/web-admin/package.json`、两份 compose 的镜像标签、`infra/WSL测试速查.md` 里那条 `buildx --load` 的 tag、Android `versionName=1.1.0` / `versionCode=10100`、Windows `PushBox.Windows.csproj` 的 `<Version>` 与 `PushBox.iss` 的 `MyAppVersion`、`site/*.html` 的版本徽章。
+- 站点徽章不需要单独手改：`release-verify.sh` 里那条 `BADGE_*` 闸判的就是"站点徽章 == `pom.xml` 的 version"，`site/` 与 `--only=site` 一起被脚本覆盖。
+
+### 这次重置的真实代价：Android 是降级
+
+- `versionCode` 由 `major*10000 + minor*100 + patch` 推导（`scripts/set-version.sh:74`），1.1.0 得 **10100**，比已经发出去的 1.1.2 的 10102 小。已装 1.1.2 的设备覆盖安装 1.1.0 会被系统判 `INSTALL_FAILED_VERSION_DOWNGRADED`，**必须先卸载**——这是"号回到 1.1.0"这个决定自带的后果，不是脚本缺陷。
+- 同一条单调性在发布脚本里是硬拦：`scripts/release-android.sh:52` 只要读得到本地 `android-v*` 标签且新号不比它大，就在"定版本号"那一步直接退出。**所以删本地历史 tag 不是收尾的清洁工作，而是发 1.1.0 的前置条件**，且它读的是本地 tag（`git tag --list`），远端删干净也没用。
+- Windows 侧没有 versionCode 这种系统级单调门，低版本能否覆盖高版本本轮没在实机走过，不写结论。
+
+### 撤销清单与执行顺序（维护者手动，本轮只准备不执行）
+
+1. 网页删两条 Release：`android-v1.1.2`（资产 `pushbox-release-1.1.2.apk`，12 797 054 B）、`windows-v1.1.2`（资产 `PushBox-Setup-1.1.2-win-x64.exe`，58 722 683 B，仍未签名）。这台机器既没有 `gh` 也没有可用的仓库 token，这一步只能在网页做。
+2. 删 `github` 上 7 枚 tag：`android-v1.1.2`、`windows-v1.1.2`、`server-v1.1.2` / `1.1.3` / `1.1.4` / `1.1.5` / `1.1.6`。
+3. 删本地同名 7 枚 `git tag -d`——上一条说的硬拦就在这里等着。
+4. `bash scripts/release.sh --all 1.1.0 --push --yes`：三端各自写号、各自跑本地测试、各打一枚标签，一次推出 `server-v1.1.0` / `android-v1.1.0` / `windows-v1.1.0`，`docker-publish` / `build-apk` / `build-msi` 三条链同时被触发。
+- **没有历史可删的两处**（本轮现查，别多此一举）：Docker Hub 已经 `count: 0`，发完应该是且仅是 `1.1.0` / `1.1` / `latest`；Gitea 镜像 `git ls-remote --tags` 返回空；Gitee 本机连 ssh 别名都解析不了（`Could not resolve hostname gitee`），而它从不在写授权内。
+
+### 历史记录怎么处理
+
+- 本文件 `1.1.1`–`1.1.6` 每一轮的记录**一条不删**：它们记的是代码变更与验证结论，跟"这几枚 tag 还在不在"是两回事。从这一节往下读到的版本号，凡是"已发布""Hub 上有"这类现状陈述，一律按当轮快照理解。
+- `docs/release/发布检查清单.md` 顶部注记与尾部「最后更新」各追加一段同口径说明，README 发布链表格里那些带 run 号的绿勾同理保留为历史。**订正追加、不改写原文**是这仓库文档的既有规矩。
+
+### 验证（本轮实测）
+
+- Maven 全量 **332** 条（core 43 + server 289），0 失败、33 跳过（DB/S3 门控，与基线逐条一致）；`Reactor Summary for pushbox-parent 1.1.0` 顺带证号写对了。
+- `dotnet test` **554 通过 / 0 失败 / 0 跳过**。
+- `bash scripts/install-page-smoke.sh` **5 通过 / 0 失败**，跑的是新产物 `apps/server/target/pushbox-server-1.1.0.jar`（自带端口 7499，用户手起的 7404 实例没动）。
+- `bash scripts/release-verify.sh` **88 通过 / 0 失败**，2 条警告是"本机没有 docker CLI 判不了镜像体积"与"工作区 18 个文件未提交"——提交后第二条应消失，回到 88 / 0 / 1。
+- **本轮验不了的**：Hub 实际拉到不到 1.1.0、真机卸载重装、Release 页资产挂没挂上——三条都要远端动作，属上面第 1–4 步之后才能补的证据。
+
+---
+
 ## 未发布 —— 推代码与出发版解耦：三条制品链只认标签、Hub 只出版本标签、工作分支只剩 `main`（第三十五轮）
 
 > 起点是 v1.1.6 发完之后的一次对账：Docker Hub 上躺着 15 个标签，其中一多半是每次推 `main` 顺手产出来的 `main` 与 `sha-*`；维护者的要求是三句话——**保留官网页面分支、只保留 `main` 一个工作分支、但不能每次推送代码都打包发版，也不能每次打包都让 APK/MSI/Docker 三件套都跑一遍**。这三句其实是一件事：过去"推代码"和"出一份要发给用户的制品"被同一根触发线拴在一起，所以为了只推代码，仓库里得养一条 `publish` 分支躲 CI。
