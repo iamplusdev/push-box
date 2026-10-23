@@ -2,8 +2,8 @@
 # ============================================================================
 # W15-c：把 PC 客户端编成一个可无人值守安装的 setup.exe。
 #
-#   bash windows/installer/build-installer.sh                # publish + 编译安装包
-#   bash windows/installer/build-installer.sh --skip-publish # 只改 .iss 时重编一次
+#   bash apps/windows/installer/build-installer.sh                # publish + 编译安装包
+#   bash apps/windows/installer/build-installer.sh --skip-publish # 只改 .iss 时重编一次
 #
 # 两步分开是有原因的：dotnet publish 出的是"269 个文件"，Inno 只是把它们压成一个 exe 并登记卸载信息。
 # 版本号从 PushBox.Windows.csproj 的 <Version> 读出来传给 ISCC —— 日志里"启动 {Version}"打的是程序集版本，
@@ -15,8 +15,8 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-root="$(cd "$here/../.." && pwd)"
-proj="$root/windows/PushBox.Windows/PushBox.Windows.csproj"
+root="$(cd "$here/../../.." && pwd)"
+proj="$root/apps/windows/PushBox.Windows/PushBox.Windows.csproj"
 publish_dir="$here/publish"
 iscc="${ISCC:-D:/Apps/DE/Inno Setup 6/ISCC.exe}"
 skip_publish=0

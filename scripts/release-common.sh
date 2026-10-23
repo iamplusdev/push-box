@@ -66,7 +66,7 @@ pb_intree_version() {
   case "$1" in
     server)  grep -m1 -oP '(?<=<version>)[^<]+'       "$PB_ROOT/pom.xml" ;;
     android) grep -m1 -oP '(?<=versionName = ")[^"]+' "$PB_ROOT/apps/android/app/build.gradle.kts" ;;
-    windows) grep -m1 -oP '(?<=<Version>)[^<]+'       "$PB_ROOT/windows/PushBox.Windows/PushBox.Windows.csproj" ;;
+    windows) grep -m1 -oP '(?<=<Version>)[^<]+'       "$PB_ROOT/apps/windows/PushBox.Windows/PushBox.Windows.csproj" ;;
     *) pb_fail "pb_intree_version：不认识的端 '$1'"; return 1 ;;
   esac
 }

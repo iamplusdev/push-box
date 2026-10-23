@@ -41,15 +41,15 @@ infra/media/
 node_modules/
 
 # Windows 客户端（P3）W15：自包含发布物与安装包，各上百 MB，只在本机 build-installer.sh 现编
-windows/installer/publish/
-windows/installer/Output/
+apps/windows/installer/publish/
+apps/windows/installer/Output/
 
 # Windows 编译产物
-windows/**/bin/
-windows/**/obj/
-windows/**/*.user
-windows/**/*.suo
-windows/bin/
+apps/windows/**/bin/
+apps/windows/**/obj/
+apps/windows/**/*.user
+apps/windows/**/*.suo
+apps/windows/bin/
 
 # CI/CD 工作流配置：v1.1.0 起入库（.github/workflows/ci.yml 是 PR 门禁，不入库就等于门禁不存在）。
 
@@ -76,4 +76,4 @@ apps/android/.kotlin/
 /.tmp-deploy/
 /verify/
 # ci.yml 的 windows job 用它做 trx 计数闸的输入，本机复跑同一命令就会生成
-windows/TestResults/
+apps/windows/TestResults/

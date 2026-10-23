@@ -88,13 +88,13 @@ fi
 
 # 4. Windows
 if want windows; then
-    WINDOWS_CSPROJ="$ROOT_DIR/windows/PushBox.Windows/PushBox.Windows.csproj"
+    WINDOWS_CSPROJ="$ROOT_DIR/apps/windows/PushBox.Windows/PushBox.Windows.csproj"
     if [ -f "$WINDOWS_CSPROJ" ]; then
         sed -i.bak "s/<Version>[^<]*<\/Version>/<Version>$VERSION<\/Version>/" "$WINDOWS_CSPROJ"
         rm -f "${WINDOWS_CSPROJ}.bak"
         echo "✅ Windows: Version=$VERSION"
 
-        INNO_SCRIPT="$ROOT_DIR/windows/installer/PushBox.iss"
+        INNO_SCRIPT="$ROOT_DIR/apps/windows/installer/PushBox.iss"
         if [ -f "$INNO_SCRIPT" ]; then
             sed -i.bak "s/#define MyAppVersion \"[^\"]*\"/#define MyAppVersion \"$VERSION\"/" "$INNO_SCRIPT"
             rm -f "${INNO_SCRIPT}.bak"

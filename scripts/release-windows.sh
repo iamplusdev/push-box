@@ -73,8 +73,8 @@ else
   pb_info "单元测试（与 ci.yml 逐字同一条命令，含 --results-directory 与 trx 文件名）"
   # 判分要把全量日志落盘再看退出码：`| tail` 会把失败压成"看着像绿"。
   log="$(mktemp)"
-  rm -f "$PB_ROOT/windows/TestResults/crypto.trx"   # 上一轮的 trx 留着会数出一份陈年用例数
-  if ( cd "$PB_ROOT/windows" && dotnet test PushBox.Crypto.Tests/PushBox.Crypto.Tests.csproj \
+  rm -f "$PB_ROOT/apps/windows/TestResults/crypto.trx"   # 上一轮的 trx 留着会数出一份陈年用例数
+  if ( cd "$PB_ROOT/apps/windows" && dotnet test PushBox.Crypto.Tests/PushBox.Crypto.Tests.csproj \
          -c Release --nologo --results-directory TestResults --logger "trx;LogFileName=crypto.trx" ) 2>&1 | tee "$log"; then
     :
   else
@@ -86,7 +86,7 @@ else
 
   # 用例数从 trx 数，不解析控制台文案——那玩意的语言跟着 runner 走（ci.yml 里同一条注记）。
   # 退出码只回答"有没有红"，用例被静默裁掉（删 [Fact]、改分类过滤、整类没被 discover）照样退 0。
-  trx="$PB_ROOT/windows/TestResults/crypto.trx"
+  trx="$PB_ROOT/apps/windows/TestResults/crypto.trx"
   [ -f "$trx" ] || { pb_fail "没生成 crypto.trx：还原或编译就断了，判不了用例数"; exit 1; }
   total="$(grep -c '<UnitTestResult ' "$trx" || true)"
   baseline="$(grep -oP '(?<=\$CS_BASELINE = )[0-9]+' "$PB_ROOT/.github/workflows/ci.yml" | head -1 || true)"
@@ -97,7 +97,7 @@ else
   pb_ok "测试通过（trx 里数出 $total 条，ci.yml 基线 ${baseline:-读不到}）"
 
   pb_info "试编安装包（build-installer.sh；本机没装 Inno Setup 6 就只跑到 publish 并说明缺什么）"
-  ( cd "$PB_ROOT" && bash windows/installer/build-installer.sh ) \
+  ( cd "$PB_ROOT" && bash apps/windows/installer/build-installer.sh ) \
     || { pb_warn "安装包这一步没过。若是缺 Inno Setup 6，CI 会装；若是 publish 失败，那就是真问题，发布中止"; exit 1; }
   pb_ok "安装包试编通过"
 fi
@@ -110,7 +110,7 @@ else
   ( cd "$PB_ROOT" && bash scripts/set-version.sh --only=windows "$PB_TARGET" ) || { pb_fail "写版本号失败"; exit 1; }
   # csproj 与 .iss 必须同一个数：安装包显示的是 .iss 那个，程序「关于」页显示的是程序集版本。
   cs="$(pb_intree_version windows || true)"
-  iss="$(grep -oP '(?<=#define MyAppVersion ")[^"]+' "$PB_ROOT/windows/installer/PushBox.iss" | head -1)"
+  iss="$(grep -oP '(?<=#define MyAppVersion ")[^"]+' "$PB_ROOT/apps/windows/installer/PushBox.iss" | head -1)"
   if [ "$cs" != "$PB_TARGET" ] || [ "$iss" != "$PB_TARGET" ]; then
     pb_fail "版本号没写全：csproj=$cs，PushBox.iss=$iss，期望都是 $PB_TARGET"
     exit 1
@@ -120,8 +120,8 @@ else
   # 重出一份带新版本号的安装包收进 output/。第 3 步那一份还是旧版本；
   # 缺 Inno Setup 6 时只跑 publish、不出 exe，与第 3 步的容忍口径一致。
   pb_info "按 $PB_TARGET 重出安装包并收进 output/"
-  if ( cd "$PB_ROOT" && bash windows/installer/build-installer.sh ); then
-    pb_collect "$(ls "$PB_ROOT"/windows/installer/Output/PushBox-Setup-*-win-x64.exe 2>/dev/null | head -1)" \
+  if ( cd "$PB_ROOT" && bash apps/windows/installer/build-installer.sh ); then
+    pb_collect "$(ls "$PB_ROOT"/apps/windows/installer/Output/PushBox-Setup-*-win-x64.exe 2>/dev/null | head -1)" \
       windows-exe "PushBox-Setup-$PB_TARGET-win-x64.exe"
   else
     pb_warn "安装包没重出（多半是缺 Inno Setup 6），output/ 这轮没有 exe；CI 出的是 $PB_TARGET 那版"

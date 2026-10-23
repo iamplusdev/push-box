@@ -14,7 +14,7 @@ public class HkdfSessionKeyTest
     public void HKDF_SessionKey_MatchesVector()
     {
         // Read vectors.json
-        var vectorsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "contracts", "testvectors", "vectors.json");
+        var vectorsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "contracts", "testvectors", "vectors.json");
         var json = File.ReadAllText(vectorsPath);
         using var doc = JsonDocument.Parse(json);
         var inputs = doc.RootElement.GetProperty("inputs");

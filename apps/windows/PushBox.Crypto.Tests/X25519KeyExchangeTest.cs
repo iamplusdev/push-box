@@ -13,7 +13,7 @@ public class X25519KeyExchangeTest
     public void X25519_SharedSecret_MatchesVector()
     {
         // Read vectors.json from repo root
-        var vectorsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "contracts", "testvectors", "vectors.json");
+        var vectorsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "contracts", "testvectors", "vectors.json");
         var json = File.ReadAllText(vectorsPath);
         using var doc = JsonDocument.Parse(json);
         var inputs = doc.RootElement.GetProperty("inputs");

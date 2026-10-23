@@ -12,7 +12,7 @@ public class Ed25519SignatureTest
     [Fact]
     public void Ed25519_WsAuthSignature_MatchesVector()
     {
-        var vectorsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "contracts", "testvectors", "vectors.json");
+        var vectorsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "contracts", "testvectors", "vectors.json");
         var json = File.ReadAllText(vectorsPath);
         using var doc = JsonDocument.Parse(json);
         var inputs = doc.RootElement.GetProperty("inputs");
@@ -48,7 +48,7 @@ public class Ed25519SignatureTest
     [Fact]
     public void Ed25519_KxSignature_MatchesVector()
     {
-        var vectorsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "contracts", "testvectors", "vectors.json");
+        var vectorsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "contracts", "testvectors", "vectors.json");
         var json = File.ReadAllText(vectorsPath);
         using var doc = JsonDocument.Parse(json);
         var signatures = doc.RootElement.GetProperty("signatures");

@@ -9,7 +9,7 @@
 .DS_Store
 
 apps/android/
-windows/
+apps/windows/
 site/
 docs/
 assets/

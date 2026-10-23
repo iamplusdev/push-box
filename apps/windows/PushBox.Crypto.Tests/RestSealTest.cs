@@ -103,7 +103,7 @@ public class RestSealTest
 
     private static JsonElement Load()
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "contracts", "testvectors", "vectors.json");
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "contracts", "testvectors", "vectors.json");
         return JsonDocument.Parse(File.ReadAllText(path)).RootElement;
     }
 

@@ -51,8 +51,8 @@ section "检查各端版本号自洽"
 # 三端同号，只要求每一端在自己会引用的那些地方对得上——服务端是 pom / 两份 compose /
 # WSL 速查 / 官网徽章，Android 是 versionName / versionCode，Windows 是 csproj / Inno。
 ANDROID_VERSION=$(grep 'versionName' "$ROOT_DIR/apps/android/app/build.gradle.kts" | grep -oP '"[^"]+"' | tr -d '"')
-WINDOWS_VERSION=$(grep '<Version>' "$ROOT_DIR/windows/PushBox.Windows/PushBox.Windows.csproj" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
-INNO_VERSION=$(grep '#define MyAppVersion' "$ROOT_DIR/windows/installer/PushBox.iss" | grep -oP '"[^"]+"' | tr -d '"')
+WINDOWS_VERSION=$(grep '<Version>' "$ROOT_DIR/apps/windows/PushBox.Windows/PushBox.Windows.csproj" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
+INNO_VERSION=$(grep '#define MyAppVersion' "$ROOT_DIR/apps/windows/installer/PushBox.iss" | grep -oP '"[^"]+"' | tr -d '"')
 DOCKER_TAG=$(grep -E 'image: (docker\.io/iamplusdev/push-box|pushbox/server):' "$ROOT_DIR/infra/docker-compose.yml" | head -1 | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
 MAVEN_VERSION=$(grep -m1 '<version>' "$ROOT_DIR/pom.xml" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
 WSL_TAG=$(grep -m1 -E 'image: pushbox/server:' "$ROOT_DIR/infra/docker-compose-wsl.yml" | sed -E 's/^.*://')
@@ -514,8 +514,8 @@ fi
 LEAKY_CODE=$(grep -rhoE --binary-files=without-match \
     --exclude-dir='bin' --exclude-dir='obj' --exclude-dir='build' --exclude-dir='node_modules' \
     '\b100\.9[0-9]\.[0-9]+\.[0-9]+\b' \
-    "$ROOT_DIR/apps/android/app/src" "$ROOT_DIR/apps/server/src" "$ROOT_DIR/windows/PushBox.Windows" \
-    "$ROOT_DIR/windows/PushBox.Crypto.Tests" "$ROOT_DIR/apps/web-admin/src" 2>/dev/null \
+    "$ROOT_DIR/apps/android/app/src" "$ROOT_DIR/apps/server/src" "$ROOT_DIR/apps/windows/PushBox.Windows" \
+    "$ROOT_DIR/apps/windows/PushBox.Crypto.Tests" "$ROOT_DIR/apps/web-admin/src" 2>/dev/null \
     | sort -u || true)
 if [ -n "$LEAKY_CODE" ]; then
     fail "代码/测试里出现真实地址：$(echo "$LEAKY_CODE" | tr '\n' ' ')"
@@ -578,7 +578,7 @@ fi
 # 分端发布后每个平台各占一个 GitHub Release，/releases/latest 只返回"最后发的那个"：
 # 谁改回去，另一端的更新检查就会静默地永远看不到新版本（不报错，只是不提示）。
 UPDATE_KT="$ROOT_DIR/apps/android/app/src/main/java/cn/iamplus/pushbox/net/UpdateApi.kt"
-UPDATE_CS="$ROOT_DIR/windows/PushBox.Windows/Update/UpdateClient.cs"
+UPDATE_CS="$ROOT_DIR/apps/windows/PushBox.Windows/Update/UpdateClient.cs"
 # 只看真正的 URL 常量（结尾带引号），不看注释里"不能再用 /releases/latest"那句解释。
 if grep -q 'releases/latest"' "$UPDATE_KT" "$UPDATE_CS"; then
     fail "两端的更新检查又用回了 /releases/latest：分端 Release 会互相顶掉（改回 releases?per_page=… 列表并按资产挑）"

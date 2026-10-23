@@ -1,14 +1,14 @@
 name: Build Windows Installer
 
 # 三条发布链是解耦的：本文件只认 windows-v* 与旧的 v*（三端一起发）两种标签。
-# 只改服务端时打 server-v*，这里根本不会被触发；main 上的日常构建也只在 windows/ 真的变了时跑。
-# 构建入口复用 windows/installer/build-installer.sh（dotnet publish self-contained win-x64 → Inno 压包），
+# 只改服务端时打 server-v*，这里根本不会被触发；main 上的日常构建也只在 apps/windows/ 真的变了时跑。
+# 构建入口复用 apps/windows/installer/build-installer.sh（dotnet publish self-contained win-x64 → Inno 压包），
 # 版本号只从 PushBox.Windows.csproj 的 <Version> 取，与脚本一致。
 on:
   push:
     branches: [main]
     paths:
-      - "windows/**"
+      - "apps/windows/**"
       - "scripts/set-version.sh"
       - ".github/workflows/build-msi.yml"
     tags: ["windows-v*", "v*"]
@@ -64,17 +64,17 @@ jobs:
         shell: bash
         env:
           ISCC: "C:/Program Files (x86)/Inno Setup 6/ISCC.exe"
-        run: bash windows/installer/build-installer.sh
+        run: bash apps/windows/installer/build-installer.sh
 
       # 先收集，再签名：签名必须落在最终要上传的 dist-msi 副本上。
-      # （若在 Collect 之前签名，Collect 会从 windows/installer/Output/ 重新拷贝未签名 exe 覆盖掉签名。）
+      # （若在 Collect 之前签名，Collect 会从 apps/windows/installer/Output/ 重新拷贝未签名 exe 覆盖掉签名。）
       - name: Collect installer
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist-msi
           found=0
-          for f in windows/installer/Output/PushBox-Setup-*-win-x64.exe; do
+          for f in apps/windows/installer/Output/PushBox-Setup-*-win-x64.exe; do
             [ -f "$f" ] || continue
             cp "$f" dist-msi/
             found=1
