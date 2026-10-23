@@ -293,6 +293,9 @@ class MediaSsePipelineTest {
     plain.setObjectEncrypt("none");
     PbProperties copy = new PbProperties();
     copy.setS3(plain);
+    // Storage 默认 local：不显式指到 s3 的话这个"历史明文对象"会写到本地盘，
+    // 而 controller 读的是桶，于是第六组用例拿到 404 而不是那张图。
+    copy.getStorage().setType("s3");
     return new MediaObjects(s3, copy);
   }
 

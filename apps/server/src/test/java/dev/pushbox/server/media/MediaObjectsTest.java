@@ -195,6 +195,9 @@ class MediaObjectsTest {
 
     PbProperties props = new PbProperties();
     props.setS3(config);
+    // PbProperties.Storage 的默认值是 local：只设 S3 段会让整个类静默跑在本地盘上，
+    // 而这批用例验的正是 S3 语义（无钥读 400、封装钥、删除），本地盘照不出来。
+    props.getStorage().setType("s3");
     return new MediaObjects(S3Client.builder()
         .endpointOverride(URI.create(config.getEndpoint()))
         .region(Region.US_EAST_1)

@@ -49,6 +49,10 @@
 - **安装明明成功了，部署脚本却报"连不上安装页"**：`install()` 在 `return` 之前就 `configured.countDown()`，`awaitConfiguration()` 一醒就在 `finally` 里 `server.stop(0)`——`0` 是"不等在途请求写完"，于是配置真的落盘了、Spring 也起来了，而 curl 只拿到被截断的空响应。修法：`countDown()` 挪到 `handleSetup` 里 `respondJson(...)` 之后，`stop(1)` 再给一秒余量。`InstallServerTest` ⑬ 真起一次 HttpServer、真打一次 POST 钉住它；做过负测——把两处改回原样，这条当场红成 `HTTP/1.1 header parser received no bytes`，正是容器里 curl 看到的那个症状。
 - **内网图床没有任何一处能放行**：`SsrfGuard` 默认拒绝回环/私网/CGNAT（这一条是对的，自建对象存储常落在 `100.64.0.0/10`），豁免只有 `pb.media.allow-hosts` 一个入口，而它既不在 `application.yml`、也不在安装页上。NAS 与内网部署于是每条图片都 `media_objects.error=ssrf_blocked`，而表单里找不到任何能改的地方——这是"所有配置都要能在表单填写"漏掉的一项。修法：`RuntimeConfig.Media.allowHosts` 进表单（第 2 节「图片抓取放行主机」），翻成 `pb.media.allow-hosts`；落盘前 `normalize()` 归一成小写去空白（`SsrfGuard` 是精确等值比较，写成 `IMG.lan` 或带个空格等于没填）。与之相对的 `pb.media.allow-private`（整段放开私网）**刻意不进表单**：豁免按主机点名，不给"一键关掉 SSRF 校验"的开关。
 
+### 缺陷与修法（CI 全量档第一次真跑 S3 用例）
+
+- **两条 media 用例其实一直测的是本地盘**：配置模型重构后 `PbProperties.Storage.type` 的默认值是 `local`，而 `MediaObjectsTest.build()` 与 `MediaSsePipelineTest.plainObjects()` 都是手工 `new MediaObjects(...)`、只设了 S3 段——本机这 33 条被 `objectStorageReady` 门跳过，看不出来；CI 把门打开后第一次真跑就红了两条：`keylessReadOfEncryptedObjectFails` 拿不到 400（本地盘对无钥读返回 null，不是 `S3Exception`），`legacyPlainObjectsStillReadable` 拿到 404（明文对象写进本地盘、读的却是桶）。修法是在这两处显式 `storage.type=s3`；生产代码一行未改，用例计数不变（332）。
+
 ### 新增
 
 - `deploy/pushbox.json.example`：一份带注释的配置样张，TLS 口径（`useSSL=false` 与 `http://` 意味着什么、跨主机该怎么改）从 `prod.env.example` 搬到这里。
