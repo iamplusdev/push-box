@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# §11.2 服务端多阶段构建。构建上下文必须是仓库根（要 core/ + server/ + web-admin/ + 根 pom.xml），
+# §11.2 服务端多阶段构建。构建上下文必须是仓库根（要 packages/core/ + server/ + web-admin/ + 根 pom.xml），
 # compose 里写成 context: .. / dockerfile: infra/Dockerfile。
 # web-admin SPA 在独立 node 阶段构建后拷进 server 的静态资源目录，最终 fat jar 自带前端，
 # 由同一个 Spring Boot 进程在 7404 上同时吐 API、WebSocket 与管理台页面（同源，无需 CORS）。
@@ -25,8 +25,8 @@ RUN npm run build
 FROM maven:3.9-eclipse-temurin-21 AS build
 WORKDIR /src
 COPY pom.xml ./
-COPY core/pom.xml core/
-COPY core/src core/src
+COPY packages/core/pom.xml packages/core/
+COPY packages/core/src packages/core/src
 COPY server/pom.xml server/
 COPY server/src server/src
 # 把 SPA 打进 jar：拷进 server 的静态资源目录，mvn package 会一并塞进 BOOT-INF/classes/static。

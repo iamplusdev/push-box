@@ -1,14 +1,14 @@
 name: Build and Push Docker Image
 
 # 服务端镜像 = Spring Boot API + 烘进去的 Web 管理台（web-admin/dist），同源、默认端口 7404。
-# 构建上下文必须是仓库根（Dockerfile 要 core/ + server/ + web-admin/ + 根 pom.xml），dockerfile 用 infra/Dockerfile。
+# 构建上下文必须是仓库根（Dockerfile 要 packages/core/ + server/ + web-admin/ + 根 pom.xml），dockerfile 用 infra/Dockerfile。
 # Secrets：DOCKERHUB_USERNAME / DOCKERHUB_TOKEN（access token，不是登录密码）。
 # 质量闸就是"镜像能编出来"：多阶段里 mvn package 会编译 core+server、npm run build 会 tsc 前端。
 # 这里**不跑测试**：服务端那套要连真库真桶，已由 `ci.yml` 用 service container 跑并断言"闸门用例一条没被跳过"；
 # 在两个 workflow 里各跑一遍只会让同一个红出现两次，而推送这条的判据本来就不是测试。
 # 三条发布链是解耦的：本文件只认 server-v* 与旧的 v*（三端一起发）两种标签。
 # 只改服务端时打 server-v*，Android 与 Windows 两条流水线根本不会被触发。
-# main 上的构建按 paths 过滤（server/、core/、web-admin/、pom.xml、infra/），改文档或客户端不会重推一份 main 镜像。
+# main 上的构建按 paths 过滤（server/、packages/core/、web-admin/、pom.xml、infra/），改文档或客户端不会重推一份 main 镜像。
 # tag 事件不带 paths 过滤（否则 tag 指到的提交恰好没碰这些目录时会静默不发布）。
 #
 # 版本号的唯一来源是**仓库里已提交的那份**（`pom.xml`，由 `scripts/set-version.sh --only=server` 写全），
@@ -24,7 +24,7 @@ on:
     branches: [main]
     paths:
       - "server/**"
-      - "core/**"
+      - "packages/core/**"
       - "web-admin/**"
       - "pom.xml"
       - "infra/**"

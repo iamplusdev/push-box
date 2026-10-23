@@ -121,7 +121,7 @@ set_pom_parent_version() {
 }
 if want server; then
     set_pom_parent_version "$ROOT_DIR/pom.xml"
-    set_pom_parent_version "$ROOT_DIR/core/pom.xml"
+    set_pom_parent_version "$ROOT_DIR/packages/core/pom.xml"
     set_pom_parent_version "$ROOT_DIR/server/pom.xml"
 
     # 6. Web 管理台 package.json（版本只出现在 version 字段，vite build 产物不带版本注入）

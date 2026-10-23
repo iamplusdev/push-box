@@ -203,7 +203,7 @@ jobs:
           python3 - <<'PY'
           import glob, sys, xml.etree.ElementTree as ET
           files = glob.glob("server/target/surefire-reports/TEST-*.xml") + \
-                  glob.glob("core/target/surefire-reports/TEST-*.xml")
+                  glob.glob("packages/core/target/surefire-reports/TEST-*.xml")
           if not files:
               print("::error::没有 surefire 报告，测试根本没跑"); sys.exit(1)
           tests = skipped = 0
@@ -226,7 +226,7 @@ jobs:
           name: surefire-reports
           path: |
             server/target/surefire-reports/
-            core/target/surefire-reports/
+            packages/core/target/surefire-reports/
           retention-days: 7
 
   web-admin:

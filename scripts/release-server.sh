@@ -83,7 +83,7 @@ else
   # 先删上一轮的 surefire 报告：mvn test 不清 target，而被删掉的测试类（比如随配置重构一起
   # 没了的 DevCredentialsGuardTest）留下的孤儿报告会一直把用例总数抬上去——那样"数一遍报告"
   # 这条闸判的是历史，不是这一轮。删报告比 mvn clean 便宜，且不影响增量编译。
-  rm -rf "$PB_ROOT"/server/target/surefire-reports "$PB_ROOT"/core/target/surefire-reports
+  rm -rf "$PB_ROOT"/server/target/surefire-reports "$PB_ROOT"/packages/core/target/surefire-reports
   ( cd "$PB_ROOT" && mvn -B -pl server -am test ) || { pb_fail "服务端测试没过，发布中止（工作区未改动）"; exit 1; }
   pb_ok "服务端测试通过"
 
@@ -91,7 +91,7 @@ else
   # 所以再数一遍报告。判据与 ci.yml 同源，基线也从 ci.yml 的 `if tests < N` 那一行读——
   # 唯一真值只有一处，两边不会各说一套。
   tests=0; skipped=0; files=0
-  for f in "$PB_ROOT"/server/target/surefire-reports/TEST-*.xml "$PB_ROOT"/core/target/surefire-reports/TEST-*.xml; do
+  for f in "$PB_ROOT"/server/target/surefire-reports/TEST-*.xml "$PB_ROOT"/packages/core/target/surefire-reports/TEST-*.xml; do
     [ -e "$f" ] || continue
     files=$((files + 1))
     t="$(grep -oP '<testsuite[^>]*\btests="\K[0-9]+'   "$f" | head -1)"; tests=$((tests + ${t:-0}))
