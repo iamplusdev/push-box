@@ -236,8 +236,11 @@
   <p>离线兜底：Android 的 WorkManager 约每 15 分钟走一次 REST 补拉（省电/轮询档）；Windows 只有退避重连这一条路，已读与删除上报走内存态攒批队列，不承诺跨进程重启不丢。</p>
 
   <h2 id="debug">联调时怎么看</h2>
-  <pre class="code" data-code="bash"><code># 连接数 / 各 Space 水位：判断"是没发还是没收到"的第一现场
-PB_TOKEN=&lt;设备令牌&gt; bash deploy/run-dev.sh metrics
+  <pre class="code" data-code="bash"><code># 在线设备数 / 媒体抓取队列积压：判断"是没发还是没收到"的第一现场
+# /actuator/prometheus 不带 token，但只放行环回与安装页「运维网段」里写明的来源；
+# 服务端在容器里就 docker exec pushbox curl -s http://127.0.0.1:7404/actuator/prometheus
+curl -s http://127.0.0.1:7404/actuator/prometheus \
+  | grep -E '^pushbox_(ws_online|media_queue_depth)'
 
 # 服务端日志按设备过滤
 grep -F "&lt;deviceId&gt;" ~/Library/Logs/pushbox/server.log      # 本机在 C:\Users\&lt;name&gt;\logs\pushbox\server.log

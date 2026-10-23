@@ -82,18 +82,16 @@ SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句</co
       <span class="sub">JDBC 走 TCP 到 127.0.0.1 时 MySQL 认的主机名是 <code>localhost</code>；连不上的话把同一个账号再建一份 <code>'pushbox'@'127.0.0.1'</code>。</span>
     </li>
     <li>
-      <b>把口令放进环境变量，别写进配置文件</b>
-      <pre class="code" data-code="bash"><code>cp deploy/env/local.env.example deploy/env/local.env
-# 必填只有 PB_DB_PASSWORD 一项，其余按需改
-# local.env 已在 .gitignore 里，它不该出现在任何一次提交中</code></pre>
-      <span class="sub">配置文件里 <code>password: ${PB_DB_PASSWORD}</code> 故意不留默认值：忘了 source 就直接启动失败，而不是拿空口令去连库、把配置问题伪装成 <code>Access denied</code>。</span>
-    </li>
-    <li>
-      <b>构建并启动</b>
+      <b>构建并启动，第一次会停在安装页上</b>
       <pre class="code" data-code="bash"><code>export JAVA_HOME=/path/to/jdk-21    # 机器默认的 JAVA_HOME 常常还是 JDK 8
 mvn -B -DskipTests package
-bash deploy/run-dev.sh              # 监听 7404，自己 source deploy/env/local.env</code></pre>
-      <span class="sub">换端口、改配置一律往后加参数：<code>bash deploy/run-dev.sh --server.port=8081 --pb.s3.delete-grace=2s</code>。</span>
+bash infra/run-dev.sh              # 监听 7404</code></pre>
+      <span class="sub">没有配置文件时进程先开一个安装页然后停在那里，<b>不会退出</b>。换端口、改单项配置一律往后加参数：<code>bash infra/run-dev.sh --server.port=8081 --pb.s3.delete-grace=2s</code>（命令行优先级高于配置文件）。</span>
+    </li>
+    <li>
+      <b>在浏览器里填配置</b>
+      <pre class="code" data-code="text"><code>http://127.0.0.1:7404/</code></pre>
+      <span class="sub">填库地址/端口/库名/用户名/密码，勾不勾对象存储，管理台口令。<b>「测试连接」按钮先单独判库</b>，提交整份配置时它还会真连一次库和桶——任何一项不过就不写文件、把原因回给你，所以不存在"配了一半"这种状态。提交成功后配置落进 <code>apps/server/data/config/pushbox.json</code>（已 gitignore，权限 600），<b>同一个进程接着启动，不用重启</b>；服务端就绪后页面会<b>自己跳到管理台</b>。之后再启动就直接读文件，安装页不再出现；没配置完时打开别的路径（如 <code>/dashboard</code>）也会 302 回安装页。</span>
     </li>
     <li>
       <b>确认它起来了</b>
@@ -102,11 +100,11 @@ bash deploy/run-dev.sh              # 监听 7404，自己 source deploy/env/loc
     </li>
     <li>
       <b>登录管理台，建第一个频道</b>
-      <span class="sub">浏览器打开服务端根路径 <code>http://127.0.0.1:7404/</code>，口令就是 <code>PB_ADMIN_SECRET</code> 的值——dev 配置自带一个占位口令，本地起步直接用；对外部署必须自己换一个。然后「频道 → 新建」。频道号和密钥就是要填进推送工具的那一对；<b>密钥只在创建和重置的那一刻显示一次</b>。</span>
+      <span class="sub">浏览器打开服务端根路径 <code>http://127.0.0.1:7404/</code>，口令就是安装页里填的那个管理台口令——<b>留空则管理台整个不开放</b>（登录回 403「管理台未启用」），收发消息不受影响。JWT 签名钥不用你填，服务端自动生成并回写配置文件。然后「频道 → 新建」。频道号和密钥就是要填进推送工具的那一对；<b>密钥只在创建和重置的那一刻显示一次</b>。</span>
     </li>
     <li>
       <b>可选：跑一次端到端自检</b>
-      <pre class="code" data-code="bash"><code>cd deploy/probe &amp;&amp; npm install      # 只需一次
+      <pre class="code" data-code="bash"><code>cd infra/probe &amp;&amp; npm install      # 只需一次
 node p0-e2e.mjs                     # 默认打 127.0.0.1:7404
 PB_BASE=http://127.0.0.1:8081 node p0-e2e.mjs   # 端口不同时自己指</code></pre>
       <span class="sub">它模拟一台设备走完整条链路：握手、注册、发消息、收帧、补拉、图片。末行 <b>N/N 且 0 失败</b> 才算这套装对了。它会在库里留下测试 Space 和设备，别对生产库跑。</span>
@@ -117,95 +115,74 @@ PB_BASE=http://127.0.0.1:8081 node p0-e2e.mjs   # 端口不同时自己指</code
   <table>
     <thead><tr><th>后端</th><th>怎么开</th><th>适合</th></tr></thead>
     <tbody>
-      <tr><td><code>local</code>（默认）</td><td>什么都不用配，图片落 <code>PB_STORAGE_LOCAL_PATH</code>，默认 <code>./data/media</code></td><td>本机起步、单机部署</td></tr>
-      <tr><td><code>s3</code></td><td><code>PB_STORAGE_TYPE=s3</code> 加 <code>PB_S3_ENDPOINT</code> / <code>PB_S3_ACCESS_KEY</code> / <code>PB_S3_SECRET_KEY</code>，桶名默认 <code>pushbox</code></td><td>要独立备份、要多机、要桶生命周期</td></tr>
+      <tr><td>本地目录（默认）</td><td>安装页里<b>不勾</b>「启用对象存储」，图片落 <code>data/media</code>（容器里 <code>/app/data/media</code>）</td><td>本机起步、单机部署</td></tr>
+      <tr><td>对象存储</td><td>安装页里<b>勾上</b>，再填地址 / 区域 / 桶名 / Access Key / Secret Key，桶名默认 <code>pushbox</code></td><td>要独立备份、要多机、要桶生命周期</td></tr>
     </tbody>
   </table>
   <ul>
     <li>桶<b>不需要</b>匿名可读：图片字节由服务端取回后再发给设备，桶对客户端可以完全不可见。</li>
-    <li>endpoint 是 IP 或裸主机名时 <code>pb.s3.path-style</code> 保持 <code>true</code>，虚拟主机风格的域名解析不出来。</li>
-    <li>想让对象在桶里是密文：加 <code>-e PB_S3_OBJECT_ENCRYPT=sse-c</code>，再给它一个 KEK 来源——推荐 <code>-e PB_S3_MASTER_PASSPHRASE='&lt;至少 12 个字符的口令&gt;'</code>，由服务端用 Argon2id 派生；也可以继续用 <code>-e PB_S3_MASTER_KEY="$(openssl rand -base64 32)"</code>。两者只能留一个。开关只影响新写入的对象，历史对象按各自记录的形态读。</li>
+    <li>endpoint 是 IP 或裸主机名时「Path Style」保持勾上，虚拟主机风格的域名解析不出来；接阿里云 OSS 或 AWS 时按服务商文档取消。</li>
+    <li>想让对象在桶里是密文：勾上「加密存储」，再填一个<b>加密口令</b>（至少 12 个字符，由服务端用 Argon2id 派生出 KEK）；高级项里也可以改填一把主钥（<code>openssl rand -base64 32</code>）。两者只能留一个，同时填安装页会拒绝。开关只影响新写入的对象，历史对象按各自记录的形态读。</li>
+    <li>图片<b>从哪抓</b>也有一道门：抓取器默认拒绝一切回环 / 私网 / CGNAT 地址（防 SSRF），所以图床在内网时必须在安装页「图片抓取放行主机」里点名——写 <code>host</code> 或 <code>host:port</code>，逗号分隔，<b>精确等值</b>匹配，不带 <code>http://</code> 也不带路径，没有通配。少了这一项的表现是每条图片都静默失败（<code>media_objects.error=ssrf_blocked</code>），客户端只看到图不见了。放行是按主机点名的，没有"整段放开私网"的开关。</li>
   </ul>
   <div class="callout danger"><b>KEK 一旦有对象落库就不能换</b><p>换口令或换主钥等于旧封装钥全部解不开，表现为图片集体不见了，而且不可恢复。口令本身不存库：<code>app_state.media_kek_v1</code> 只存随机盐、KDF 参数与校验值，所以库还在、口令没变，重启/重装容器都能读回旧图；反过来，口令忘了与主钥丢了等价。请把它和数据库口令放在一起备份。</p></div>
 
   <h2 id="prod">Docker 部署</h2>
-  <p>镜像在 Docker Hub 上，<b>里面同时装着服务端与 Web 管理台</b>：同一个进程、同一个端口吐 API、长连接和页面，同源，所以不需要 CORS，反代也只要一条规则。<b>起步只必填两项</b>——库地址与库口令，其余拓扑默认值已经烘焙在镜像的 <code>ENV</code> 里。</p>
+  <p>镜像在 Docker Hub 上，<b>里面同时装着服务端与 Web 管理台</b>：同一个进程、同一个端口吐 API、长连接和页面，同源，所以不需要 CORS，反代也只要一条规则。<b>镜像里没有任何配置</b>——没有 <code>ENV</code>、没有必填变量、没有占位值；第一次启动它自己开一个安装页，你在浏览器里填完，配置落进 <code>/app/data/config/pushbox.json</code>，同一个进程接着启动，<b>不用重启容器</b>。</p>
   <ol class="steps">
     <li>
-      <b>建库和账号；表结构不用管，首次启动会自动建</b>
-      <pre class="code" data-code="sql"><code>CREATE DATABASE IF NOT EXISTS pushbox
-  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
-CREATE USER IF NOT EXISTS 'pushbox'@'%' IDENTIFIED BY '&lt;强口令&gt;';
+      <b>建账号；库和表都不用管，安装页与首次启动会建</b>
+      <pre class="code" data-code="sql"><code>CREATE USER IF NOT EXISTS 'pushbox'@'%' IDENTIFIED BY '&lt;强口令&gt;';
 GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES
   ON pushbox.* TO 'pushbox'@'%';
 FLUSH PRIVILEGES;
 
 SELECT @@ngram_token_size;   -- 期望 2；不是 2 就搜不出中文长句</code></pre>
-      <span class="sub">账号必须是 <code>'pushbox'@'%'</code>：写成 <code>localhost</code> 时，另一个容器连过来的来源就不是 <code>localhost</code>，口令全对也照样 1045。库只能是 MySQL 8.0/8.4（建表脚本用了 <code>utf8mb4_0900_ai_ci</code> 与 <code>FULLTEXT … WITH PARSER ngram</code>）。Hub 上那份镜像只有 linux/amd64，ARM 机型要自己构建。</span>
+      <span class="sub">账号必须是 <code>'pushbox'@'%'</code>：写成 <code>localhost</code> 时，另一个容器连过来的来源就不是 <code>localhost</code>，口令全对也照样 1045。库由安装页执行 <code>CREATE DATABASE IF NOT EXISTS</code> 建出来，表由 Flyway 首次启动建。库只能是 MySQL 8.0/8.4（建表脚本用了 <code>utf8mb4_0900_ai_ci</code> 与 <code>FULLTEXT … WITH PARSER ngram</code>）。Hub 上那份镜像只有 linux/amd64，ARM 机型要自己构建。</span>
     </li>
     <li>
-      <b>起容器：两个变量，不用克隆仓库、不用 <code>.env</code></b>
+      <b>起容器：一个变量都不用给，不用克隆仓库、不用 <code>.env</code></b>
       <pre class="code" data-code="bash"><code>docker run -d --name pushbox \
   -p 7404:7404 \
-  -e PB_DB_HOST=&lt;库的IP或服务名&gt; -e PB_DB_PASSWORD='&lt;强口令&gt;' \
-  -v pushbox-media:/app/data/media -v pushbox-logs:/app/logs \
+  -v pushbox_data:/app/data \
   docker.io/iamplusdev/push-box:latest</code></pre>
-      <span class="sub">不给别的值时：端口 7404、本地文件存储（图片落 <code>pushbox-media</code> 卷，明文 + 每文件 600 权限，启动时出声提醒一次）、管理台<b>关闭</b>、库名与库用户名都是 <code>pushbox</code>。要换形态就在同一条命令后面追加同名变量：<code>PB_STORAGE_TYPE=s3</code> 加 <code>PB_S3_*</code> 外接桶，<code>PB_S3_OBJECT_ENCRYPT=sse-c</code> 加 <code>PB_S3_MASTER_PASSPHRASE</code>（或 <code>PB_S3_MASTER_KEY</code>，二选一）让本地图片也加密（KEK 一旦有对象落库就<b>不可轮换</b>），<code>PB_SERVER_PORT</code> 改端口（<code>-p</code> 右侧要跟着改）。<b>镜像之外没有第二件事</b>——第 1 步那个库建好就到此为止。</span>
+      <span class="sub">只有<b>一个</b>卷：<code>/app/data</code> 里同时装配置、图片与日志，所以 NAS 表单的「存储位置」只有一行要选、<code>chown</code> 只 chown 一次、备份只指一个目录。容器内端口固定 7404，要换就换 <code>-p</code> 的左侧。</span>
     </li>
     <li>
-      <b>已经有一个桶？同一条命令让它落桶</b>
-      <pre class="code" data-code="bash"><code>docker run -d --name pushbox \
-  -p 7404:7404 \
-  -e PB_DB_HOST=&lt;库的IP或服务名&gt; -e PB_DB_PASSWORD='&lt;强口令&gt;' \
-  -e PB_STORAGE_TYPE=s3 \
-  -e PB_S3_ENDPOINT=http://&lt;桶机的IP&gt;:7101 \
-  -e PB_S3_ACCESS_KEY='&lt;AK&gt;' -e PB_S3_SECRET_KEY='&lt;SK&gt;' \
-  -e PB_S3_BUCKET=pushbox \
-  -e PB_S3_OBJECT_ENCRYPT=sse-c -e PB_S3_MASTER_PASSPHRASE='&lt;至少 12 个字符的口令&gt;' \
-  -v pushbox-logs:/app/logs \
-  docker.io/iamplusdev/push-box:latest</code></pre>
-      <span class="sub">和上一条命令比只多了 5 行、少了一个卷。<code>PB_STORAGE_TYPE=s3</code> <b>不能省</b>：镜像默认是 <code>local</code>，只给 <code>PB_S3_*</code> 不给这个开关，那几项一个字都不读（启动时会点名提醒"配了但读不到"），图片照旧落本地目录。对象落桶后 <code>pushbox-media</code> 那个卷就没用了，日志卷还是要。<b>桶要你先建好</b>，程序不建桶；跟别的系统共用一个桶可以，但只读写 PushBox 自己那套对象键。<code>PB_S3_PATH_STYLE</code> 默认 <code>true</code>（MinIO / RustFS 是对的），阿里云 OSS 或 AWS 按服务商文档可能要 <code>false</code>；桶名与区域不是 <code>pushbox</code> / <code>us-east-1</code> 就改上面那两行。图片明文落在桶上是<b>拒绝启动</b>的——桶侧任何拿到同一组 AK/SK 的读者都能直接读走，所以要 <code>sse-c</code> + 口令或主钥（二选一），或显式 <code>-e PB_ALLOW_PLAINTEXT_MEDIA=1</code> 表态。</span>
+      <b>浏览器打开 <code>http://127.0.0.1:7404/</code>，把配置填进去</b>
+      <span class="sub">填库地址/端口/库名/用户名/密码；勾不勾对象存储（勾了就把地址、桶名、AK/SK 填全）；勾不勾加密（勾了就填一个至少 12 字符的口令）；管理台口令（<b>留空 = 管理台不开放</b>，登录回 403「管理台未启用」，收发不受影响）；运维网段（留空 = <code>/healthz</code> 与 <code>/actuator/**</code> 只有容器自己能读）；图片抓取放行主机（图床在内网时必须点名，见<a href="#storage">图片存在哪里</a>）。<b>库地址别填 <code>127.0.0.1</code></b>——容器里的环回是它自己，安装页会当场把这句话告诉你。旁边有「测试连接」按钮先单独判库；提交整份配置时它会真连一次库和桶（桶那一步是真写一个对象再删掉，所以<b>桶要你先建好</b>），任何一项不过就不写文件、把原因回给你。</span>
     </li>
     <li>
       <b>验证：在容器里取</b>
       <pre class="code" data-code="bash"><code>docker exec pushbox curl -s http://127.0.0.1:7404/healthz</code></pre>
-      <span class="sub">期望 <code>{"ok":true,"db":"up","storage":"up","uptime_ms":…}</code>。验收在<b>容器里</b>做：从<b>宿主</b>打过去会拿到 404，因为服务端只认容器环回（拒绝时故意不用 403，免得扫描器确认这里有个运维端点）。要宿主或监控直接读到它，就把这套网络分到的子网写进 <code>PB_SECURITY_INTERNAL_CIDRS</code>。镜像里有 curl、没有 mysql 客户端。</span>
+      <span class="sub">期望 <code>{"ok":true,"db":"up","storage":"up","uptime_ms":…}</code>。验收在<b>容器里</b>做：从<b>宿主</b>打过去会拿到 404，因为服务端只认容器环回（拒绝时故意不用 403，免得扫描器确认这里有个运维端点）。要宿主或监控直接读到它，就在安装页的「运维网段」里把这套网络分到的子网填进去。镜像里有 curl、没有 mysql 客户端。</span>
     </li>
     <li>
-      <b>要管理台就补两个密钥，浏览器打开根路径</b>
-      <pre class="code" data-code="bash"><code># 加在第 2 步那条命令里，然后重新起一次
--e PB_ADMIN_SECRET="$(openssl rand -base64 32)" \
--e PB_ADMIN_JWT_SECRET="$(openssl rand -base64 32)"</code></pre>
-      <span class="sub"><b>要用管理台</b>这两个值就必须都有、互不相同、各自至少 32 字节，只填一个或填弱值容器会直接拒绝启动。两个都留空是一个合法状态：管理台整个关闭，那些接口一律回 403「管理台未启用」，客户端收发不受影响。管理台在<b>根路径 <code>/</code></b>（不是 <code>/admin</code>），登录口令就是 <code>PB_ADMIN_SECRET</code>。然后「频道 → 新建」——频道号和密钥就是要填进推送工具的那一对，<b>密钥只在创建和重置的那一刻显示一次</b>。</span>
+      <b>登录管理台，建第一个频道</b>
+      <span class="sub">管理台在<b>根路径 <code>/</code></b>（不是 <code>/admin</code>），登录口令就是安装页里填的那一个。JWT 签名钥不用你填，服务端自动生成并回写配置文件——所以没有"两个密钥必须不同且各 32 字节"这种要记的东西了。然后「频道 → 新建」——频道号和密钥就是要填进推送工具的那一对，<b>密钥只在创建和重置的那一刻显示一次</b>。</span>
     </li>
   </ol>
-  <p>在 NAS 的图形界面（飞牛 / 群晖 / 1Panel）里装时没有 <code>.env</code> 这一层。用「创建容器」表单的话，只有两处要自己动手：<b>存储位置两行</b>——容器内 <code>/app/data/media</code> 与 <code>/app/logs</code> 各映射到 NAS 上一个文件夹（镜像声明了 <code>VOLUME</code>，较新的表单会带出容器内路径，宿主文件夹仍要你选；建好后先 <code>sudo chown -R 10001:10001 &lt;那个文件夹&gt;</code>；留空则删容器时图片一起没）；<b>环境变量只改两个</b>——<code>PB_DB_HOST</code> 与 <code>PB_DB_PASSWORD</code>，其余显示出来的都是默认值；凭据行显示为占位值 <code>__SET_ME__</code>，没替换的占位值会被 entrypoint 拒绝启动。要外接桶就把 <code>PB_STORAGE_TYPE</code> 改成 <code>s3</code>，并把表单里已经显示出来的 <code>PB_S3_ENDPOINT</code> / <code>PB_S3_ACCESS_KEY</code> / <code>PB_S3_SECRET_KEY</code> / <code>PB_S3_MASTER_PASSPHRASE</code> 四行占位值换成真实值，再把加密模式改成 <code>sse-c</code>。逐步说明见仓库的 <code>deploy/NAS部署指南.md</code> 路径 C，compose 版见 <code>deploy/docker-compose.nas.yml</code>。</p>
+  <p>在 NAS 的图形界面（飞牛 / 群晖 / 1Panel）里装时没有 <code>.env</code> 这一层，而这一版正好也不需要它：<b>「存储位置」只有一行</b>——把容器内 <code>/app/data</code> 映射到 NAS 上一个文件夹（镜像声明了唯一一个 <code>VOLUME</code>，较新的表单会带出容器内路径，宿主文件夹仍要你选；建好后先 <code>sudo chown -R 10001:10001 &lt;那个文件夹&gt;</code>，否则入口脚本会当场判死并把这句修法打出来；留空则删容器时配置、图片、日志一起没），<b>「环境变量」一行都不用填</b>。剩下的全在浏览器那张表单上。逐步说明见仓库的 <code>infra/NAS部署指南.md</code>，compose 版见 <code>infra/docker-compose.nas.yml</code>。</p>
 
-  <h2 id="prod-compose">要反代 / 监控 / 自带桶时：compose 形态</h2>
-  <p><b>为什么这一条要克隆仓库而上面不用</b>：<code>docker-compose.yml</code>、<code>Caddyfile</code>、<code>docker-compose.monitoring.yml</code> 和那几段 sidecar 定义都是<b>文件</b>，它们装不进 <code>pushbox</code> 镜像里；<code>.env</code> 只是给这些文件记账的那一层。只要一个容器时用不到它们。</p>
+  <h2 id="prod-compose">要反代 / 监控 / 自带库和桶时：compose 形态</h2>
+  <p><b>为什么这一条要克隆仓库而上面不用</b>：<code>docker-compose.yml</code>、<code>Caddyfile</code>、<code>docker-compose.monitoring.yml</code> 和那几段 sidecar 定义都是<b>文件</b>，它们装不进 <code>pushbox</code> 镜像里。只要一个容器时用不到它们。<code>.env</code> 现在<b>只装第三方容器的口令</b>（mysql、rustfs、grafana）与反代域名——服务端的配置一项都不在里面。</p>
   <ol class="steps">
     <li>
       <b>取 compose 与配置模板</b>
       <pre class="code" data-code="bash"><code>git clone https://github.com/iamplusdev/push-box.git
-cd push-box/deploy
+cd push-box/infra
 cp env/prod.env.example .env        # .env 不提交</code></pre>
-      <span class="sub">仓库里只要这几本书，机器上不用装 JDK 和 Maven——跑起来的那份是 Hub 上的镜像。</span>
+      <span class="sub">仓库里只要这几本书，机器上不用装 JDK 和 Maven——跑起来的那份是 Hub 上的镜像。只起服务端 + Caddy 时 <code>.env</code> 里<b>必填的只有 <code>PB_CADDY_HOST</code></b>；其余几个键分别只在取消注释 mysql / rustfs 服务段、或挂上监控那本文件时才需要，它们喂的是那些第三方镜像。</span>
     </li>
     <li>
-      <b>生成口令填进 .env，不要手编弱值</b>
-      <pre class="code" data-code="bash"><code>PB_DB_PASSWORD=$(openssl rand -base64 24)
-PB_ADMIN_SECRET=$(openssl rand -base64 32)
-PB_ADMIN_JWT_SECRET=$(openssl rand -base64 32)
-sed -i "s|^PB_DB_PASSWORD=.*|PB_DB_PASSWORD=$PB_DB_PASSWORD|" .env
-sed -i "s|^PB_ADMIN_SECRET=.*|PB_ADMIN_SECRET=$PB_ADMIN_SECRET|" .env
-sed -i "s|^PB_ADMIN_JWT_SECRET=.*|PB_ADMIN_JWT_SECRET=$PB_ADMIN_JWT_SECRET|" .env</code></pre>
-      <span class="sub">管理台登录用 <code>PB_ADMIN_SECRET</code>；<code>PB_ADMIN_JWT_SECRET</code> 是签名钥，<b>两个一起填</b>时必须不同且各不短于 32 字节，只填一个容器就拒绝启动。改口令不会作废已登录的会话，反之也一样。</span>
-    </li>
-    <li>
-      <b>按自己的情况选拓扑，然后起容器</b>
+      <b>起容器</b>
       <pre class="code" data-code="bash"><code>docker compose pull           # 从 Docker Hub 取镜像
 docker compose up -d</code></pre>
-      <span class="sub">要监控再多加一本书：<code>docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d</code>，并把那条网络分到的子网写进 <code>PB_SECURITY_INTERNAL_CIDRS</code>，否则进程好好的、targets 全 403。</span>
+      <span class="sub">Caddy 的 <code>depends_on: service_healthy</code> 不会被安装页卡住：没配置完的容器停在安装页上，那时 <code>/healthz</code> 根本不存在，但 7404 已经有人监听——所以 healthcheck 判的是<b>端口通不通</b>。要监控再多加一本书：<code>docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d</code>。</span>
+    </li>
+    <li>
+      <b>浏览器打开 <code>http://&lt;PB_CADDY_HOST&gt;/</code> 完成安装</b>
+      <span class="sub">安装页也走同一条反代，不需要额外的端口或路径规则。用 compose 自带的 mysql / rustfs 时，表单里填 <code>mysql</code> 与 <code>http://rustfs:9000</code>——同一网络内用服务名，不要填宿主 IP。要让 Prometheus 抓到指标，把这套网络分到的子网填进「运维网段」，否则进程好好的、targets 全 403。</span>
     </li>
     <li>
       <b>验证</b>
@@ -214,17 +191,17 @@ docker compose up -d</code></pre>
     </li>
   </ol>
   <table>
-    <thead><tr><th>拓扑</th><th>起什么</th><th>改哪几行</th></tr></thead>
+    <thead><tr><th>拓扑</th><th>起什么</th><th>安装页里怎么填</th></tr></thead>
     <tbody>
-      <tr><td>A：已有 MySQL 与桶（默认）</td><td>服务端 + Caddy</td><td><code>PB_DB_URL</code>、<code>PB_S3_ENDPOINT</code> 指到那台 MySQL 与那个桶</td></tr>
-      <tr><td>B：全都自己起</td><td>再加 <code>mysql:8.4</code> 与对象存储</td><td>取消 compose 里那两段的注释，地址写 service-name；嫌手写麻烦直接用 <code>docker-compose-wsl.yml</code>。那两段起来的是空实例，建库建账号照样在你自己身上</td></tr>
-      <tr><td>C：不用桶</td><td>服务端 + MySQL，图片落卷</td><td><code>PB_STORAGE_TYPE=local</code>，<code>PB_S3_*</code> 留空</td></tr>
+      <tr><td>A：已有 MySQL 与桶（默认）</td><td>服务端 + Caddy</td><td>库地址填那台 MySQL 的 IP，勾上对象存储并把地址指到那个桶</td></tr>
+      <tr><td>B：全都自己起</td><td>再加 <code>mysql:8.4</code> 与对象存储</td><td>取消 compose 里那两段的注释，表单里地址写 service-name（<code>mysql</code> / <code>http://rustfs:9000</code>）；嫌手写麻烦直接用 <code>docker-compose-wsl.yml</code> + <code>deploy-wsl.sh</code>，后者的 <code>setup</code> 子命令会替你调安装页接口。那两段起来的是空实例，建账号照样在你自己身上</td></tr>
+      <tr><td>C：不用桶</td><td>服务端 + MySQL，图片落卷</td><td>不勾对象存储就行，图片落 <code>/app/data/media</code></td></tr>
     </tbody>
   </table>
   <ul>
-    <li>compose 只认 <code>PB_*</code> 这一套名字，不要再写 <code>SPRING_DATASOURCE_URL</code> 之类的别名——两个名字各声称拥有同一个键时，排查会看不出真实取值来自哪。</li>
-    <li>拓扑 C 的 <code>/app/data/media</code> <b>必须挂卷</b>，compose 里已经挂成 named volume <code>pushbox_server_media</code>。改成宿主目录时注意属主要能被容器里的账号写（uid 10001）：这条现在有启动阶段的写入探针兜，写不进就当场退出并给出两种修法，不会拖到第一条带图的消息才看出来。</li>
-    <li>「不许静默写明文」这条卡的是<b>桶</b>：<code>PB_STORAGE_TYPE=s3</code> 时 <code>none</code> 会拒绝启动，要么开 <code>sse-c</code> 配口令或主钥，要么显式 <code>PB_ALLOW_PLAINTEXT_MEDIA=1</code>。<code>local</code> 只打一条 WARN——对象在部署者自己的盘上、逐文件 600 权限，硬拦只会逼人为了过检查去配一个用不到的桶。</li>
+    <li><code>/app/data</code> <b>必须挂卷</b>，compose 里已经挂成 named volume <code>pushbox_data</code>。改成宿主目录时注意属主要能被容器里的账号写（uid 10001）：这条有启动阶段的写入探针兜，写不进就当场退出并给出两种修法，不会拖到第一条带图的消息才看出来。</li>
+    <li>「要不要加密」现在是表单上一个开关，不再是一道拒绝启动的闸门——勾不勾由你表态，勾了就必须填口令或主钥（二选一，同时填会被拒）。桶侧明文的代价说清楚：任何拿到同一组 AK/SK 的读者都能直接把图片读走。</li>
+    <li>装完之后要改配置：直接编辑 <code>/app/data/config/pushbox.json</code> 再重启容器；把那个文件删掉，下次启动就回到安装页，用「从库里找回上一次的配置」能把原来那份拉回来（副本存在 <code>app_state.runtime_config_v1</code>）。</li>
   </ul>
 
   <h2 id="tls">HTTPS 与自签 CA</h2>
@@ -232,8 +209,8 @@ docker compose up -d</code></pre>
   <ol class="steps">
     <li>
       <b>签一套证书（在一台管理机上跑，不在部署机上）</b>
-      <pre class="code" data-code="bash"><code>PUSHBOX_HOST=pushbox.internal PUSHBOX_IP=&lt;部署机IP&gt; deploy/ca/gen-ca.sh
-# 只把 certs/pushbox.crt、pushbox.key、pushbox_ca.crt 拷到部署机的 deploy/certs/
+      <pre class="code" data-code="bash"><code>PUSHBOX_HOST=pushbox.internal PUSHBOX_IP=&lt;部署机IP&gt; infra/ca/gen-ca.sh
+# 只把 certs/pushbox.crt、pushbox.key、pushbox_ca.crt 拷到部署机的 infra/certs/
 # 根 CA 私钥 pushbox_ca.key 离线保存：不进仓库、不上部署机</code></pre>
     </li>
     <li>
@@ -258,8 +235,8 @@ docker compose up -d</code></pre>
       <b>一条命令把库和图都备走</b>
       <pre class="code" data-code="bash"><code>MYSQL_HOST=&lt;DB_HOST&gt; PB_DB_PASSWORD=... PB_S3_ACCESS_KEY=... \
 AGE_RECIPIENT=&lt;age 或 ssh 公钥&gt; [RUSTFS_DATA_DIR=/path/to/data/rustfs] \
-  deploy/backup/backup.sh</code></pre>
-      <span class="sub">产物是 <code>pushbox-&lt;UTC&gt;.sql.gz.age</code> 与 <code>rustfs-&lt;UTC&gt;.tar.age</code>：库用一致性快照导出不锁表，导出后立刻加密。因为库里存的是明文，异地上传前必须加密；图片只有一份，在桶或那个目录里，丢了不可恢复。挂 cron 或 systemd timer 定时跑。</span>
+  infra/backup/backup.sh</code></pre>
+      <span class="sub">这里那几个 <code>PB_*</code> 是<b>备份脚本自己的入参</b>（值就是安装页里填的那几项，可以从 <code>/app/data/config/pushbox.json</code> 里抄），不是服务端读的环境变量——服务端一个环境变量都不读。产物是 <code>pushbox-&lt;UTC&gt;.sql.gz.age</code> 与 <code>rustfs-&lt;UTC&gt;.tar.age</code>：库用一致性快照导出不锁表，导出后立刻加密。因为库里存的是明文，异地上传前必须加密；图片只有一份，在桶或那个目录里，丢了不可恢复。<b>加密口令/主钥也要一起备</b>——KEK 不可轮换，丢了等于旧图片全废。挂 cron 或 systemd timer 定时跑。</span>
     </li>
   </ol>
 
@@ -267,7 +244,7 @@ AGE_RECIPIENT=&lt;age 或 ssh 公钥&gt; [RUSTFS_DATA_DIR=/path/to/data/rustfs] 
   <ol class="steps">
     <li>
       <b>装上 APK</b>
-      <span class="sub">安装包放在 <a href="https://github.com/iamplusdev/push-box/releases">GitHub Releases</a>，找 <code>pushbox-release-&lt;版本号&gt;.apk</code>。还没有对应版本时先从源码编：<code>cd android &amp;&amp; ./gradlew :app:assembleDebug</code>，再 <code>adb install -r</code>。</span>
+      <span class="sub">安装包放在 <a href="https://github.com/iamplusdev/push-box/releases">GitHub Releases</a>，找 <code>pushbox-release-&lt;版本号&gt;.apk</code>。还没有对应版本时先从源码编：<code>cd apps/android &amp;&amp; ./gradlew :app:assembleDebug</code>，再 <code>adb install -r</code>。</span>
     </li>
     <li>
       <b>首启填服务器地址</b>
@@ -287,7 +264,7 @@ AGE_RECIPIENT=&lt;age 或 ssh 公钥&gt; [RUSTFS_DATA_DIR=/path/to/data/rustfs] 
   <ol class="steps">
     <li>
       <b>运行安装包</b>
-      <span class="sub">安装包同样在 <a href="https://github.com/iamplusdev/push-box/releases">GitHub Releases</a>，文件名 <code>PushBox-Setup-&lt;版本号&gt;-win-x64.exe</code>（每个 Release 页上就是本次那一个），装在当前用户的 <code>%LOCALAPPDATA%\Programs\PushBox</code>，不需要管理员权限，也不需要先装 .NET。第一次双击时 SmartScreen 会先挡一道「Windows 保护了你的电脑」，点<b>更多信息 → 仍要运行</b>即可。自己编译：<code>bash windows/installer/build-installer.sh</code>（需要 Inno Setup 6）。</span>
+      <span class="sub">安装包同样在 <a href="https://github.com/iamplusdev/push-box/releases">GitHub Releases</a>，文件名 <code>PushBox-Setup-&lt;版本号&gt;-win-x64.exe</code>（每个 Release 页上就是本次那一个），装在当前用户的 <code>%LOCALAPPDATA%\Programs\PushBox</code>，不需要管理员权限，也不需要先装 .NET。第一次双击时 SmartScreen 会先挡一道「Windows 保护了你的电脑」，点<b>更多信息 → 仍要运行</b>即可。自己编译：<code>bash apps/windows/installer/build-installer.sh</code>（需要 Inno Setup 6）。</span>
     </li>
     <li>
       <b>首启填服务器地址并接入</b>
@@ -302,7 +279,7 @@ AGE_RECIPIENT=&lt;age 或 ssh 公钥&gt; [RUSTFS_DATA_DIR=/path/to/data/rustfs] 
 
   <h2 id="port">端口</h2>
   <ul>
-    <li>服务端默认 <code>7404</code>；容器里对外由 <code>PB_HTTP_PORT</code>（默认 80）决定。</li>
+    <li>服务端固定 <code>7404</code>（安装页里可以改，但容器内改了就要同步改 <code>-p</code> 的右侧与 Caddyfile 的上游，所以通常别改）；要换端口就换宿主侧的映射，compose 形态下对外那一层由 <code>PB_HTTP_PORT</code>（默认 80）决定。</li>
     <li>Caddy 在前面时对外 80/443；<code>/actuator</code> 与指标端口只绑 127.0.0.1，公网来源访问监控端点会得到 403。</li>
     <li>服务端默认不去抓私网地址的图片。要让内网图片进消息，把主机名精确加进 <code>pb.media.allow-hosts</code>（写 <code>host</code> 或 <code>host:port</code>，不是前缀匹配）。</li>
   </ul>

@@ -71,18 +71,18 @@
   <h2 id="auth">登录拿 token</h2>
   <ol class="steps">
     <li>
-      <b>生成两把密钥，写进部署配置</b>
-      <pre class="code" data-code="bash"><code>export PB_ADMIN_SECRET=$(openssl rand -base64 32)       # 登录口令
-export PB_ADMIN_JWT_SECRET=$(openssl rand -base64 32)   # token 签名钥</code></pre>
-      <span class="sub"><b>要用管理台</b>这两个值就必须都有、互不相同、各自至少 32 字节，只填一个或填弱值容器会直接拒绝启动。两个都留空是一个合法状态：管理台整个关闭，下面这些接口一律回 403「管理台未启用」。容器部署时写进 <code>.env</code>（NAS 图形界面里就是那两行变量）。管理台只认 <code>PB_ADMIN_SECRET</code> 这一份口令，不是某个频道的密钥。</span>
+      <b>在安装页里填一个管理台口令</b>
+      <pre class="code" data-code="text"><code>安装页 →「管理台口令」→ 至少 8 个字符（推荐 openssl rand -base64 32）</code></pre>
+      <span class="sub">口令落在配置文件的 <code>admin.password</code>。<b>留空是一个合法状态</b>：管理台整个关闭，下面这些接口一律回 403「管理台未启用」，客户端收发不受影响。签 token 的那把密钥（<code>admin.jwtKey</code>）<b>不用你填</b>——服务端自动生成并回写配置文件，所以没有"两把钥必须不同且各 32 字节"这种要记的东西。管理台只认这一份口令，不是某个频道的密钥。</span>
     </li>
     <li>
       <b>用口令换 token</b>
       <pre class="code" data-code="bash"><code>BASE=http://127.0.0.1:7404          # 换成你的服务端地址
+ADMIN_PASSWORD='&lt;安装页里填的那个口令&gt;'   # 只是本脚本的局部变量，服务端不读环境变量
 
 TOKEN=$(curl -sS -X POST "$BASE/api/v1/admin/login" \
   -H 'Content-Type: application/json' \
-  --data-binary "$(jq -nc --arg s "$PB_ADMIN_SECRET" '{secret:$s}')" \
+  --data-binary "$(jq -nc --arg s "$ADMIN_PASSWORD" '{secret:$s}')" \
   | jq -er .token)</code></pre>
       <span class="sub">请求体字段名是 <code>secret</code>。成功是 200，响应形如 <code>{"ok":true,"token":"&lt;JWT&gt;","expires_in":86400}</code>。口令经 <code>jq</code> 现拼，不落进脚本正文。</span>
     </li>
@@ -99,10 +99,10 @@ TOKEN=$(curl -sS -X POST "$BASE/api/v1/admin/login" \
     <thead><tr><th>HTTP</th><th><code>error</code></th><th><code>hint</code></th><th>该怎么办</th></tr></thead>
     <tbody>
       <tr><td>200</td><td>—</td><td>—</td><td>取 <code>token</code>，24 小时内不用重复登录</td></tr>
-      <tr><td>401</td><td><code>unauthorized</code></td><td>密钥错误</td><td>口令不对；确认传的是 <code>PB_ADMIN_SECRET</code> 而不是频道密钥</td></tr>
+      <tr><td>401</td><td><code>unauthorized</code></td><td>密钥错误</td><td>口令不对；确认传的是安装页里填的那个管理台口令，而不是某个频道的密钥</td></tr>
       <tr><td>401</td><td><code>unauthorized</code></td><td>缺少设备 token</td><td><code>Authorization</code> 头没带上，或缺了 <code>Bearer </code> 前缀</td></tr>
       <tr><td>401</td><td><code>unauthorized</code></td><td>管理 token 无效或已过期</td><td>token 过期或被改动，重跑第 2 步</td></tr>
-      <tr><td>403</td><td><code>forbidden</code></td><td>管理台未启用</td><td><code>PB_ADMIN_SECRET</code> 是空的，整个管理台处于关闭状态</td></tr>
+      <tr><td>403</td><td><code>forbidden</code></td><td>管理台未启用</td><td>安装页里那个管理台口令留空了，整个管理台处于关闭状态</td></tr>
       <tr><td>429</td><td><code>login_locked</code></td><td>失败次数过多，已临时锁定…</td><td>按响应头 <code>Retry-After</code> 的秒数等，锁定期内输对口令也是 429</td></tr>
     </tbody>
   </table>
@@ -114,7 +114,7 @@ TOKEN=$(curl -sS -X POST "$BASE/api/v1/admin/login" \
 
   <div class="callout warn">
     <p><b>token 泄露了只能换签名钥</b></p>
-    <p>服务端不存任何 token 记录，因此<b>没有"作废某一张 token"的接口</b>。唯一办法是换掉 <code>PB_ADMIN_JWT_SECRET</code> 并重启，这会连你自己手上那张一起作废。</p>
+    <p>服务端不存任何 token 记录，因此<b>没有"作废某一张 token"的接口</b>。唯一办法是换掉配置文件里的 <code>admin.jwtKey</code> 并重启，这会连你自己手上那张一起作废。</p>
   </div>
 
   <h2 id="fields">请求与响应的约定</h2>
@@ -135,7 +135,7 @@ TOKEN=$(curl -sS -X POST "$BASE/api/v1/admin/login" \
     <tbody>
       <tr><td>400</td><td><code>invalid_param</code></td><td>必填字段缺失或非法、请求体过大、<code>q</code> 为空或超 100 字符</td></tr>
       <tr><td>401</td><td><code>unauthorized</code></td><td>没带 <code>Authorization</code> 头、token 验不过或已过期、口令错</td></tr>
-      <tr><td>403</td><td><code>forbidden</code></td><td>管理台未启用（<code>PB_ADMIN_SECRET</code> 为空）</td></tr>
+      <tr><td>403</td><td><code>forbidden</code></td><td>管理台未启用（安装页里的管理台口令留空）</td></tr>
       <tr><td>404</td><td><code>not_found</code></td><td>频道、设备、任务不存在；<code>hint</code> 是资源名，也可能是空串</td></tr>
       <tr><td>429</td><td><code>login_locked</code></td><td>登录失败到阈值；带 <code>Retry-After</code></td></tr>
     </tbody>
@@ -463,12 +463,12 @@ curl -sS -X DELETE "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;" \
   <pre class="code" data-code="bash"><code>#!/usr/bin/env bash
 set -euo pipefail
 BASE="${PB_BASE:?例 http://127.0.0.1:7404}"
-PB_ADMIN_SECRET="${PB_ADMIN_SECRET:?}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:?安装页里填的那个管理台口令}"
 
 # 1) 口令换 token
 TOKEN=$(curl -sS -X POST "$BASE/api/v1/admin/login" \
   -H 'Content-Type: application/json' \
-  --data-binary "$(jq -nc --arg s "$PB_ADMIN_SECRET" '{secret:$s}')" | jq -er .token)
+  --data-binary "$(jq -nc --arg s "$ADMIN_PASSWORD" '{secret:$s}')" | jq -er .token)
 
 # 2) 从设备列表挑一个 group_id 作为目标 Space
 GROUP=$(curl -sS "$BASE/api/v1/admin/devices" -H "Authorization: Bearer $TOKEN" \

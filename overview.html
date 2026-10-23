@@ -134,9 +134,10 @@
   <ol class="steps">
     <li>
       <b>起服务端：只要本机有一个 MySQL 8</b>
-      <pre class="code" data-code="bash"><code>cp deploy/env/local.env.example deploy/env/local.env   # 必填只有 PB_DB_PASSWORD
-JAVA_HOME=/path/to/jdk-21 mvn -B -DskipTests package
-bash deploy/run-dev.sh                                 # 监听 7404，自己 source local.env</code></pre>
+      <pre class="code" data-code="bash"><code>JAVA_HOME=/path/to/jdk-21 mvn -B -DskipTests package
+bash infra/run-dev.sh                                 # 监听 7404
+# 第一次启动没有配置文件，它自己开一个安装页：浏览器打开 http://127.0.0.1:7404/ 填库地址与口令，
+# 提交后同一个进程接着启动，不用重启；就绪后页面自动跳到管理台</code></pre>
       <span class="sub">建库、Docker 部署、HTTPS 的完整步骤见 <a href="install.html">安装与部署</a>。</span>
     </li>
     <li>
