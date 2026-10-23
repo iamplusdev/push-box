@@ -1,7 +1,9 @@
 name: Build Android APK
 
 # 三条发布链是解耦的：本文件只认 android-v* 与旧的 v*（三端一起发）两种标签。
-# 只改服务端时打 server-v*，这里根本不会被触发；main 上的日常构建也只在 apps/android/ 真的变了时跑。
+# 只改服务端时打 server-v*，这里根本不会被触发。
+# **推 main 不出包**：APK 是一份要挂上 GitHub Release 给人下载的产物，每次合并都重打没有意义；
+# 代码能不能编由 ci.yml 的「Android 编译」job 判，那条 job 每次 main 都跑。要手动试打一次包就点 dispatch。
 # 打 android-vX.Y.Z 时发布到 GitHub Release，文件名为 pushbox-release-X.Y.Z.apk；
 # 打 vX.Y.Z 时仍按"三端一起发"的老口径发布。
 #
@@ -17,22 +19,15 @@ name: Build Android APK
 #   ANDROID_KEYSTORE_PASSWORD keystore 口令
 #   ANDROID_KEY_ALIAS         别名
 #   ANDROID_KEY_PASSWORD      私钥口令（多数与 keystore 口令相同）
-# 标签事件不带 paths 过滤（否则 tag 指到的提交恰好没碰 apps/android/ 时会静默不发布）；
-# main 事件按 paths 过滤，改服务端或文档不会顺带重打一个 APK。
+# 标签事件不带 paths 过滤（否则 tag 指到的提交恰好没碰 apps/android/ 时会静默不发布）。
+# 这条链没有分支触发：任何分支名推上去都不该出一个要发给用户的安装包。
 on:
   push:
-    branches: [main]
-    paths:
-      - "apps/android/**"
-      # :pbcore 直接编译 ../../packages/core 的同一份源码，core 动了 APK 必须跟着重出
-      - "packages/core/**"
-      - "scripts/set-version.sh"
-      - ".github/workflows/build-apk.yml"
     tags: ["android-v*", "v*"]
   workflow_dispatch:
 
 permissions:
-  contents: write   # tag 事件里 gh release 建/传资产用；main 事件用不到但不影响
+  contents: write   # tag 事件里 gh release 建/传资产用；dispatch 试打包用不到但不影响
 
 concurrency:
   group: apk-${{ github.ref }}
@@ -69,7 +64,7 @@ jobs:
           [ -n "$(ls -A "$ANDROID_HOME/build-tools" 2>/dev/null)" ] || { echo "::error::缺 build-tools（apksigner 无处可取）"; exit 1; }
           echo "✅ compileSdk=$CS 在位；build-tools：$(ls "$ANDROID_HOME/build-tools" | tr '\n' ' ')"
 
-      # 统一版本号注入（标签取 android-vX.Y.Z / vX.Y.Z 的 X.Y.Z；分支事件用 0.1.0-<run> 只为出测试包）
+      # 统一版本号注入（标签取 android-vX.Y.Z / vX.Y.Z 的 X.Y.Z；dispatch 用 0.1.0-<run> 只为出测试包）
       - name: Set version from git tag
         id: version
         run: |
@@ -84,8 +79,8 @@ jobs:
 
       - name: Inject version into Android build
         run: |
-          # 正式 tag（X.Y.Z）才注入；main/dispatch 的 0.1.0-<run> 非正式版本脚本会判失败，
-          # 这里容忍并沿用已提交默认，保证 main 每次都能产出可下载 artifact。
+          # 正式 tag（X.Y.Z）才注入；dispatch 的 0.1.0-<run> 非正式版本脚本会判失败，
+          # 这里容忍并沿用已提交默认，保证手动试打包也能产出可下载 artifact。
           # --only=android：解耦之后这里不碰服务端与 Windows 的版本号。
           bash scripts/set-version.sh --only=android "${{ steps.version.outputs.version }}" \
             || echo "⚠️ 非正式版本（${{ steps.version.outputs.version }}）跳过注入，沿用已提交 versionCode/versionName。"

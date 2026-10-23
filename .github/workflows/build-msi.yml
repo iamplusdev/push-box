@@ -1,16 +1,13 @@
 name: Build Windows Installer
 
 # 三条发布链是解耦的：本文件只认 windows-v* 与旧的 v*（三端一起发）两种标签。
-# 只改服务端时打 server-v*，这里根本不会被触发；main 上的日常构建也只在 apps/windows/ 真的变了时跑。
+# 只改服务端时打 server-v*，这里根本不会被触发。
+# **推 main 不出包**：安装包是给人下载的产物，每次合并都重打没有意义。应用编不编得过由 ci.yml 的
+# 「Windows 端测试」job 判（那里 `dotnet build` 主工程，但不碰 Inno），要真出一个安装包就点 dispatch。
 # 构建入口复用 apps/windows/installer/build-installer.sh（dotnet publish self-contained win-x64 → Inno 压包），
 # 版本号只从 PushBox.Windows.csproj 的 <Version> 取，与脚本一致。
 on:
   push:
-    branches: [main]
-    paths:
-      - "apps/windows/**"
-      - "scripts/set-version.sh"
-      - ".github/workflows/build-msi.yml"
     tags: ["windows-v*", "v*"]
   workflow_dispatch:
 
@@ -54,8 +51,8 @@ jobs:
       - name: Inject version into Windows build
         shell: bash
         run: |
-          # 正式 tag（X.Y.Z）才注入；main/dispatch 的 0.1.0-<run> 非正式版本脚本会判失败，
-          # 这里容忍并沿用 csproj/iss 已提交默认，保证 main 每次都能产出安装包。
+          # 正式 tag（X.Y.Z）才注入；dispatch 的 0.1.0-<run> 非正式版本脚本会判失败，
+          # 这里容忍并沿用 csproj/iss 已提交默认，保证手动试打包也能出安装包。
           # --only=windows：解耦之后这里不碰服务端与 Android 的版本号。
           bash scripts/set-version.sh --only=windows "${{ steps.version.outputs.version }}" \
             || echo "⚠️ 非正式版本（${{ steps.version.outputs.version }}）跳过注入，沿用已提交 <Version>。"

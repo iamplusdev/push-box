@@ -8,7 +8,7 @@ name: Build and Push Docker Image
 # 在两个 workflow 里各跑一遍只会让同一个红出现两次，而推送这条的判据本来就不是测试。
 # 三条发布链是解耦的：本文件只认 server-v* 与旧的 v*（三端一起发）两种标签。
 # 只改服务端时打 server-v*，Android 与 Windows 两条流水线根本不会被触发。
-# main 上的构建按 paths 过滤（apps/server/、packages/core/、apps/web-admin/、pom.xml、infra/），改文档或客户端不会重推一份 main 镜像。
+# **推 main 不构建镜像**：镜像能不能编由 ci.yml 的服务端 job 判，这条链只在打标签时往 Hub 真推东西。
 # tag 事件不带 paths 过滤（否则 tag 指到的提交恰好没碰这些目录时会静默不发布）。
 #
 # 版本号的唯一来源是**仓库里已提交的那份**（`pom.xml`，由 `scripts/set-version.sh --only=server` 写全），
@@ -21,14 +21,6 @@ name: Build and Push Docker Image
 # 这一口径 2026-10-20 由维护者确认过（备选方案都否掉了），不是漏配——别把它"顺手补全"。
 on:
   push:
-    branches: [main]
-    paths:
-      - "apps/server/**"
-      - "packages/core/**"
-      - "apps/web-admin/**"
-      - "pom.xml"
-      - "infra/**"
-      - ".github/workflows/docker-publish.yml"
     tags: ["server-v*", "v*"]
   workflow_dispatch:
     inputs:

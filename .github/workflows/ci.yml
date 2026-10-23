@@ -260,6 +260,12 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
+      - name: dotnet build 主工程
+        working-directory: apps/windows
+        run: dotnet build PushBox.Windows/PushBox.Windows.csproj -c Release --nologo
+      # 这一条是 2026-10-23 从 build-msi.yml 的 main 触发里搬过来的：那条链现在只认 windows-v* 标签，
+      # 推 main 不再打安装包，于是"主工程编得过"这件事整个仓里只剩这里在管。它只 build 不 publish、
+      # 不装 Inno、不出任何可分发产物——打包仍然是发版时的事。
       - name: dotnet test PushBox.Crypto.Tests
         id: dotnet
         working-directory: apps/windows

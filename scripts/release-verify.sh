@@ -738,13 +738,24 @@ else
     pass "ci.yml 不改版本号，测的就是提交里的那份"
 fi
 
-# 出制品与门禁的四个 workflow 只在 main / 各自的组件标签 / 旧的 v* 上触发，主分支名本身也是发布链的一部分。
-# （第五个 site-deploy.yml 故意不挂 v*，它跟版本号无关，判据在下面那段。）
+# 门禁链挂在 main 上；三条**出制品**的链（APK / MSI / 镜像）只认组件标签与手动 dispatch。
+# 这条分界是 2026-10-23 由维护者定的：安装包与镜像是给人下载、给人拉的东西，每次合并都重打一份，
+# 既烧 runner 又让"哪个产物是发出去的"重新变模糊。谁哪天手滑把 branches 加回去，这里判红。
+# （site-deploy.yml 与 update-dockerhub-description.yml 挂在 main 上是故意的，它们不发制品。）
 if grep -q 'branches: \[main\]' "$ROOT_DIR/.github/workflows/ci.yml"; then
     pass "CI 触发分支与主分支口径一致（main）"
 else
     fail "CI 的触发分支不是 main，推上去不会有任何流水线运行"
 fi
+
+BRANCH_FREE_OK=1
+for wf in build-apk.yml build-msi.yml docker-publish.yml; do
+    if grep -qE '^[[:space:]]+branches:' "$ROOT_DIR/.github/workflows/$wf"; then
+        BRANCH_FREE_OK=0
+        fail "$wf 又挂上了分支触发：推一次代码就重出一份要发给用户的产物，这条链只该认组件标签与 dispatch"
+    fi
+done
+[ "$BRANCH_FREE_OK" = "1" ] && pass "三条出制品的链没有分支触发（只有组件标签 + workflow_dispatch）"
 
 # 官网发布链。site/ 是纯静态的，这条链没有构建，所以它的风险全在"什么时候发、发的是什么"上，
 # 而这几件事在本机都看不出来：paths 被删掉只有推 main 那次才暴露，树哈希比较被删掉只有重跑一次
