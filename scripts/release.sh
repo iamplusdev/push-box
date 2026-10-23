@@ -115,7 +115,7 @@ for c in server android windows; do
     fi
   fi
   printf '  %-8s %-16s %-10s %-24s %s\n' \
-    "$c" "${pfx}${LATEST[$c]:-（无）}" "${INTREE[$c]:-（读不到）}" \
+    "$c" "$(pb_tag_disp "$pfx" "${LATEST[$c]}")" "${INTREE[$c]:-（读不到）}" \
     "${NEXT_P[$c]} / ${NEXT_N[$c]} / ${NEXT_M[$c]}" "$note"
 done
 

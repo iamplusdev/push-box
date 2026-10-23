@@ -37,7 +37,7 @@ pb_parse_args "$@"
 pb_step "1/6 定版本号"
 latest="$(pb_latest_tag "$TAG_PREFIX")"
 intree="$(pb_intree_version "$COMPONENT" || true)"
-pb_info "最新标签 ${TAG_PREFIX}${latest:-（无）}；csproj 现值 ${intree:-（读不到）}"
+pb_info "最新标签 $(pb_tag_disp "$TAG_PREFIX" "$latest")；csproj 现值 ${intree:-（读不到）}"
 
 if [ -z "$PB_TARGET" ]; then
   base="${latest:-$intree}"
