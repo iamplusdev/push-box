@@ -398,25 +398,34 @@ output/       各端编译产物（jar / apk / exe），不入库，由 release 
 
 三条发布链互相独立：服务端、Android、Windows 各有自己的版本号与标签前缀（`server-v*` / `android-v*` /
 `windows-v*`），**只改服务端就只打 `server-v*`，两条客户端流水线不会被触发**；旧的 `v*` 标签仍然保留，
-一次发三端。推 `main` 时三条链按各自的目录过滤（见下表），改动含 `site/**` 的 `main` 推送还会把官网发到
-GitHub Pages（线上地址 <https://iamplusdev.github.io/push-box/>）。六个工作流都在 `.github/workflows/`，
-其中 `ci.yml` 是独立于发布的门禁（真 MySQL + 真对象存储，末尾断言"闸门用例一条都没被跳过"），
-每次推 `main` 都跑全量——它判的是三端契约有没有被改坏，不跟着发布链的过滤走。
+一次发三端。**这三条链只认标签，不认分支**：推 `main` 不会重出一份要发给用户下载的 APK/MSI，也不会往
+Docker Hub 写任何东西——改代码能不能编、契约有没有被改坏，是 `ci.yml` 的事。改动含 `site/**` 的 `main`
+推送还会把官网发到 GitHub Pages（线上地址 <https://iamplusdev.github.io/push-box/>）。六个工作流都在
+`.github/workflows/`，其中 `ci.yml` 是独立于发布的门禁（真 MySQL + 真对象存储，末尾断言"闸门用例一条都
+没被跳过"），每次推 `main` 都跑全量——它判的是三端契约有没有被改坏，不跟着发布链走。
+
+**分支只有一个**：日常提交与评审都在 `main`（GitHub 上的默认分支也是它），`gh-pages` 是 `site-deploy.yml`
+写出去的站点分支、不手工提交，历史血脉放在本地 `archive/legacy-history` 与 `archive/orphan-old-line`
+（不推远端）。以前还有一条 `publish` 用来"代码先上远端、流水线不动"，2026-10-23 已删——那个用途现在由
+"出制品的三条流没有分支触发"直接满足，不需要一条独立分支来躲 CI。
 
 | 工作流 | 触发 | 产出 |
 |--------|------|------|
-| `docker-publish.yml` | push main（仅 `apps/server/**`、`packages/core/**`、`apps/web-admin/**`、`pom.xml`、`infra/**`）/ `server-v*` 或 `v*` 标签 / 手动 | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`：标签上打本次的 `X.Y.Z` / `X.Y` / `latest`，main 上只打 `main`/`sha-*`（版本标签必须不可变）。构建前先跑版本闸门——tag、`pom.xml`、compose 三者版本号不一致就直接红，不会推出去一个自称某版、里面跑着另一版的镜像。手动触发默认是 **dry-run**（只构建不推），用它可以在不碰 Hub 的前提下验 `DOCKERHUB_*` 这对 secrets。**`v*` 标签事件首跑 2026-10-22 绿**（run `39724347017`，tag `v1.1.0`）：「版本号一致性闸门」「Docker metadata」「Build and push」「本次的标签清单」四步全 success，即 `1.1.0`/`1.1`/`latest` 三个标签随 buildx 一起推出。Hub 标签清单已用 WSL 里的 Hub 凭据实查（Windows 宿主仍连不上 `hub.docker.com`，WSL 可连）：当页是 `1.1.5` / `1.1` / `latest` / `main` / `sha-a478f0e` / `1.1.4` / `sha-2d8f3b0` / `1.1.3` / `sha-d8c1486` / `sha-d4a889d`——这次没有删旧版本标签。**组件标签首跑 2026-10-22 亦绿**（run `39763487572`，tag `server-v1.1.2`，推出 `1.1.2` / `1.1` / `latest`）；**v1.1.3 补丁链同日绿**（run `39767681288`，tag `server-v1.1.3`，推出 `1.1.3` / `1.1` / `latest`，Hub config blob 复核 `Volumes` 为两个持久化目录）；**v1.1.4 同日绿**（run `39779506621`，tag `server-v1.1.4`，推出 `1.1.4` / `1.1` / `latest`，首次带上 GUI 占位 ENV；该镜像有一处"主钥被占位口令误杀"的缺陷）；**v1.1.5 修复链同日绿**（run `39780463627`，tag `server-v1.1.5`，推出 `1.1.5` / `1.1` / `latest`，从 Hub 拉回镜像复核 entrypoint 与源码渲染结果 md5 一致） |
-| `build-apk.yml` | push main（仅 `apps/android/**`、`packages/core/**`（`:pbcore` 直接编译共享 core）等 Android 路径）/ `android-v*` 或 `v*` 标签 | 只出 `assembleRelease`（R8 + 签名），用 `apksigner verify` 把关后上传 `pushbox-release-*.apk`；标签时发 Release。没配 keystore 时构建直接失败，不再退化成"发一只 debug 包"。**标签发 Release 首跑 2026-10-22 绿**（run `39724346953`）：`Verify release APK signature` 与 `Publish to GitHub Release` 两步 success，资产 `pushbox-release-v1.1.0.apk`（12.8 MB）已挂到 Release 页；**组件标签首跑同日绿**（run `39763487166`，`android-v1.1.2`，资产 `pushbox-release-1.1.2.apk`） |
-| `build-msi.yml` | push main（仅 `apps/windows/**` 等 Windows 路径）/ `windows-v*` 或 `v*` 标签 | `windows-latest` 上 `dotnet publish self-contained win-x64` + Inno Setup 出 `setup.exe`，上传 artifact；标签时发 Release。**标签首跑 2026-10-22 绿**（run `39724347008`），资产 `PushBox-Setup-1.1.0-win-x64.exe`（58.7 MB）；`Sign installer` 仍 skipped——**安装包未签名**（`CODESIGN_*` 那对 secrets 未配）；**组件标签首跑同日绿**（run `39763487499`，`windows-v1.1.2`，资产 `PushBox-Setup-1.1.2-win-x64.exe`） |
+| `docker-publish.yml` | `server-v*` 或 `v*` 标签 / 手动 dispatch（**没有分支触发**：推 `main` 不碰这条链） | buildx 多阶段构建（含 Web 管理台）并推 `iamplusdev/push-box`：**只有标签事件才推 Hub**，打的是本次的 `X.Y.Z` / `X.Y` / `latest`；分支上 dispatch 一律只构建（它仍要能验 `DOCKERHUB_*` 登录与 Dockerfile 编不编得出来），导出目标用一条只活在 runner 本地的占位标签，Hub 上不会多任何东西。**回滚点就是留在 Hub 上的历史版本标签**，不再靠一个每次构建都移动的 `main`。构建前先跑版本闸门——tag、`pom.xml`、compose 三者版本号不一致就直接红，不会推出去一个自称某版、里面跑着另一版的镜像。手动触发默认是 **dry-run**（只构建不推）。**`v*` 标签事件首跑 2026-10-22 绿**（run `39724347017`，tag `v1.1.0`）：「版本号一致性闸门」「Docker metadata」「Build and push」「本次的标签清单」四步全 success，即 `1.1.0`/`1.1`/`latest` 三个标签随 buildx 一起推出。Hub 标签清单已用 WSL 里的 Hub 凭据实查（Windows 宿主仍连不上 `hub.docker.com`，WSL 可连）：当页是 `1.1.5` / `1.1` / `latest` / `main` / `sha-a478f0e` / `1.1.4` / `sha-2d8f3b0` / `1.1.3` / `sha-d8c1486` / `sha-d4a889d`——这次没有删旧版本标签。**组件标签首跑 2026-10-22 亦绿**（run `39763487572`，tag `server-v1.1.2`，推出 `1.1.2` / `1.1` / `latest`）；**v1.1.3 补丁链同日绿**（run `39767681288`，tag `server-v1.1.3`，推出 `1.1.3` / `1.1` / `latest`，Hub config blob 复核 `Volumes` 为两个持久化目录）；**v1.1.4 同日绿**（run `39779506621`，tag `server-v1.1.4`，推出 `1.1.4` / `1.1` / `latest`，首次带上 GUI 占位 ENV；该镜像有一处"主钥被占位口令误杀"的缺陷）；**v1.1.5 修复链同日绿**（run `39780463627`，tag `server-v1.1.5`，推出 `1.1.5` / `1.1` / `latest`，从 Hub 拉回镜像复核 entrypoint 与源码渲染结果 md5 一致）。**2026-10-23 追加两处订正**：① 上面那份「当页是 … `main` / `sha-a478f0e` …」是当时的实查快照，之后这条链做了两件事——`type=ref,event=branch` 与 `type=sha` 已从 metadata 里删掉（见本节开头），旧标签也被手动清走；本次订正时用 WSL 复查 Hub 的 tags 接口得到 `count: 0`、`main` 单查 404，也就是**仓库一个标签都没有**，`infra/docker-compose.yml` 钉的 `:1.1.6` 暂时拉不到，要等下一次标签事件（或在 `server-v1.1.6` 上点一次不勾 dry-run 的 dispatch）才补得回来。② 同一个 commit `d8d6476` 在 tag 事件 / 分支事件 / 手动 dispatch 下量到三个不同 digest（`ca14f281…` / `d9b35cea…` / `90bed7ef…`），根因是 buildx 的 gha 层缓存复用未变动的阶段、jar 时间戳因此不同，**镜像本来就不可复现**；判断"这个镜像里是哪份代码"要读 OCI label `org.opencontainers.image.revision`，别看标签名，也别拿 digest 当"内容变了"的证据 |
+| `build-apk.yml` | `android-v*` 或 `v*` 标签 / 手动 dispatch（**没有分支触发**：APK 是要挂上 Release 给人下载的制品，每次合并重打没有意义；Android 能不能编由 `ci.yml` 的「Android 编译」job 每次推 `main` 判） | 只出 `assembleRelease`（R8 + 签名），用 `apksigner verify` 把关后上传 `pushbox-release-*.apk`；标签时发 Release。没配 keystore 时构建直接失败，不再退化成"发一只 debug 包"。**标签发 Release 首跑 2026-10-22 绿**（run `39724346953`）：`Verify release APK signature` 与 `Publish to GitHub Release` 两步 success，资产 `pushbox-release-v1.1.0.apk`（12.8 MB）已挂到 Release 页；**组件标签首跑同日绿**（run `39763487166`，`android-v1.1.2`，资产 `pushbox-release-1.1.2.apk`） |
+| `build-msi.yml` | `windows-v*` 或 `v*` 标签 / 手动 dispatch（**没有分支触发**：安装包同理；C# 能不能编由 `ci.yml` 的 Windows job 里新增的 `dotnet build 主工程` 那一步判） | `windows-latest` 上 `dotnet publish self-contained win-x64` + Inno Setup 出 `setup.exe`，上传 artifact；标签时发 Release。**标签首跑 2026-10-22 绿**（run `39724347008`），资产 `PushBox-Setup-1.1.0-win-x64.exe`（58.7 MB）；`Sign installer` 仍 skipped——**安装包未签名**（`CODESIGN_*` 那对 secrets 未配）；**组件标签首跑同日绿**（run `39763487499`，`windows-v1.1.2`，资产 `PushBox-Setup-1.1.2-win-x64.exe`） |
 | `update-dockerhub-description.yml` | push main 且改动含 `README.md`（带 `paths:` 过滤的两个之一，另一个是 `site-deploy.yml`） | 把 `README.md` 同步为 Docker Hub 仓库说明。**2026-10-22 第一次跑绿**（run `39720441754`，push `main`、head `ab5c9fb7`，改动含 `README.md`）。此前它空了一整版：唯一那次 `main` 推送是"新建分支"（`before` 是全零），GitHub 算不出改动文件集，带 `paths:` 的它被跳过、另外四个照跑；因为从没被登记过，连网页上的「Run workflow」都不存在，只能等一次改到 `README.md` 的常规推送（排查过程与四条证据见 `发布检查清单.md`「Hub 仓库说明」）。**Hub 上的说明正文本机没复核到**——`hub.docker.com` 从这台机器三条路都是超时，这一句只有 CI 那一步的退出码背书 |
 | `site-deploy.yml` | push main 且改动含 `site/**` / 手动 | 把 `site/` 那棵目录树原样发到一条**只装站点**的分支 `gh-pages`（分支的根树 == `site/` 的树，没有源码也没有构建产物），Pages 以它为源。没有构建步骤，用 `git commit-tree` + push 完成，只依赖 `actions/checkout`。**内容没变就不发**：`paths:` 挡掉"只改代码"的推送，树哈希比较再挡掉"同一份 site/ 被带进来两次"和手动重跑（dispatch 不吃 `paths:`，所以这层不可省）。不挂任何标签——官网与版本号无关。**首跑已在 2026-10-22 兑现**：run `39720441735` 推出 `gh-pages`（根树等于那次推送的 `HEAD:site`），Pages 构建 `39720519087` success，`https://iamplusdev.github.io/push-box/` 实测 200，页面里全部资源都是相对路径所以子路径下不缺样式。**它不开 GitHub Pages**：源没配置时这条链只推分支、站点地址打不开，第一次要么在网页 Settings → Pages 把源设成 `gh-pages` / `/`，要么拿管理员 token 调一次 `POST /repos/<仓库>/pages` |
 
-三条构建链在 `main` 上只按自己的目录过滤：改 `apps/server/**` 只跑 `docker-publish.yml`，改 `apps/windows/**` 只跑
-`build-msi.yml`，改 `apps/android/**` 只跑 `build-apk.yml`；`packages/core/**` 是 Java 侧共享源码（`:pbcore` 直接编译它），
-所以它动了服务端与 Android 两条都会跑。**打 tag 时不过滤**（GitHub 对 tag 推送不评估 `paths`；否则 tag 指到
-的提交恰好没碰这些目录就会静默不发布）。`ci.yml` 没有过滤，每次推 `main` 全量跑——那是门禁，不是发布。
-**推其它分支名（例如发布前的 `publish` 分支）不触发任何工作流**，这也是"代码先上远端、CI 暂时不动"能
-成立的原因。`site-deploy.yml` 从非 `main` 分支手动触发且真要推上去时会被直接拒（Pages 只有一个地址，
+**2026-10-23 改口径**：以前"三条构建链在 `main` 上按自己的目录过滤"（改 `apps/server/**` 就跑
+`docker-publish.yml`，改 `apps/windows/**` 就跑 `build-msi.yml`…）已经不成立了——`paths` 只是把触发面收窄，
+并没有取消"推一次代码就重出一份制品"这件事，而现在三条链**根本没有分支触发**，只剩组件标签与手动
+dispatch，所以 `paths` 一并删掉了（留着反而误导：它会让人以为 push 还能出包）。`packages/core/**` 是
+Java 侧共享源码（`:pbcore` 直接编译它），它动了会不会连累两端，现在只在"打哪个标签"这一刻才有关联——
+标签事件本来就不评估 `paths`（GitHub 对 tag 推送不算改动文件集；否则 tag 指到的提交恰好没碰这些目录
+就会静默不发布）。`ci.yml` 每次都全量跑（`pull_request` 与推 `main`），那是门禁，不是发布。
+带 `paths:` 过滤的只剩两条纯文本同步链：`site-deploy.yml`（`site/**`）与
+`update-dockerhub-description.yml`（`README.md`）。`site-deploy.yml` 从非 `main` 分支手动触发且真要推上去时会被直接拒（Pages 只有一个地址，
 没有预览地址可回退），要越过这道确认得显式勾上 `force_branch`；勾 `dry_run` 不拦，因为它一个字节都不推。
 
 **要在仓库 Settings → Secrets and variables → Actions 配的密钥：**

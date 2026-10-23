@@ -7,6 +7,48 @@
 
 ---
 
+## 未发布 —— 推代码与出发版解耦：三条制品链只认标签、Hub 只出版本标签、工作分支只剩 `main`（第三十五轮）
+
+> 起点是 v1.1.6 发完之后的一次对账：Docker Hub 上躺着 15 个标签，其中一多半是每次推 `main` 顺手产出来的 `main` 与 `sha-*`；维护者的要求是三句话——**保留官网页面分支、只保留 `main` 一个工作分支、但不能每次推送代码都打包发版，也不能每次打包都让 APK/MSI/Docker 三件套都跑一遍**。这三句其实是一件事：过去"推代码"和"出一份要发给用户的制品"被同一根触发线拴在一起，所以为了只推代码，仓库里得养一条 `publish` 分支躲 CI。
+
+### 三条链的触发面（步骤 1）
+
+- `build-apk.yml` / `build-msi.yml` / `docker-publish.yml` 的 `push:` 只剩 `tags:`（自己的 `<component>-v*` 加旧的 `v*`），**分支触发与 `paths:` 过滤一起删掉**。留着 `paths` 会误导：它让人以为 push 还能出包，只是范围小一点。
+- 编译退化不会因此没人管：`ci.yml` 每次推 `main` 全量跑，Windows job 里补了一步 `dotnet build PushBox.Windows/PushBox.Windows.csproj -c Release`——原来这一步只在 `build-msi.yml` 的 main 触发里，摘掉分支触发就一起摘掉了它，只 build 不 publish、不装 Inno。
+- 手动 `workflow_dispatch` 保留，用途写进文件头：想试打一次包随时点，它不占版本号。
+
+### Hub 只出版本标签（步骤 2）
+
+- metadata 去掉 `type=ref,event=branch` 与 `type=sha`，只剩 tag 事件的 `X.Y.Z` / `X.Y` / `latest`。**回滚点改为"留在 Hub 上的历史版本标签"**，不再靠一个每次构建都移动、没人知道指向哪次提交的 `main`。
+- "这次是不是要发某个版本"由 `github.ref` 的 `refs/tags/` 前缀判，不再用 `github.ref_type`——后者在"于 tag 上点 dispatch"这种场景语义没实测过，而版本号闸门、push 闸门、metadata 的 `enable` 三处都要拿它当唯一依据，猜错就是"该推的没推"。三处现在共用同一个 `is_tag` 输出。
+- 非 tag 触发一律 `push=false`；buildx 在 `push=false` 下仍要一个导出目标，所以补一条只存在于 runner 本地的占位标签 `dispatch-<run>`。
+
+### 分支收口（步骤 3）
+
+- 本地 `publish`、`master` 删除；`master` 与 `archive/legacy-history` 指向同一提交（删前核过 0/0）。GitHub 上先把默认分支从 `publish` 改成 `main`（这一步只能在网页 Settings 里点：这台机器没有 `gh` CLI、也没有可用的仓库 token），再删远端 `publish`，`git remote set-head github -a` 跟着指回 `main`。
+- 仓库血脉原本是三条互不相干的线：`publish` 与 `github/main` 同根（`28988a0`），本地 `main`（`5cd43d9`）是另一条没有共同祖先的旧线，`archive/legacy-history`（`d51ea49`）又是第三条。旧线存档成 `archive/orphan-old-line`，**存档前用 `filter-branch --index-filter` 整条重写，把 `deploy/wsl-test.env` 从每一个提交的树里摘掉**——那份 WSL 联调凭据只有这条本地线在跟踪（HEAD、`github/main`、`github/publish`、`archive/legacy-history`、`master` 都没有它），复核过重写后整条线 `.env` 匹配 0 处，并删掉 filter-branch 留下的 `refs/original` 备份引用。旧线独有的 32 个源码文件全是重构改名前的旧路径（`deploy/`、`server/`、`android/`、`RELEASE-CHECKLIST.md`），内容都在 HEAD 的新路径下；其余两千多个是当年误提交的 `bin/`、`obj/`。
+- `gitee`/`gitea` 两个镜像仍各挂着一条没同步的 `publish`（这两个远端没授权推），所以"三端同名分支一致"那条判据改成只对 `github/main` 比 sha。
+
+### 闸门（步骤 1/2 各一道，都在 `scripts/release-verify.sh`）
+
+- 三条制品链里任何一条出现 `branches:` 就判红——回归这条在本机看不出来（要等 tag 推上去才发现"只改服务端又把客户端带上"或"打 tag 根本没流水线跑"）。
+- `docker-publish.yml` 出现 `type=ref,event=branch` / `type=sha` 判红；缺 `latest` 也判红（装的人写的就是 `:latest`）。
+
+### 验证
+
+- 触发面静态判据：`grep` 三种组合各验一次——把 `branches: [main]` 塞回去立刻 1 FAIL，撤掉恢复 0 失败；把 `type=sha,...` 塞回去同样立刻 1 FAIL。
+- 行为判据不是看一眼 YAML：把 `docker-publish.yml` 里「版本号一致性闸门」与「本次是否真推」两步的 `run` 脚本原样抽出来，配桩 `pom.xml` / `infra/docker-compose.yml` 在临时目录跑五种触发组合——tag push → `push=true`；tag + dry_run → `false`；分支 dispatch → `is_tag=false`、`push=false`；tag 与 pom 不一致 → RC=1；compose 与 pom 不一致 → RC=1。
+- **端到端兑现**：`d8d6476..d71fe81` 快进 `github/main` 之后，按该 SHA 查 `actions/runs` 得 `total_count: 1`，唯一一条是 CI（event=push），docker-publish / build-apk / build-msi 一条都没起；那条 CI run `39964668069` 最终 `conclusion=success`，含新增的 `dotnet build 主工程`。
+- `bash scripts/release-verify.sh`：86 通过 / 0 失败 / 2 警告（未提交文件、本机无 docker CLI）。
+
+### 边界
+
+- **Hub 现在一个标签都没有**（本次订正时用 WSL 复查 tags 接口 `count: 0`、`main` 单查 404：旧标签被手动清走，新链路又不再产分支标签）。`infra/docker-compose.yml` 钉的 `:1.1.6` 因此暂时拉不到——这一版是靠"下一次标签事件"或"在 `server-v1.1.6` 上点一次不勾 dry-run 的 dispatch"补回来，属发布动作，由维护者手动执行。
+- 镜像本来就不可复现：同一个 `d8d6476` 在 tag 事件 / 分支事件 / 手动 dispatch 下量到三个 digest（`ca14f281…` / `d9b35cea…` / `90bed7ef…`），根因是 gha 层缓存复用未变动的阶段。认版本读 OCI label `org.opencontainers.image.revision`。
+- `v*` 与 `<component>-v*` 两种标签的语义、GitHub Release 那两条链的资产命名都没动，本轮只改触发面与标签集合。
+
+---
+
 ## 未发布 —— 配置模型重构：安装页取代环境变量（第三十四轮）
 
 > 起点：一条来自真实安装的抱怨。v1.1.4 为了让飞牛的「环境变量」表单有行可填，往镜像里烘了 5 枚 `__SET_ME__` 占位值；v1.1.5 紧接着修的就是"只配主钥的人被那个占位口令判成二选一冲突"。**为了让表单有行可填而塞假值、再为了让假值不生效而在 entrypoint 里 `unset` 它**——这个形状说明该换的不是键的数量，而是配置的形态。维护者的判断是"不要设计太复杂，要符合用户逻辑，而不是死板追求安全性"，并明确推翻了"凭据只走环境变量"这条硬规则（它本来就只是开发环境的口径）。

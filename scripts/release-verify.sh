@@ -771,6 +771,26 @@ for wf in build-apk.yml build-msi.yml docker-publish.yml; do
 done
 [ "$BRANCH_FREE_OK" = "1" ] && pass "三条出制品的链没有分支触发（只有组件标签 + workflow_dispatch）"
 
+# 分支收口（2026-10-23 第三步）：工作分支只剩 main，两条闸各管一半。
+# ① 本地不该再有 publish/master。它们当初存在的唯一理由是"推代码要躲开 CI 与 Docker Hub"，
+#    而那个理由已被上面那条闸（出制品的链没有分支触发）取代；谁重新拉一条出来，
+#    "推代码"与"发版"的分界就又糊了。CI 上是 detached checkout，这两问都是空，
+#    所以这一条只会在开发机上判红——正是要盯的那台机器。
+# ② 发布清单里"发布分支 == 远端 tip"那条判据必须指向 github/main。这里只正面断言新写法在，
+#    不去反手 grep "publish"：那条目里要引用被废掉的旧命令作订正说明，
+#    按"出现即违规"判会把历史叙述打成缺陷（本仓踩过这个坑，见端点闸那条教训）。
+if git -C "$ROOT_DIR" branch --list publish master | grep -q .; then
+    fail "本地还有 publish 或 master 分支：三条链已无分支触发，躲 CI 不需要一条独立分支，旧血脉请放 archive/*"
+else
+    pass "本地工作分支只剩 main（publish/master 已收回 archive/*）"
+fi
+
+if grep -q 'git ls-remote github refs/heads/main' "$ROOT_DIR/docs/release/发布检查清单.md"; then
+    pass "发布清单的分支判据指向 github/main"
+else
+    fail "发布清单里「发布分支就是要打的那份代码」那条没指向 github/main：照着旧命令核对，比的是一条已经不存在的分支"
+fi
+
 # 官网发布链。site/ 是纯静态的，这条链没有构建，所以它的风险全在"什么时候发、发的是什么"上，
 # 而这几件事在本机都看不出来：paths 被删掉只有推 main 那次才暴露，树哈希比较被删掉只有重跑一次
 # 才看得见（多一个空 commit 与一次 Pages 构建），.nojekyll 被漏掉则 Pages 会拿 Jekyll 过一遍站点。
