@@ -63,7 +63,7 @@ public class ApiException extends RuntimeException {
 
   /**
    * §5.2 管理台：口令错到阈值就按来源 IP 锁定。状态码是 429 而不是 401——
-   * 控制台（web-admin/src/views/Login.vue）显示的是 {@code data.hint || '密钥错误'}，
+   * 控制台（apps/web-admin/src/views/Login.vue）显示的是 {@code data.hint || '密钥错误'}，
    * 所以 hint 直接写成人话，让"被锁了"和"口令错了"在界面上分得开。
    */
   public static ApiException loginLocked(long retryAfterSeconds) {

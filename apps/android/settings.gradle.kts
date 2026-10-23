@@ -5,7 +5,7 @@
 // `pluginManagement` 最前面，于是 KSP 的插件 marker 被判成 "was not found in any of the following
 // sources"，尽管 `repo.maven.apache.org` 上同一份 pom 是 200。本机在墙内看不到那个 502，所以本地一直绿。
 //
-// 需要镜像加速的开发机：在 `android/local.properties`（已被 .gitignore 忽略，不入库）加一行
+// 需要镜像加速的开发机：在 `apps/android/local.properties`（已被 .gitignore 忽略，不入库）加一行
 //     pb.maven.cnMirror=true
 // 全局 `~/.gradle/init.gradle` 只改写 project 级仓库，够不到 `pluginManagement`，所以开关只能放在这里。
 // 另外 `pluginManagement` 是单独一段先编译的，看不见脚本里其它位置的声明，所以下面两处各自读一次文件。

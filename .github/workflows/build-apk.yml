@@ -24,7 +24,7 @@ on:
     branches: [main]
     paths:
       - "apps/android/**"
-      # :pbcore 直接编译 ../packages/core 的同一份源码，core 动了 APK 必须跟着重出
+      # :pbcore 直接编译 ../../packages/core 的同一份源码，core 动了 APK 必须跟着重出
       - "packages/core/**"
       - "scripts/set-version.sh"
       - ".github/workflows/build-apk.yml"

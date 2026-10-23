@@ -30,7 +30,7 @@ import java.util.Map;
  */
 public class RuntimeConfig {
 
-  /** 工作目录下的相对位置。容器 WORKDIR=/app，本机跑测试时是 server/。 */
+  /** 工作目录下的相对位置。容器 WORKDIR=/app，本机跑测试时是 apps/server/。 */
   public static final String RELATIVE_PATH = "data/config/pushbox.json";
 
   /** 覆盖配置文件位置的属性键（{@code --pb.config-file=...} 或 {@code -Dpb.config-file=...}）。 */

@@ -15,7 +15,7 @@ using PushBox.Windows.Sync;
 // 单元测试里的服务端是脚本（vectors.json 的字节 + 测试自己封的盒），这里把它换成真的 Java 服务端：
 // 真 nonce、真验签、真密封盒、真广播。跑法：
 //   bash infra/run-dev.sh --server.port=8081
-//   dotnet run --project windows/PushBox.LiveCheck -- http://127.0.0.1:8081
+//   dotnet run --project apps/windows/PushBox.LiveCheck -- http://127.0.0.1:8081
 // 每跑一次在开发库里多出一个 Space 和两台设备，与 node 探针同样的代价。
 Console.OutputEncoding = Encoding.UTF8;
 var baseUrl = args.Length > 0 ? args[0] : "http://127.0.0.1:8081";

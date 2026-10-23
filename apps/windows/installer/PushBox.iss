@@ -2,7 +2,7 @@
 ; PushBox PC 客户端安装包（§8.4 W15-c，选型见 §10.1，环境见 docs/Windows开发环境安装教程.md）
 ;
 ; 这一页只管"把 publish 目录变成一个能无人值守装到干净机器的 exe"。它**不**构建 .NET：
-; 先跑 bash windows/installer/build-installer.sh（publish → ISCC），版本号也从那里传进来。
+; 先跑 bash apps/windows/installer/build-installer.sh（publish → ISCC），版本号也从那里传进来。
 ;
 ; 三条和这个应用的形态绑在一起的取舍，改脚本前先读：
 ; ① 全程 per-user、不弹 UAC：通知的 AUMID、pushbox: 协议、开机自启三处都写 HKCU，

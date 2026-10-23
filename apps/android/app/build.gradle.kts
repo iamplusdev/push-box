@@ -19,7 +19,7 @@ val releaseSigningEnv = listOf(
 )
 val hasReleaseSigning = releaseSigningEnv.all { !System.getenv(it).isNullOrBlank() }
 
-// 本地开发 fallback：android/dev/pushbox-release.jks 配 android/local.properties 里的口令。
+// 本地开发 fallback：apps/android/dev/pushbox-release.jks 配 apps/android/local.properties 里的口令。
 // 口令绝不写进本文件：这是一份会公开、会被复制进 CI 日志与新 gradle 文件的清单，而历史上它
 // 确实随每一个提交走了一遍。local.properties 与 dev/ 目录都在 .gitignore 里；四项环境变量与
 // dev keystore 两条路都不成立时，下面的 buildTypes.release 直接 error()，不出未签名的"正式包"。
@@ -49,8 +49,8 @@ fun decodeReleaseKeystore(raw: String): ByteArray {
         ).joinToString("，")
         error(
             "ANDROID_KEYSTORE_BASE64 不是标准 base64（$shape）。这里要的是下面命令的**一整行**输出：\n" +
-                "  Linux/macOS： base64 -w0 android/dev/pushbox-release.jks\n" +
-                "  PowerShell ： [Convert]::ToBase64String([IO.File]::ReadAllBytes(\"android\\dev\\pushbox-release.jks\"))\n" +
+                "  Linux/macOS： base64 -w0 apps/android/dev/pushbox-release.jks\n" +
+                "  PowerShell ： [Convert]::ToBase64String([IO.File]::ReadAllBytes(\"apps\\android\\dev\\pushbox-release.jks\"))\n" +
                 "`certutil -encode` 那种带 PEM 包头的产物不能用（它加 -----BEGIN/END----- 与换行）。"
         )
     }
@@ -154,7 +154,7 @@ if (!hasReleaseSigning && !hasLocalSigning) {
         doLast {
             error("release 未签名：需要 ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, "
                 + "ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD 四个环境变量都非空，"
-                + "或本地同时有 android/dev/pushbox-release.jks 与 android/local.properties 里的 "
+                + "或本地同时有 apps/android/dev/pushbox-release.jks 与 apps/android/local.properties 里的 "
                 + "pushbox.signing.storePassword / pushbox.signing.keyPassword")
         }
     }
