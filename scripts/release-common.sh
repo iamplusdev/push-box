@@ -145,6 +145,22 @@ pb_collect() {
   pb_ok "产物已收进 output/$sub/$name（$(du -h "$PB_ROOT/output/$sub/$name" | cut -f1)）"
 }
 
+# ---- 提交 ----
+# pb_release_commit <message>：把版本号改动提交掉。返回 0 = 提交了，1 = 暂存区是空的（没什么可提交），
+# 2 = git commit 自己失败了。调用方对 1 和 2 的处理完全不同，所以这里只报数、不代替它决定。
+#
+# 为什么要有返回 1 这一支：发布线重置过一次（2026-10-23，三端号统一写回 1.1.0），"版本号已经在 HEAD 里"
+# 从此是正常状态；而 output/ 在 .gitignore 里，写完号往往一个字节都没变。原来那一行
+# `git commit || 退出` 会在这种状态下把发版掐死在"提交失败"上，一个标签都打不出去。
+# 也不走 `--allow-empty`：三条无内容提交比"标签直接指向那份写着版本号的提交"更难读。
+pb_release_commit() {
+    local msg="$1"
+    git -C "$PB_ROOT" add -A
+    git -C "$PB_ROOT" diff --cached --quiet && return 1
+    git -C "$PB_ROOT" commit -m "$msg" || return 2
+    return 0
+}
+
 # ---- 远端 ----
 # 只推 github：gitee 与 gitea 不在授权范围内（维护者明确说过），要推自己手动来。
 PB_REMOTE="github"

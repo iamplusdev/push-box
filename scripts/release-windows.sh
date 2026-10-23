@@ -135,10 +135,15 @@ if [ "$PB_DRY_RUN" = 1 ]; then
   pb_info "[dry-run] 本来会提交版本号改动，并打标签 $tag"
 else
   pb_confirm "即将提交并打标签 $tag（本地）" || exit 1
-  git -C "$PB_ROOT" add -A
-  git -C "$PB_ROOT" commit -m "chore(release): $COMPONENT v$PB_TARGET" || { pb_fail "提交失败"; exit 1; }
+  rc=0
+  pb_release_commit "chore(release): $COMPONENT v$PB_TARGET" || rc=$?
+  case $rc in
+    0) pb_ok "已提交版本号改动" ;;
+    1) pb_info "版本号 $PB_TARGET 已经在 HEAD 里（没有待提交的改动），标签直接打在 $(git -C "$PB_ROOT" rev-parse --short HEAD) 上" ;;
+    *) pb_fail "提交失败"; exit 1 ;;
+  esac
   git -C "$PB_ROOT" tag -a "$tag" -m "PushBox Windows v$PB_TARGET" || { pb_fail "打标签失败"; exit 1; }
-  pb_ok "已提交并打标签 $tag"
+  pb_ok "标签 $tag 已在本地"
 fi
 
 # ---- 6. 推送 ----

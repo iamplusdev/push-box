@@ -998,6 +998,34 @@ else
     fail "语法就不对：$syntax_bad（这种脚本炸在写版本号之后，工作区已经改了一半）"
 fi
 
+# 提交那一步的判据。形状必须是"先问暂存区有没有东西"，而不是直接 `git commit || 退出`：
+# 2026-10-23 那次发布线重置把三端号统一写回 1.1.0 之后，"版本号已经在 HEAD 里、脚本再写一次是无操作"
+# 就成了正常状态（output/ 在 .gitignore 里，写完号往往一个字节都没变）。旧形状在这种状态下会把发版
+# 掐死在"提交失败"上，标签一个都打不出去——而这恰恰是唯一需要标签成功的时刻。
+# 不走 `--allow-empty`：三条无内容提交比"标签直接指向那份写着版本号的提交"更难读，所以这里也拦一下。
+if ! grep -q '^pb_release_commit()' "$ROOT_DIR/scripts/release-common.sh"; then
+    fail "release-common.sh 里没有 pb_release_commit：三端各自处理\"没东西可提交\"迟早写成三种样子"
+else
+    COMMIT_OK=1
+    for s in release-server.sh release-android.sh release-windows.sh; do
+        f="$ROOT_DIR/scripts/$s"
+        [ -f "$f" ] || continue
+        if ! grep -q 'pb_release_commit "chore(release):' "$f"; then
+            COMMIT_OK=0
+            fail "$s 不走 pb_release_commit：重置过一次之后\"版本号已在 HEAD 里\"是正常状态，裸 git commit 会在那儿把发版掐死"
+        fi
+        if grep -qE 'git -C "\$PB_ROOT" commit ' "$f"; then
+            COMMIT_OK=0
+            fail "$s 还留着一行裸 git commit：空暂存区时它退 1，标签就永远打不出去（要走 common 里那个会先问 diff --cached 的）"
+        fi
+        if grep -q -- '--allow-empty' "$f"; then
+            COMMIT_OK=0
+            fail "$s 用 --allow-empty 绕过了空提交：历史里会多三条无内容的发布提交，标签也不指向那份写着版本号的提交"
+        fi
+    done
+    [ "$COMMIT_OK" = "1" ] && pass "三端发布脚本的提交都走 pb_release_commit（空暂存区时跳过提交、只打标签）"
+fi
+
 # 安装页冒烟。它判的那类坑只有 fat jar 里才出现（DriverManager 用系统类加载器跑 ServiceLoader，
 # 看不见 BOOT-INF/lib 里的 mysql-connector），而 300 来条单测跑的全是 exploded classpath——
 # 那条路上永远绿。所以"有没有真的调它"本身就是一条判据：摘掉调用等于把这类坑放回盲区。
