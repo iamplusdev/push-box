@@ -1,4 +1,4 @@
-// Gradle 只管 Android；Java 侧（packages/core 与 server）仍然是 Maven，:pbcore 直接编译 ../packages/core 的同一份源码。
+// Gradle 只管 Android；Java 侧（packages/core 与 server）仍然是 Maven，:pbcore 直接编译 ../../packages/core 的同一份源码。
 //
 // 仓库口径：默认只走官方源。aliyun 镜像只对墙内的开发机有意义 —— 2026-10-20 实测 GitHub runner
 // 打 `maven.aliyun.com` 的三个仓库整片返 502（那次 `build-apk.yml` 红的日志），而镜像当时排在

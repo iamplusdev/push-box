@@ -1,15 +1,15 @@
 name: Build Android APK
 
 # 三条发布链是解耦的：本文件只认 android-v* 与旧的 v*（三端一起发）两种标签。
-# 只改服务端时打 server-v*，这里根本不会被触发；main 上的日常构建也只在 android/ 真的变了时跑。
+# 只改服务端时打 server-v*，这里根本不会被触发；main 上的日常构建也只在 apps/android/ 真的变了时跑。
 # 打 android-vX.Y.Z 时发布到 GitHub Release，文件名为 pushbox-release-X.Y.Z.apk；
 # 打 vX.Y.Z 时仍按"三端一起发"的老口径发布。
 #
 # 需要配的 Secrets（release 必须签名：未配置或误用 debug 签名一律判失败，不再回退 debug）：
 #   ANDROID_KEYSTORE_BASE64   release keystore 的 base64，要求"一整行标准字母表"：
-#                             Linux/macOS  base64 -w0 android/dev/pushbox-release.jks
+#                             Linux/macOS  base64 -w0 apps/android/dev/pushbox-release.jks
 #                             PowerShell   [Convert]::ToBase64String([IO.File]::ReadAllBytes("android\dev\pushbox-release.jks"))
-#                             写入用  gh secret set ANDROID_KEYSTORE_BASE64 --body "$(base64 -w0 android/dev/pushbox-release.jks)"
+#                             写入用  gh secret set ANDROID_KEYSTORE_BASE64 --body "$(base64 -w0 apps/android/dev/pushbox-release.jks)"
 #                             不能是 certutil -encode 那种带 -----BEGIN/END----- 包头的产物，也不能是 base64url（含 -/_）；
 #                             2026-10-20 那次 run 39375007556 就是红在这里，报的是一句看不出所以然的
 #                             "Illegal base64 character 2d"（2d = '-'）。现在 app/build.gradle.kts 会把
@@ -17,13 +17,13 @@ name: Build Android APK
 #   ANDROID_KEYSTORE_PASSWORD keystore 口令
 #   ANDROID_KEY_ALIAS         别名
 #   ANDROID_KEY_PASSWORD      私钥口令（多数与 keystore 口令相同）
-# 标签事件不带 paths 过滤（否则 tag 指到的提交恰好没碰 android/ 时会静默不发布）；
+# 标签事件不带 paths 过滤（否则 tag 指到的提交恰好没碰 apps/android/ 时会静默不发布）；
 # main 事件按 paths 过滤，改服务端或文档不会顺带重打一个 APK。
 on:
   push:
     branches: [main]
     paths:
-      - "android/**"
+      - "apps/android/**"
       # :pbcore 直接编译 ../packages/core 的同一份源码，core 动了 APK 必须跟着重出
       - "packages/core/**"
       - "scripts/set-version.sh"
@@ -63,8 +63,8 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${ANDROID_HOME:-}" ] || { echo "::error::runner 没导出 ANDROID_HOME，本步依赖的预装 SDK 前提变了"; exit 1; }
-          CS=$(grep -m1 -oE 'compileSdk[[:space:]]*=[[:space:]]*[0-9]+' android/app/build.gradle.kts | grep -oE '[0-9]+' || true)
-          [ -n "$CS" ] || { echo "::error::没能从 android/app/build.gradle.kts 读出 compileSdk"; exit 1; }
+          CS=$(grep -m1 -oE 'compileSdk[[:space:]]*=[[:space:]]*[0-9]+' apps/android/app/build.gradle.kts | grep -oE '[0-9]+' || true)
+          [ -n "$CS" ] || { echo "::error::没能从 apps/android/app/build.gradle.kts 读出 compileSdk"; exit 1; }
           [ -d "$ANDROID_HOME/platforms/android-$CS" ] || { echo "::error::缺 platforms/android-$CS（compileSdk=$CS）"; exit 1; }
           [ -n "$(ls -A "$ANDROID_HOME/build-tools" 2>/dev/null)" ] || { echo "::error::缺 build-tools（apksigner 无处可取）"; exit 1; }
           echo "✅ compileSdk=$CS 在位；build-tools：$(ls "$ANDROID_HOME/build-tools" | tr '\n' ' ')"
@@ -96,20 +96,20 @@ jobs:
           echo "$BT" >> "$GITHUB_PATH"
 
       - name: Make gradlew executable
-        run: chmod +x android/gradlew
+        run: chmod +x apps/android/gradlew
 
       # release APK 由 build.gradle.kts 的 env 驱动 signingConfig 直接签名产出（不再走 debug 兜底）。
       - name: Build release APK
-        working-directory: android
+        working-directory: apps/android
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
 
       # 廉价校验：release APK 必须由正式 keystore 签名。未签名（app-release-unsigned.apk）
       # 或误用 debug 签名的产物一律判失败，绝不把不能安装的包发出去。
-      # 指纹基线在 android/release-cert.sha256（发布检查清单 的"签名证书与上一版一致"引用同一串）。
+      # 指纹基线在 apps/android/release-cert.sha256（发布检查清单 的"签名证书与上一版一致"引用同一串）。
       # 换 key 是有意的破坏性动作：老用户必须卸载重装、历史消息全丢，所以真要改那一串，
       # 先把这件事写进 CHANGELOG 再改文件，别让它静默跟着 secrets 一起换掉。
       - name: Verify release APK signature
-        working-directory: android
+        working-directory: apps/android
         run: |
           set -euo pipefail
           out="app/build/outputs/apk/release"
@@ -125,7 +125,7 @@ jobs:
           if echo "$certs" | grep -qi 'android debug'; then
             echo "❌ release APK 使用的是 debug 签名，不能作为正式产物发布。"; exit 1
           fi
-          [ -f release-cert.sha256 ] || { echo "❌ 缺 android/release-cert.sha256，没法核对证书指纹"; exit 1; }
+          [ -f release-cert.sha256 ] || { echo "❌ 缺 apps/android/release-cert.sha256，没法核对证书指纹"; exit 1; }
           expected="$(tr -d '[:space:]' < release-cert.sha256)"
           echo "$expected" | grep -qE '^[0-9a-f]{64}$' || {
             echo "❌ release-cert.sha256 不是 64 位小写十六进制（读到：$expected）"; exit 1; }
@@ -156,7 +156,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist-apk
           v="${{ steps.ver.outputs.value }}"
-          rel="android/app/build/outputs/apk/release/app-release.apk"
+          rel="apps/android/app/build/outputs/apk/release/app-release.apk"
           [ -f "$rel" ] || { echo "❌ 没有已签名的 release APK，终止发布（绝不上传 debug/未签名产物）。"; exit 1; }
           cp "$rel" "dist-apk/pushbox-release-${v}.apk"
           ls -l dist-apk
@@ -165,7 +165,7 @@ jobs:
         id: mapping_sha
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          MAPPING_FILE="android/app/build/outputs/mapping/release/mapping.txt"
+          MAPPING_FILE="apps/android/app/build/outputs/mapping/release/mapping.txt"
           if [ -f "$MAPPING_FILE" ]; then
             SHA256=$(sha256sum "$MAPPING_FILE" | cut -d' ' -f1)
             echo "value=$SHA256" >> "$GITHUB_OUTPUT"
@@ -178,7 +178,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mapping-${{ github.ref_name }}
-          path: android/app/build/outputs/mapping/release/mapping.txt
+          path: apps/android/app/build/outputs/mapping/release/mapping.txt
           # 缺 mapping 不该拖垮整条发布：没有 minify 的构建就没有这个文件。
           if-no-files-found: warn
           # 不写 retention-days：upload-artifact 的声明上限是 90 天，公开仓也是 90 天封顶，

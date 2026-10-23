@@ -77,7 +77,7 @@ echo "📦 设置版本号: $VERSION (scope=$SCOPE, versionCode=$VERSION_CODE)"
 
 # 3. Android
 if want android; then
-    ANDROID_BUILD_GRADLE="$ROOT_DIR/android/app/build.gradle.kts"
+    ANDROID_BUILD_GRADLE="$ROOT_DIR/apps/android/app/build.gradle.kts"
     if [ -f "$ANDROID_BUILD_GRADLE" ]; then
         sed -i.bak "s/versionCode = [0-9]*/versionCode = $VERSION_CODE/" "$ANDROID_BUILD_GRADLE"
         sed -i.bak "s/versionName = \"[^\"]*\"/versionName = \"$VERSION\"/" "$ANDROID_BUILD_GRADLE"

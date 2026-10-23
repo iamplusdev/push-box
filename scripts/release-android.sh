@@ -71,21 +71,21 @@ if [ "$PB_SKIP_TESTS" = 1 ]; then
 elif [ "$PB_DRY_RUN" = 1 ]; then
   pb_info "[dry-run] 本来会跑：gradlew :app:assembleDebug 与 :app:assembleRelease，并核签名指纹"
 else
-  # release 签名优先取 CI 的四个 ANDROID_KEYSTORE_*，本机 fallback 到 android/dev/pushbox-release.jks
-  # 配 android/local.properties 里的口令。两者都没有时 assembleRelease 会被 requireReleaseSigning 拦下——
+  # release 签名优先取 CI 的四个 ANDROID_KEYSTORE_*，本机 fallback 到 apps/android/dev/pushbox-release.jks
+  # 配 apps/android/local.properties 里的口令。两者都没有时 assembleRelease 会被 requireReleaseSigning 拦下——
   # 那是好事：未签名的 release 包混进 Releases，客户端「检查更新」也装不上。
-  if [ ! -f "$PB_ROOT/android/dev/pushbox-release.jks" ] && [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
-    pb_fail "没有 release 签名材料：android/dev/pushbox-release.jks 不在，ANDROID_KEYSTORE_BASE64 也没设。"
+  if [ ! -f "$PB_ROOT/apps/android/dev/pushbox-release.jks" ] && [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+    pb_fail "没有 release 签名材料：apps/android/dev/pushbox-release.jks 不在，ANDROID_KEYSTORE_BASE64 也没设。"
     exit 1
   fi
   pb_info "debug 构建"
-  ( cd "$PB_ROOT/android" && ./gradlew :app:assembleDebug --no-daemon ) \
+  ( cd "$PB_ROOT/apps/android" && ./gradlew :app:assembleDebug --no-daemon ) \
     || { pb_fail "debug 构建没过，发布中止（工作区未改动）"; exit 1; }
   pb_info "release 构建"
-  ( cd "$PB_ROOT/android" && ./gradlew :app:assembleRelease --no-daemon ) \
+  ( cd "$PB_ROOT/apps/android" && ./gradlew :app:assembleRelease --no-daemon ) \
     || { pb_fail "release 构建没过，发布中止"; exit 1; }
 
-  apk="$PB_ROOT/android/app/build/outputs/apk/release/app-release.apk"
+  apk="$PB_ROOT/apps/android/app/build/outputs/apk/release/app-release.apk"
   [ -f "$apk" ] || { pb_fail "找不到 release APK：$apk"; exit 1; }
   pb_ok "release APK $(du -h "$apk" | cut -f1)"
 
@@ -93,7 +93,7 @@ else
   # 判据与 build-apk.yml 里那一步逐字同源：锚 `certificate SHA-256 digest:` 整串
   # （--verbose 还会打 public key SHA-256，那是另一个数），取**每一个** signer 的指纹，
   # 全部小写后要求基线在其中出现。
-  baseline="$PB_ROOT/android/release-cert.sha256"
+  baseline="$PB_ROOT/apps/android/release-cert.sha256"
   if [ -f "$baseline" ]; then
     signer="$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)"
     [ -z "$signer" ] && signer="$(ls /d/Apps/DE/Android/sdk/build-tools/*/apksigner* 2>/dev/null | sort -V | tail -1 || true)"
@@ -121,7 +121,7 @@ else
       pb_warn "没找到 apksigner，跳过指纹比对（ANDROID_HOME=${ANDROID_HOME:-未设}）。CI 那一步会兜底，但别把'CI 会拦'当成本机可以不判"
     fi
   else
-    pb_fail "缺 android/release-cert.sha256，没法核对证书指纹"
+    pb_fail "缺 apps/android/release-cert.sha256，没法核对证书指纹"
     exit 1
   fi
 fi
@@ -138,9 +138,9 @@ else
 
   # 重出一份带新版本号的 APK 收进 output/。第 3 步已经验过签名与构建，但那一份还是旧版本号。
   pb_info "按 $PB_TARGET 重出 release APK 并收进 output/"
-  ( cd "$PB_ROOT/android" && ./gradlew :app:assembleRelease --no-daemon ) \
+  ( cd "$PB_ROOT/apps/android" && ./gradlew :app:assembleRelease --no-daemon ) \
     || { pb_fail "重出 APK 失败；版本号已在工作区、尚未提交，修完重跑本脚本"; exit 1; }
-  pb_collect "$PB_ROOT/android/app/build/outputs/apk/release/app-release.apk" android-apk "pushbox-release-$PB_TARGET.apk"
+  pb_collect "$PB_ROOT/apps/android/app/build/outputs/apk/release/app-release.apk" android-apk "pushbox-release-$PB_TARGET.apk"
 fi
 
 # ---- 5. 提交与打标签 ----
@@ -166,7 +166,7 @@ cat <<SUMMARY
    标签        $tag
    触发的工作流 build-apk.yml（tag 事件 → 构建 release APK、apksigner 验签、发 GitHub Release）
    产物        pushbox-release-$PB_TARGET.apk（文件名只带版本号，不带 android-v 前缀，见 build-apk.yml「Collect APKs」）
-   要顺手做的   备份 android/app/build/outputs/mapping/release/mapping.txt 到 Git 之外
+   要顺手做的   备份 apps/android/app/build/outputs/mapping/release/mapping.txt 到 Git 之外
                （实测 205 MB，不备线上崩溃栈还原不了；禁止提交进仓库）
    发布后复核   https://github.com/iamplusdev/push-box/releases/tag/$tag
 SUMMARY

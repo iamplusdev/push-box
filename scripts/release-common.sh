@@ -65,7 +65,7 @@ pb_latest_tag() {
 pb_intree_version() {
   case "$1" in
     server)  grep -m1 -oP '(?<=<version>)[^<]+'       "$PB_ROOT/pom.xml" ;;
-    android) grep -m1 -oP '(?<=versionName = ")[^"]+' "$PB_ROOT/android/app/build.gradle.kts" ;;
+    android) grep -m1 -oP '(?<=versionName = ")[^"]+' "$PB_ROOT/apps/android/app/build.gradle.kts" ;;
     windows) grep -m1 -oP '(?<=<Version>)[^<]+'       "$PB_ROOT/windows/PushBox.Windows/PushBox.Windows.csproj" ;;
     *) pb_fail "pb_intree_version：不认识的端 '$1'"; return 1 ;;
   esac
@@ -73,7 +73,7 @@ pb_intree_version() {
 
 # Android 另有一个 versionCode：它只许涨，写小了老用户会撞上 INSTALL_FAILED_VERSION_DOWNGRADED
 pb_intree_version_code() {
-  grep -m1 -oP '(?<=versionCode = )[0-9]+' "$PB_ROOT/android/app/build.gradle.kts"
+  grep -m1 -oP '(?<=versionCode = )[0-9]+' "$PB_ROOT/apps/android/app/build.gradle.kts"
 }
 
 pb_tag_prefix() { printf '%s-v' "$1"; }

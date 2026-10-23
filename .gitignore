@@ -5,7 +5,7 @@ build/
 *.class
 *.jar
 !.mvn/wrapper/*.jar
-!android/gradle/wrapper/gradle-wrapper.jar
+!apps/android/gradle/wrapper/gradle-wrapper.jar
 
 # 本机凭据与联调配置，绝不入库
 infra/env/local.env
@@ -26,7 +26,7 @@ local.properties
 *.p12
 *.pvk
 keystore.properties
-android/dev/
+apps/android/dev/
 
 # compose 里 mysql/rustfs/prometheus/grafana 的 bind mount 宿主目录。
 # pushbox-server 的日志用的是 named volume，不落在这里。
@@ -57,7 +57,7 @@ windows/bin/
 *.log
 *.tmp
 # Kotlin 编译缓存与错误报告（errors/ 与 sessions/ 都是每次构建重生的）
-android/.kotlin/
+apps/android/.kotlin/
 
 # 运行期数据目录：安装页写出的 config/pushbox.json（**里面有库口令、Access/Secret Key、
 # 加密口令与主钥，全是明文**）、本地存储的图片、日志。落在哪取决于工作目录——

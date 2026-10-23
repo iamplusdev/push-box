@@ -1,5 +1,5 @@
 # 构建上下文里真正被 COPY 的只有 pom.xml、packages/core/src、apps/server/src（infra/Dockerfile 由
-# compose 的 dockerfile: 单独读取，不在上下文内）。其余全排除——尤其 android/ 与 */target/，
+# compose 的 dockerfile: 单独读取，不在上下文内）。其余全排除——尤其 apps/android/ 与 */target/，
 # 带上它们只会让每次 build 先传几个 GB。
 .git
 .gitignore
@@ -8,7 +8,7 @@
 *.iml
 .DS_Store
 
-android/
+apps/android/
 windows/
 site/
 docs/

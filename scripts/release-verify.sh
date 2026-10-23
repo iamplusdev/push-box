@@ -50,7 +50,7 @@ section "检查各端版本号自洽"
 # 只改服务端时打 server-v1.2.0，客户端不必跟着刷号、也不该被连带重建。所以这里不再要求
 # 三端同号，只要求每一端在自己会引用的那些地方对得上——服务端是 pom / 两份 compose /
 # WSL 速查 / 官网徽章，Android 是 versionName / versionCode，Windows 是 csproj / Inno。
-ANDROID_VERSION=$(grep 'versionName' "$ROOT_DIR/android/app/build.gradle.kts" | grep -oP '"[^"]+"' | tr -d '"')
+ANDROID_VERSION=$(grep 'versionName' "$ROOT_DIR/apps/android/app/build.gradle.kts" | grep -oP '"[^"]+"' | tr -d '"')
 WINDOWS_VERSION=$(grep '<Version>' "$ROOT_DIR/windows/PushBox.Windows/PushBox.Windows.csproj" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
 INNO_VERSION=$(grep '#define MyAppVersion' "$ROOT_DIR/windows/installer/PushBox.iss" | grep -oP '"[^"]+"' | tr -d '"')
 DOCKER_TAG=$(grep -E 'image: (docker\.io/iamplusdev/push-box|pushbox/server):' "$ROOT_DIR/infra/docker-compose.yml" | head -1 | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
@@ -514,7 +514,7 @@ fi
 LEAKY_CODE=$(grep -rhoE --binary-files=without-match \
     --exclude-dir='bin' --exclude-dir='obj' --exclude-dir='build' --exclude-dir='node_modules' \
     '\b100\.9[0-9]\.[0-9]+\.[0-9]+\b' \
-    "$ROOT_DIR/android/app/src" "$ROOT_DIR/apps/server/src" "$ROOT_DIR/windows/PushBox.Windows" \
+    "$ROOT_DIR/apps/android/app/src" "$ROOT_DIR/apps/server/src" "$ROOT_DIR/windows/PushBox.Windows" \
     "$ROOT_DIR/windows/PushBox.Crypto.Tests" "$ROOT_DIR/apps/web-admin/src" 2>/dev/null \
     | sort -u || true)
 if [ -n "$LEAKY_CODE" ]; then
@@ -548,7 +548,7 @@ section "检查 Android 构建配置"
 
 # versionCode 必须由 versionName 推出来（scripts/set-version.sh 同一套算法），
 # 写死一个更大的数会让正式版 tag 注入后反而变小，用户端 INSTALL_FAILED_VERSION_DOWNGRADED。
-ANDROID_CODE=$(grep 'versionCode' "$ROOT_DIR/android/app/build.gradle.kts" | grep -oE '[0-9]+' | head -1)
+ANDROID_CODE=$(grep 'versionCode' "$ROOT_DIR/apps/android/app/build.gradle.kts" | grep -oE '[0-9]+' | head -1)
 if [[ "$ANDROID_VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
     EXPECTED_CODE=$(( BASH_REMATCH[1] * 10000 + BASH_REMATCH[2] * 100 + BASH_REMATCH[3] ))
     if [ "$ANDROID_CODE" = "$EXPECTED_CODE" ]; then
@@ -562,14 +562,14 @@ fi
 
 # release 必须由环境变量注入的 keystore 签名：缺签名要构建失败，
 # 而不是安静产出一个 debug 签名的包——用户换版时签名对不上只能卸载重装，历史全丢。
-if grep -q 'ANDROID_KEYSTORE_BASE64' "$ROOT_DIR/android/app/build.gradle.kts"; then
+if grep -q 'ANDROID_KEYSTORE_BASE64' "$ROOT_DIR/apps/android/app/build.gradle.kts"; then
     pass "Android release 签名由环境变量驱动"
 else
     fail "Android release 没有签名配置"
 fi
 
 if grep -rq 'pushbox-debug-' "$ROOT_DIR/.github/workflows/build-apk.yml" \
-    "$ROOT_DIR/android/app/src/main/java/cn/iamplus/pushbox/net/UpdateApi.kt"; then
+    "$ROOT_DIR/apps/android/app/src/main/java/cn/iamplus/pushbox/net/UpdateApi.kt"; then
     fail "仍在收集或认可 debug APK 资产"
 else
     pass "发布链路与客户端都只认签名 release 包"
@@ -577,7 +577,7 @@ fi
 
 # 分端发布后每个平台各占一个 GitHub Release，/releases/latest 只返回"最后发的那个"：
 # 谁改回去，另一端的更新检查就会静默地永远看不到新版本（不报错，只是不提示）。
-UPDATE_KT="$ROOT_DIR/android/app/src/main/java/cn/iamplus/pushbox/net/UpdateApi.kt"
+UPDATE_KT="$ROOT_DIR/apps/android/app/src/main/java/cn/iamplus/pushbox/net/UpdateApi.kt"
 UPDATE_CS="$ROOT_DIR/windows/PushBox.Windows/Update/UpdateClient.cs"
 # 只看真正的 URL 常量（结尾带引号），不看注释里"不能再用 /releases/latest"那句解释。
 if grep -q 'releases/latest"' "$UPDATE_KT" "$UPDATE_CS"; then
@@ -588,49 +588,49 @@ else
     fail "更新检查没有按资产筛选 Release 列表：分端发布后另一平台会读错 Release"
 fi
 
-# 签名证书指纹的单一来源：android/release-cert.sha256 给 build-apk.yml 现读现比，
+# 签名证书指纹的单一来源：apps/android/release-cert.sha256 给 build-apk.yml 现读现比，
 # 发布检查清单.md 那句"每版比对这一串"必须还是同一串。两处分开腐烂过一次，
 # 就变成"CI 验的是 A、人写的是 B"，比没验更坏。
-CERT_BASELINE_FILE="$ROOT_DIR/android/release-cert.sha256"
+CERT_BASELINE_FILE="$ROOT_DIR/apps/android/release-cert.sha256"
 if [ ! -f "$CERT_BASELINE_FILE" ]; then
-    fail "缺 android/release-cert.sha256（build-apk.yml 的签名核对没有基线可读）"
+    fail "缺 apps/android/release-cert.sha256（build-apk.yml 的签名核对没有基线可读）"
 else
     CERT_BASELINE=$(tr -d '[:space:]' < "$CERT_BASELINE_FILE")
     if ! printf '%s' "$CERT_BASELINE" | grep -qE '^[0-9a-f]{64}$'; then
-        fail "android/release-cert.sha256 不是 64 位小写十六进制（读到：$CERT_BASELINE）"
+        fail "apps/android/release-cert.sha256 不是 64 位小写十六进制（读到：$CERT_BASELINE）"
     elif ! grep -q 'release-cert.sha256' "$ROOT_DIR/.github/workflows/build-apk.yml"; then
-        fail "build-apk.yml 没在读 android/release-cert.sha256，签名步退回了只判 debug"
+        fail "build-apk.yml 没在读 apps/android/release-cert.sha256，签名步退回了只判 debug"
     elif ! grep -q "$CERT_BASELINE" "$ROOT_DIR/docs/release/发布检查清单.md"; then
-        fail "docs/release/发布检查清单.md 里的证书指纹与 android/release-cert.sha256（$CERT_BASELINE）不是同一串"
+        fail "docs/release/发布检查清单.md 里的证书指纹与 apps/android/release-cert.sha256（$CERT_BASELINE）不是同一串"
     else
         pass "证书指纹基线单一来源且 CI 与清单一致（$CERT_BASELINE）"
     fi
 fi
 
 # 机器专属绝对路径不该进仓库（换一台机器就构建不了）
-if grep -q 'installations.paths' "$ROOT_DIR/android/gradle.properties"; then
-    fail "android/gradle.properties 写死了本机 JDK 路径"
+if grep -q 'installations.paths' "$ROOT_DIR/apps/android/gradle.properties"; then
+    fail "apps/android/gradle.properties 写死了本机 JDK 路径"
 else
     pass "gradle.properties 不含机器专属路径"
 fi
 
 # 检查 R8 是否启用
-if grep -q 'isMinifyEnabled = true' "$ROOT_DIR/android/app/build.gradle.kts"; then
+if grep -q 'isMinifyEnabled = true' "$ROOT_DIR/apps/android/app/build.gradle.kts"; then
     pass "R8 混淆已启用"
 else
     fail "R8 混淆未启用"
 fi
 
 # 检查 proguard-rules.pro 是否存在
-if [ -f "$ROOT_DIR/android/app/proguard-rules.pro" ]; then
-    RULES_COUNT=$(wc -l < "$ROOT_DIR/android/app/proguard-rules.pro")
+if [ -f "$ROOT_DIR/apps/android/app/proguard-rules.pro" ]; then
+    RULES_COUNT=$(wc -l < "$ROOT_DIR/apps/android/app/proguard-rules.pro")
     pass "proguard-rules.pro 存在 ($RULES_COUNT 行规则)"
 else
     fail "proguard-rules.pro 缺失"
 fi
 
 # 检查 Gradle wrapper URL
-WRAPPER_URL=$(grep 'distributionUrl' "$ROOT_DIR/android/gradle/wrapper/gradle-wrapper.properties" | cut -d= -f2)
+WRAPPER_URL=$(grep 'distributionUrl' "$ROOT_DIR/apps/android/gradle/wrapper/gradle-wrapper.properties" | cut -d= -f2)
 if [[ "$WRAPPER_URL" == *"services.gradle.org"* ]]; then
     pass "Gradle wrapper 使用官方 CDN"
 elif [[ "$WRAPPER_URL" == *"file:///"* ]]; then

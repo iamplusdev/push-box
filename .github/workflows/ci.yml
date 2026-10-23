@@ -351,13 +351,13 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${ANDROID_HOME:-}" ] || { echo "::error::runner 没导出 ANDROID_HOME，本步依赖的预装 SDK 前提变了"; exit 1; }
-          CS=$(grep -m1 -oE 'compileSdk[[:space:]]*=[[:space:]]*[0-9]+' android/app/build.gradle.kts | grep -oE '[0-9]+' || true)
-          [ -n "$CS" ] || { echo "::error::没能从 android/app/build.gradle.kts 读出 compileSdk"; exit 1; }
+          CS=$(grep -m1 -oE 'compileSdk[[:space:]]*=[[:space:]]*[0-9]+' apps/android/app/build.gradle.kts | grep -oE '[0-9]+' || true)
+          [ -n "$CS" ] || { echo "::error::没能从 apps/android/app/build.gradle.kts 读出 compileSdk"; exit 1; }
           [ -d "$ANDROID_HOME/platforms/android-$CS" ] || { echo "::error::缺 platforms/android-$CS（compileSdk=$CS）"; exit 1; }
           [ -n "$(ls -A "$ANDROID_HOME/build-tools" 2>/dev/null)" ] || { echo "::error::缺 build-tools"; exit 1; }
           echo "✅ compileSdk=$CS 在位；build-tools：$(ls "$ANDROID_HOME/build-tools" | tr '\n' ' ')"
       - name: Make gradlew executable
-        run: chmod +x android/gradlew
+        run: chmod +x apps/android/gradlew
       - name: ./gradlew :app:assembleDebug
-        working-directory: android
+        working-directory: apps/android
         run: ./gradlew :app:assembleDebug --no-daemon
