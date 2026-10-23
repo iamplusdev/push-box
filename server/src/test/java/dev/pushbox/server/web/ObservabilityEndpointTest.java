@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -22,7 +22,7 @@ import org.springframework.http.ResponseEntity;
  * （{@code management.defaults.metrics.export.enabled=false}），于是 `/actuator/prometheus`
  * 在测试里 404、在真实进程里 200。不加这个注解，下面 ② 就是在断言一个不存在的端点。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#databaseReady")
 @AutoConfigureObservability
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class ObservabilityEndpointTest {

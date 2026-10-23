@@ -10,7 +10,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -18,7 +18,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * §5.2 清空整会话的落库语义（B2a）：一次 UPDATE 标完、媒体记账跟着走、重复调用幂等、
  * 别的分组一条都不动。这几条只有真 MySQL 测得出来（多表 UPDATE 的 JOIN 语法尤其）。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#databaseReady")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class ConversationDeleteTest {
 

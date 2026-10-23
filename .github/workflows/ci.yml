@@ -2,9 +2,11 @@ name: CI
 
 # PR / 推 main 的门禁：只判红绿，不出制品（制品由 build-apk / build-msi / docker-publish 三个 workflow 负责）。
 # 这个 workflow 存在的唯一理由是 docker-publish.yml 顶上那句"不在这里跑 mvn verify"：
-# 服务端有 114 个用例靠 PB_S3_ACCESS_KEY 这个环境变量决定跑不跑（见 dev/pushbox 测试约定），
+# 服务端有 33 个用例靠"有没有真桶"决定跑不跑（见 dev.pushbox.server.test.TestConfig 的两档闸门），
 # 没有库和桶时它们会静默 skip，于是"全绿"可以意味着"什么都没测"。这里用 service container 起真
 # MySQL + 真 RustFS，并在最后把 surefire 汇总的 skipped 断成必须为 0 —— 这一条才是"闸门用例真跑过"的证据。
+# 判据的来源不再是环境变量（服务端已经不读环境变量了），而是下面那一步写出的
+# server/data/config/pushbox.json —— 与真部署时安装页落盘的是同一个文件、同一份形状。
 # 三端各自的最小可跑口径：
 #   server    mysql:8.4（--ngram_token_size=2，V1 的 FULLTEXT 索引与 SearchServiceTest 都依赖它）+ rustfs
 #   web-admin npm ci && npm run build（vue-tsc -b 是类型门禁，vite build 顺带证明能烘进镜像）
@@ -53,11 +55,10 @@ jobs:
         ports:
           - 9000:9000
     env:
-      # 这四个键就是 DevCredentialsGuard 点名的那一组：缺任何一个，DB 闸门用例会 skip 而不是失败。
-      PB_DB_PASSWORD: ci-db-password
-      PB_S3_ENDPOINT: http://127.0.0.1:9000
-      PB_S3_ACCESS_KEY: ci-s3-access-key
-      PB_S3_SECRET_KEY: ci-s3-secret-key-0123456789
+      # 这两个键只给下面"建桶"那一步用（aws CLI 的凭据），不再透传给服务端进程：
+      # 服务端已经不读环境变量了，它的配置来自下面那一步写出的 server/data/config/pushbox.json。
+      S3_ACCESS_KEY: ci-s3-access-key
+      S3_SECRET_KEY: ci-s3-secret-key-0123456789
     steps:
       - uses: actions/checkout@v4
 
@@ -67,6 +68,46 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
+
+      # 服务端配置的唯一来源：工作目录下的 data/config/pushbox.json（surefire 的工作目录是 server/）。
+      # 这个文件在仓库里不存在（.gitignore 排掉了 /server/data/），真部署时它由安装页写出来；
+      # CI 里没有浏览器可点，所以直接把它写出来——内容就是安装页那一次 POST 的 JSON。
+      # 两档闸门（dev.pushbox.server.test.TestConfig）读的都是这一份：
+      #   databaseReady()      13 个类，只要库连得上就跑（存储走本地目录也行）
+      #   objectStorageReady() 5 个 media 类，要真桶（验的是 SSE-C/预签名/删除这类 S3 语义）
+      # s3 勾上、四件套填全，两档才都为真，最后那条 skipped==0 的断言才有意义。
+      - name: 写出服务端配置（等价于在安装页里点「保存并启动」）
+        run: |
+          set -euo pipefail
+          mkdir -p server/data/config
+          cat > server/data/config/pushbox.json <<'JSON'
+          {
+            "port": 7404,
+            "database": {
+              "host": "127.0.0.1",
+              "port": 3306,
+              "name": "pushbox",
+              "username": "pushbox",
+              "password": "ci-db-password"
+            },
+            "storage": {
+              "s3": true,
+              "localPath": "data/media",
+              "endpoint": "http://127.0.0.1:9000",
+              "region": "us-east-1",
+              "bucket": "pushbox",
+              "accessKey": "ci-s3-access-key",
+              "secretKey": "ci-s3-secret-key-0123456789",
+              "pathStyle": true,
+              "encrypted": false,
+              "passphrase": "",
+              "masterKey": ""
+            },
+            "admin": { "password": "", "jwtKey": "" },
+            "security": { "internalCidrs": [] }
+          }
+          JSON
+          echo "✅ 配置已写出：$(wc -c < server/data/config/pushbox.json) 字节"
 
       # service container 没有 HEALTHCHECK 时 Actions 只等 20 秒，MySQL 首轮初始化（建系统表）不止这些，
       # 所以显式等 mysqladmin 能应答，而不是让 Flyway 去撞一个"能连上但还没就绪"的 3306。
@@ -100,7 +141,7 @@ jobs:
           done
           command -v aws >/dev/null || { echo "::error::runner 镜像里没有 aws CLI，这条建桶路径需要换一个 S3 客户端"; exit 1; }
           # us-east-1 只是 SigV4 签名的必填项，RustFS 不看它；EC2 元数据探测在 runner 上只会白等。
-          export AWS_ACCESS_KEY_ID="$PB_S3_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$PB_S3_SECRET_KEY" \
+          export AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$S3_SECRET_KEY" \
             AWS_DEFAULT_REGION=us-east-1 AWS_EC2_METADATA_DISABLED=true
           aws --endpoint-url http://127.0.0.1:9000 s3api create-bucket --bucket pushbox
           aws --endpoint-url http://127.0.0.1:9000 s3api head-bucket --bucket pushbox
@@ -111,7 +152,7 @@ jobs:
 
       # 闸门用例的存在性证明：skipped 必须为 0，且执行总数不低于实测基线。
       # 只判"mvn 退出码 0"是不够的 —— 凭据没传进去时它同样退 0。
-      # 基线是 2026-10-22 用 JDK 21 实跑出来的 surefire 汇总：server 276（其中 114 条是闸门类）+ core 43 = 319。
+      # 基线是 2026-10-23 用 JDK 21 实跑出来的 surefire 汇总：server 288 + core 43 = 331。
       # 这个数字只许涨不许跌；跌了说明有人删了测试或改了 include 规则，而不是"环境不一样"。
       # 223 → 227 是 AdminControllerBodyTest 那 4 条（管理台坏请求体返 400 的收口用例）；
       # 227 → 232 是 DeviceControllerBodyTest 那 5 条（设备侧同一收口），两次都是同版本 JDK 实跑抬的。
@@ -140,6 +181,22 @@ jobs:
       # 265 → 276 是 MediaKeyServiceTest 的 11 条：口令确定性地派生 KEK、每次安装不同盐、KCV 拒绝错口令、
       # 主钥与口令二选一、两种模式切换的闸门、旧封装钥挡住口令模式、空库不提前写 state、NFC/空白归一。
       # 总基线 292 → 301 → 303 → 306 → 308 → 319。
+      # 319 → 327 是配置重构那一轮：删掉 DevCredentialsGuardTest 10 条与 ProdPlaintextMediaGuardTest 7 条
+      # （两个守卫随"配置搬进安装页"一起没了），补上 RuntimeConfigTest 9 条 + InstallServerTest 11 条
+      # + RuntimeConfigEnvironmentPostProcessorTest 5 条 = 25 条，净 +8。server 276 → 284。
+      # 327 → 328 是 InstallServerTest ⑫ 一条：钉住安装页里硬编码的 MySQL 驱动类名。
+      # 它是 fat jar 那条真缺陷的唯一残留判据——`DriverManager` 用系统类加载器跑 ServiceLoader，
+      # 看不见 BOOT-INF/lib 里的连接器，于是安装页在容器里报 "No suitable driver found"，
+      # 而 exploded classpath 上永远绿。真正拦得住的判据是 scripts/install-page-smoke.sh
+      # （release-server.sh 第 3 步会真跑一次 fat jar），这条只管"类名和连接器还对得上"。
+      # 328 → 329 是 InstallServerTest ⑬ 一条：真起一次安装页的 HttpServer，POST 一份合法配置，
+      # 断言客户端拿到的是完整响应。它钉的是"放行启动必须排在写回之后"——原来 install() 在 return
+      # 之前就 countDown，awaitConfiguration() 一醒立刻 stop，于是配置真的落盘了、Spring 也起来了，
+      # 而 curl 只拿到截断的空响应，部署脚本据此报"连不上安装页"。做过负测：把 countDown 挪回
+      # install() 里、stop 改回 0，这条当场红成 "HTTP/1.1 header parser received no bytes"。
+      # 329 → 331 是"图片抓取放行主机"进表单那两条：InstallServerTest ⑭（只认 host 或 host:port，
+      # 带 scheme、带路径、带通配一律拦）+ RuntimeConfigTest ⑩（拼成 pb.media.allow-hosts，
+      # normalize() 把大小写与空格归一——SsrfGuard 是精确等值比较，不归一就等于这一项白填）。
       - name: 断言 DB 闸门用例真的执行了
         run: |
           set -euo pipefail
@@ -157,8 +214,8 @@ jobs:
           if skipped != 0:
               print("::error::有 %d 条用例被跳过：DB/S3 凭据没传到位（见本 job 顶部说明），全绿不代表测过" % skipped)
               sys.exit(1)
-          if tests < 319:
-              print("::error::用例总数 %d 低于基线 319，测试被静默裁剪了" % tests); sys.exit(1)
+          if tests < 331:
+              print("::error::用例总数 %d 低于基线 331，测试被静默裁剪了" % tests); sys.exit(1)
           print("✅ 闸门用例全部执行")
           PY
 

@@ -5,12 +5,13 @@
 # compose 的 ${VAR:?} 插值作用于整本文件，跟 profile 有没有被激活无关。grafana 那句
 # GRAFANA_ADMIN_PASSWORD:? 一旦写在主文件里，"只起服务端"这条最常见的部署路径就会在解析阶段
 # 直接报 required variable is missing —— 一个永远不会被启动的容器，把主流程要掉了必填项的命。
-# 挪出来之后，主文件的必填项就只剩 prod.env.example 顶部承诺的那七个。
+# 挪出来之后，主文件在拓扑 A 下就一个必填项都不剩（prod.env.example 顶部那句承诺）。
 #
 # 抓取路径：prometheus 在本项目的 default 网络上直连 pushbox-server:7404/actuator/prometheus，
 # 不经 Caddy（Caddyfile 对 /actuator/* 一律 respond 403）。服务端那一侧的准入默认只放行环回
-# （主文件的 PB_SECURITY_INTERNAL_CIDRS 默认为空），所以开监控必须把这条网络实际分到的子网写进 .env：
+# （安装页「运维网段」留空即最严），所以开监控必须在那一栏里填上这条网络实际分到的子网：
 #   docker network inspect pushbox_default -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}'
+# 填法：改配置文件里的 security.internalCidrs 再重启，或者删掉 data/config/pushbox.json 回到安装页重填。
 # 不写的话进程会好好的、指标一个也抓不到（403），而 Caddy 那侧本来就该 403 —— 两边都对，只是没接通。
 
 name: pushbox

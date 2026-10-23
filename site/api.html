@@ -85,7 +85,7 @@
   <ul>
     <li>它会真的对库做一次连通探测（2 秒超时），本地存储时还会往目录里写一个探测文件。</li>
     <li>所以把它当<b>就绪探针</b>，别当存活探针。</li>
-    <li>无 token，但默认只放行环回来源；其它网段要显式写进 <code>PB_SECURITY_INTERNAL_CIDRS</code>，不在白名单里直接回 404。</li>
+    <li>无 token，但默认只放行环回来源；其它网段要在安装页的「运维网段」里写成 CIDR（配置文件里的 <code>security.internalCidrs</code>），不在白名单里直接回 404。</li>
     <li>响应只有上面这四个键。</li>
   </ul>
 

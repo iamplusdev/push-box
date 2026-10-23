@@ -153,10 +153,13 @@ public class PbProperties {
   }
 
   public static class Storage {
-    /** 存储后端类型：s3（默认）| local */
-    private String type = "s3";
-    /** 本地存储根目录（仅当 type=local 时生效） */
-    private String localPath = "./data/media";
+    /**
+     * 存储后端类型：local（默认）| s3。由 {@code data/config/pushbox.json} 里
+     * 「改用对象存储」那个开关翻译过来（true→s3），部署者不会直接看见这个字符串。
+     */
+    private String type = "local";
+    /** 本地存储根目录（仅当 type=local 时生效）。相对路径以工作目录为基准，容器里是 /app/data/media。 */
+    private String localPath = "data/media";
 
     public String getType() { return type; }
     public void setType(String v) { this.type = v; }

@@ -24,7 +24,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -34,7 +34,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
  * 走真库是因为 byToken 与 revoked_at 本身就是库里的判定；请求用 MockHttpServletRequest 构造，
  * 为的是能逐字节控制 method/URI/query/body —— 签名 canonical 就差在这四段上。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#databaseReady")
 // RANDOM_PORT 不是随手写的：MOCK 上下文里 WebSocketConfig 拿不到 ServerContainer，上下文起不来。
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class DeviceGuardTest {

@@ -10,9 +10,12 @@
 
     <property name="PB_PATTERN"
         value="%d{HH:mm:ss.SSS} %-5level %logger{20} [%X{msg_id:-}] - %pbmsg%pbex%n"/>
-    <!-- 目录必须来自环境：compose 把它指到 /app/logs（named volume 挂在那儿），本机直跑落 ./logs。
-         写死相对路径等于跟着工作目录漂，容器的 WORKDIR 一改就没人在那本文件里找日志。 -->
-    <property name="PB_LOG_HOME" value="${PB_LOG_DIR:-logs}"/>
+    <!-- 与配置、媒体同一个根：工作目录下的 data/。容器里 WORKDIR=/app，于是这三样都在
+         /app/data 这一个持久化目录下，NAS 的「存储位置」只需要挂一行。
+         不再有 PB_LOG_DIR 这类环境变量，也不再有 profile 分支——日志一律既进 docker logs 又落盘，
+         落不了盘（目录不可写）时 logback 会打印一行状态错误但不会拦住启动，
+         而入口脚本在启动 Java 之前就检查过 data/ 可写。 -->
+    <property name="PB_LOG_HOME" value="data/logs"/>
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
@@ -21,37 +24,27 @@
         </encoder>
     </appender>
 
-    <springProfile name="!dev">
-        <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-            <file>${PB_LOG_HOME}/pushbox-server.log</file>
-            <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-                <fileNamePattern>${PB_LOG_HOME}/pushbox-server-%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
-                <!-- maxFileSize 不写就用默认 10MB：一次抓取风暴能把当天日志切成几十个文件，
-                     排查时要跨文件拼时间线。64MB 让一天通常就是一两本。 -->
-                <maxFileSize>64MB</maxFileSize>
-                <maxHistory>14</maxHistory>
-                <totalSizeCap>2GB</totalSizeCap>
-            </rollingPolicy>
-            <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
-                <pattern>${PB_PATTERN}</pattern>
-                <charset>UTF-8</charset>
-            </encoder>
-        </appender>
-    </springProfile>
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${PB_LOG_HOME}/pushbox-server.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${PB_LOG_HOME}/pushbox-server-%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <!-- maxFileSize 不写就用默认 10MB：一次抓取风暴能把当天日志切成几十个文件，
+                 排查时要跨文件拼时间线。64MB 让一天通常就是一两本。 -->
+            <maxFileSize>64MB</maxFileSize>
+            <maxHistory>14</maxHistory>
+            <totalSizeCap>2GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>${PB_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
 
-    <springProfile name="dev">
-        <root level="INFO">
-            <appender-ref ref="CONSOLE"/>
-        </root>
-        <logger name="dev.pushbox" level="DEBUG"/>
-    </springProfile>
-
-    <!-- prod 是 INFO 而不是 WARN：加密模式生效与否、限流参数、sweep 节奏这些判据全是 INFO 行，
-         容器里只剩 WARN 等于出事时没有现场。隐私靠 converter 兜，与级别无关。 -->
-    <springProfile name="!dev">
-        <root level="INFO">
-            <appender-ref ref="CONSOLE"/>
-            <appender-ref ref="FILE"/>
-        </root>
-    </springProfile>
+    <!-- INFO 而不是 WARN：加密模式生效与否、限流参数、sweep 节奏这些判据全是 INFO 行，
+         只剩 WARN 等于出事时没有现场。隐私靠 converter 兜，与级别无关。
+         要临时看细节用 -Dlogging.level.dev.pushbox=DEBUG，不在这里给 dev 单开一档。 -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
 </configuration>

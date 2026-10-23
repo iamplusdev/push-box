@@ -268,7 +268,7 @@ public class MediaObjects {
     byte[] dataKey = KeyWrap.unwrap(keyService.kek(), sseKeyWrapped);
     if (dataKey == null) {
       throw new IllegalStateException(
-          "SSE-C 客户钥解封失败：PB_S3_MASTER_KEY / PB_S3_MASTER_PASSPHRASE 与写入时不是同一个？");
+          "SSE-C 客户钥解封失败：加密口令或主钥与写入时不是同一个？");
     }
     return dataKey;
   }

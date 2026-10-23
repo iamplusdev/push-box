@@ -61,7 +61,7 @@ class MediaKeyServiceTest {
         .hasMessageContaining("KCV");
     assertThatThrownBy(wrong::kek)
         .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("不是同一个口令");
+        .hasMessageContaining("不是同一个");
   }
 
   @Test
@@ -92,7 +92,7 @@ class MediaKeyServiceTest {
     assertThatThrownBy(() -> keyMode.run(null))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("media_kek_v1")
-        .hasMessageContaining("PB_S3_MASTER_KEY");
+        .hasMessageContaining("主钥");
   }
 
   @Test
@@ -105,10 +105,10 @@ class MediaKeyServiceTest {
 
     assertThatThrownBy(() -> service.run(null))
         .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("PB_S3_MASTER_KEY");
+        .hasMessageContaining("主钥");
     assertThatThrownBy(service::kek)
         .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("PB_S3_MASTER_KEY");
+        .hasMessageContaining("主钥");
     assertThat(store.rawState()).isNull();
   }
 

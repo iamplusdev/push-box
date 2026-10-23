@@ -23,7 +23,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.ResponseEntity;
@@ -38,14 +38,15 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
  *
  * <p>主钥是测试自造的常量：它只加密这一批跑完就删掉的临时对象，不是任何环境的凭据。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#objectStorageReady")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {"pb.storage.type=s3",
-        // 这一条是这一类自己的前提，不能指望环境给：dev 的默认值是 local（本机只装一个 MySQL 就能起步），
-        // 而 local 模式下 S3Config 不建 S3Client bean，@Autowired 直接 UnsatisfiedDependencyException。
-        // CI 里 PB_S3_* 齐了、这 7 条被门放开，跑法却是 local —— 于是 main 上第一次红就在这里。
+        // 这一条是这一类自己的前提，不能指望配置文件给：安装页没勾「改用对象存储」时默认是 local
+        // （本机只装一个 MySQL 就能起步），而 local 模式下 S3Config 不建 S3Client bean，
+        // @Autowired 直接 UnsatisfiedDependencyException。
+        // CI 写出的那份 pushbox.json 勾了 s3、这 7 条被门放开，跑法却是 local —— 于是 main 上第一次红就在这里。
         "pb.s3.object-encrypt=sse-c",
-        // base64(0x01..0x20)，正好 32 字节：不写就会被环境里那个空的 PB_S3_MASTER_KEY 顶成非法配置
+        // base64(0x01..0x20)，正好 32 字节：不写就会被配置文件里那个只填了口令、masterKey 留空的取值顶成非法配置
         "pb.s3.master-key=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="})
 class MediaSsePipelineTest {
 

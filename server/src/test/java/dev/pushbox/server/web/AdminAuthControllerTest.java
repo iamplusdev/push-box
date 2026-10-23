@@ -19,7 +19,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
  *
  * <p>这些用例不起 Spring 上下文、不连库也不碰桶：锁定状态是内存计数（见
  * {@link AbuseControlService#registerAdminLoginFailure}），store 传 null 就够，
- * 于是它们真的能在默认的 {@code mvn test} 里跑，而不是被 PB_S3_ACCESS_KEY 那道门挡掉。
+ * 于是它们真的能在默认的 {@code mvn test} 里跑，而不是被 {@code objectStorageReady} 那道门挡掉。
  */
 class AdminAuthControllerTest {
 
@@ -157,8 +157,7 @@ class AdminAuthControllerTest {
     for (String unusable : new String[] {null, "", "   ", "短于此的口令钥"}) {
       assertThatThrownBy(() -> controllerWith(LOGIN_SECRET, unusable))
           .isInstanceOf(IllegalStateException.class)
-          .hasMessageContaining("pb.admin.jwt-secret")
-          .hasMessageContaining("PB_ADMIN_JWT_SECRET");
+          .hasMessageContaining("JWT 签名钥");
     }
     // 31 字节差一个字节都不行：HS256 的钥短于 256 位时算签名比猜口令还容易
     String thirtyOne = "k".repeat(AdminAuthController.MIN_JWT_SECRET_BYTES - 1);

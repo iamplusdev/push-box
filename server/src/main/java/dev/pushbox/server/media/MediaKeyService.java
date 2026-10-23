@@ -66,8 +66,8 @@ public class MediaKeyService implements ApplicationRunner {
     }
     if (hasKey && hasPassphrase) {
       throw new IllegalStateException(
-          "PB_S3_MASTER_KEY 与 PB_S3_MASTER_PASSPHRASE 只能二选一：两种来源派生出的 KEK 不同，"
-              + "同时配置无法判断该用哪一把");
+          "主钥与加密口令只能二选一：两种来源派生出的 KEK 不同，"
+              + "同时填无法判断该用哪一把（安装页的「加密存储」那一段）");
     }
     if (hasPassphrase) {
       this.passphrase = normalizeAndCheckPassphrase(config.getMasterPassphrase());
@@ -77,9 +77,9 @@ public class MediaKeyService implements ApplicationRunner {
       byte[] parsed = KeyWrap.masterKeyFromConfig(config.getMasterKey());
       if (parsed == null) {
         throw new IllegalStateException(
-            "pb.s3.object-encrypt=sse-c 需要 pb.s3.master-key"
-                + "（base64 的 32 字节，例如 openssl rand -base64 32）"
-                + "或 pb.s3.master-passphrase（至少 12 个字符），当前两种都没有可用值");
+            "开启了存储加密，就要给加密口令（至少 12 个字符）或主钥（base64 的 32 字节）其中一样，"
+                + "当前两种都没有可用值。安装页的「加密存储的图片与头像」那一段可以补上；"
+                + "不想加密就把那个开关关掉。");
       }
       this.passphrase = null;
       this.passphraseMode = false;
@@ -133,8 +133,8 @@ public class MediaKeyService implements ApplicationRunner {
         // 但旧主钥写的对象必须现在就点名，不能等第一张图读不出来才发现模式切错了。
         if (store != null && store.hasAnyWrappedKey()) {
           throw new IllegalStateException(
-              "库里有 sse-c 封装钥，但没有口令派生参数：这批对象是用 PB_S3_MASTER_KEY 写的。"
-                  + "继续使用原主钥，或先做重封装；不能直接改成 PB_S3_MASTER_PASSPHRASE");
+              "库里有 sse-c 封装钥，但没有口令派生参数：这批对象是用主钥写的。"
+                  + "继续使用原主钥，或先做重封装；不能直接改成口令");
         }
         log.info("媒体加密已就绪：mode=sse-c source=passphrase"
             + "（盐与 KCV 会在第一张图片写入时初始化）");
@@ -146,9 +146,9 @@ public class MediaKeyService implements ApplicationRunner {
     }
     if (store != null && store.getState(STATE_KEY) != null) {
       throw new IllegalStateException(
-          "库里已有 PB_S3_MASTER_PASSPHRASE 派生参数（app_state.media_kek_v1）；"
+          "库里已有口令派生参数（app_state.media_kek_v1）；"
               + "继续用同一个口令重启，或在确认库里没有口令模式写入的对象后，"
-              + "手工删除 app_state 里的 media_kek_v1 一行再改用 PB_S3_MASTER_KEY");
+              + "手工删除 app_state 里的 media_kek_v1 一行再改用主钥");
     }
     log.info("媒体加密已就绪：mode=sse-c source=master-key keyBytes={}", staticKey.length);
   }
@@ -156,8 +156,8 @@ public class MediaKeyService implements ApplicationRunner {
   private byte[] loadOrInitPassphraseKek() {
     if (store == null) {
       throw new IllegalStateException(
-          "PB_S3_MASTER_PASSPHRASE 模式需要数据库：盐/KCV 存在 app_state，"
-              + "手工构造 MediaObjects 的测试路径请改用 pb.s3.master-key");
+          "口令模式需要数据库：盐/KCV 存在 app_state，"
+              + "手工构造 MediaObjects 的测试路径请改用主钥");
     }
     String stored = store.getState(STATE_KEY);
     if (stored == null) {
@@ -165,15 +165,15 @@ public class MediaKeyService implements ApplicationRunner {
       // 顺序不能反：先写盐会把一个不匹配的 KDF 状态钉进库里，旧对象以后更难救。
       if (store.hasAnyWrappedKey()) {
         throw new IllegalStateException(
-            "库里有 sse-c 封装钥，但没有口令派生参数：这批对象是用 PB_S3_MASTER_KEY 写的。"
-                + "继续使用原主钥，或先做重封装；不能直接改成 PB_S3_MASTER_PASSPHRASE");
+            "库里有 sse-c 封装钥，但没有口令派生参数：这批对象是用主钥写的。"
+                + "继续使用原主钥，或先做重封装；不能直接改成口令");
       }
       return initializeState();
     }
     KekState state = parseState(stored);
     byte[] derived = deriveKek(state.salt(), state.kdf());
     verifyKcv(derived, state.kcv());
-    log.info("媒体 KEK 来源=PB_S3_MASTER_PASSPHRASE，KDF={}（盐/KCV 来自 app_state）", state.kdf());
+    log.info("媒体 KEK 来源=口令，KDF={}（盐/KCV 来自 app_state）", state.kdf());
     return derived;
   }
 
@@ -271,7 +271,7 @@ public class MediaKeyService implements ApplicationRunner {
 
   private static IllegalStateException wrongPassphrase(Throwable cause) {
     return new IllegalStateException(
-        "PB_S3_MASTER_PASSPHRASE 与首次启用时不是同一个口令（KCV 校验失败）："
+        "加密口令与首次启用时不是同一个（KCV 校验失败）："
             + "口令本身不会被打印；换口令会让旧图片无法解密。"
             + "如果这是刚部署、库里还没有任何图片，删除 app_state 里的 "
             + STATE_KEY + " 一行后即可用新口令重新初始化",
@@ -283,7 +283,7 @@ public class MediaKeyService implements ApplicationRunner {
     int points = normalized.codePointCount(0, normalized.length());
     if (points < MIN_PASSPHRASE_CODE_POINTS) {
       throw new IllegalStateException(
-          "PB_S3_MASTER_PASSPHRASE 至少需要 " + MIN_PASSPHRASE_CODE_POINTS
+          "加密口令至少需要 " + MIN_PASSPHRASE_CODE_POINTS
               + " 个字符（当前 " + points + " 个）；短口令在库泄露后可被离线穷举");
     }
     return normalized;

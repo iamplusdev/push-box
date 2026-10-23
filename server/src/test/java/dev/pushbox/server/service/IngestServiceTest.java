@@ -14,7 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -22,7 +22,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * §5.1 / §4.4 的受理路径。走真库是因为这条链路上最值钱的判定都落在库里：
  * 密钥摘要比对、锁定状态、msg_key 幂等、level 截断落库值、媒体行计数。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#databaseReady")
 // RANDOM_PORT 不是随手写的：MOCK 上下文里 WebSocketConfig 拿不到 ServerContainer，上下文起不来。
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class IngestServiceTest {

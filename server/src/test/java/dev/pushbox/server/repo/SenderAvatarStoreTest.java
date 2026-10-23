@@ -10,7 +10,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -18,7 +18,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * §4.5 头像的落库侧（B3）：帧与 history 里的 {@code sender_avatar} 必须是服务端自己的读路径，
  * 而且只在真的转存成功之后出现。这两条都由一条 SQL 表达式实现，所以要在真库上验，不能只读代码。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#databaseReady")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class SenderAvatarStoreTest {
 

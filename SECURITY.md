@@ -11,7 +11,8 @@ PushBox 是自托管的消息推送中枢，安全口径写在 [README 的"信�
 - **端上 SQLite/Room 不加密消息正文**。被 AndroidKeyStore 包裹的只有身份私钥、token、恢复码与 PIN 散列；拿到 root 或磁盘镜像仍能读出历史消息。
 - **明文 HTTP 是可选项**。客户端允许 `http://IP:端口`（内网 / Tailscale 场景），是否上 TLS 由部署者决定，`deploy/Caddyfile` 只做 HTTP 反代、不管证书。
 - **同一个 `device_id` 的新连接会顶掉旧连接**。把身份文件拷到另一台机器得到的是"轮流持有同一条连接"，不是两台设备。
-- **`/healthz` 的 `storage` 只校验配置项非空**，既不探端点可达也不探桶是否存在。配置写错时它会照样返回 `up`，这是文档里反复标注的判据陷阱。
+- **`/healthz` 的 `storage` 判据两种后端不一样**：本地存储那一条会真的建目录、写一个 `.healthz_test_*` 再删掉，所以 `down` 就等于目录不可写；对象存储那一条只看 `endpoint` 与 `bucket` 非空，**既不探端点可达也不探桶是否存在**，配置写错时它照样返回 `up`。别把 `storage:up` 当成"桶通着"。
+- **图片抓取默认拒绝私网，豁免按主机点名**。`SsrfGuard` 先解析 DNS 再比白名单，回环 / `10.0.0.0/8` / `172.16.0.0/12` / `192.168.0.0/16` / `100.64.0.0/10`（CGNAT）/ `169.254.0.0/16` / `198.18.0.0/15` 与 `224.0.0.0` 以上一律不抓，每一跳重定向都重跑同一套检查。安装页的「图片抓取放行主机」（`media.allowHosts`）是**精确等值**的豁免，没有通配；填进去就等于允许服务端主动去访问那台内网主机——它是按主机开一条口子，不是"内网图床统一放行"的开关。与之相对的"整段放开私网"（`pb.media.allow-private`）刻意**不在安装页上**，只能改配置文件。
 
 ## 报告漏洞
 
@@ -25,12 +26,12 @@ PushBox 是自托管的消息推送中枢，安全口径写在 [README 的"信�
 
 - 尽力在 7 天内回复初步评估；这只是个人维护项目的承诺，不是 SLA。
 - 确认后在同一 Release 里修复并给出安全说明（Security Advisory），致谢报告者——除非你不愿具名。
-- 未修复期间，请在报告里同时说明可行的部署侧规避（例如收紧 `PB_SECURITY_INTERNAL_CIDRS`、把运维端点关在环回里）。
+- 未修复期间，请在报告里同时说明可行的部署侧规避（例如在安装页里收紧「运维网段」、把运维端点关在环回里）。
 
 ## 部署侧该自己做的事
 
-- `PB_ADMIN_SECRET` 与 `PB_ADMIN_JWT_SECRET` 必须是两个不同的强随机值（`openssl rand -base64 32`）；相同或过短会被启动阶段直接拒绝。
-- 必填变量缺失时 compose 在 `up` 之前就报错，别用"看起来起来了"当验收；桶是否存在要用 `mc ls` 判，不是 `/healthz`。
-- 运维端点靠两道门：`deploy/Caddyfile` 的 `@metrics path /actuator/*` → `respond 403`，以及服务端 `InternalAccessFilter` 只放行环回加 `PB_SECURITY_INTERNAL_CIDRS`。任何一道都不该被当成全部依赖。
-- **管理台没有第三道门，要自己加**：`/api/v1/admin/*` 与业务 API 同端口同反代，上面那两条 `@metrics` 规则都不覆盖它，公网部署时它默认就是公网可达。挡住它的只有 `PB_ADMIN_SECRET` 加一把 24 小时 JWT，而这把 token **既不刷新也不吊销**（签名钥是独立的 `PB_ADMIN_JWT_SECRET`，改登录口令不会让已签出的 token 失效；泄露了只能等它过期或换签名钥、代价是所有会话重登）。口令被刷的按 IP 锁定写在 `AbuseControlService.adminLoginAttempts`，是进程内 Caffeine：重启清零、多实例不共享。收紧来源的可用写法见 `deploy/Caddyfile` 末尾那段注释示例；不想动反代就换个只监听内网的端口把 `/admin` 与 `/api/v1/admin` 单独暴露。
+- 管理台口令（配置文件里的 `admin.password`，安装页填）至少 8 个字符；留空等于**关闭整个管理台**，所有 `/api/v1/admin/*` 一律 403。签名钥 `admin.jwtKey` 由服务端首次启动时自动生成并回写配置文件，不用你填，也别手编弱值。
+- 配置只有一份落点：`data/config/pushbox.json`（容器里是 `/app/data/config/pushbox.json`），里面**明文存着库口令、桶 AK/SK 与管理台口令**。这是刻意的——生产部署一定要有可复核的凭据落点，所以判据不是"配置里不许有明文"，而是"明文只在这一个地方，且它进不了提交"：文件落盘时是 `rw-------`，`.gitignore` 把 `/data/` 与 `/server/data/` 都排掉了。别提交它、别贴进 issue。
+- 运维端点靠两道门：`deploy/Caddyfile` 的 `@metrics path /actuator/*` → `respond 403`，以及服务端 `InternalAccessFilter` 只放行环回加 `security.internalCidrs`（安装页「运维网段」）。任何一道都不该被当成全部依赖。
+- **管理台没有第三道门，要自己加**：`/api/v1/admin/*` 与业务 API 同端口同反代，上面那两条 `@metrics` 规则都不覆盖它，公网部署时它默认就是公网可达。挡住它的只有那个管理台口令加一把 24 小时 JWT，而这把 token **既不刷新也不吊销**（签名钥是独立的 `admin.jwtKey`，改登录口令不会让已签出的 token 失效；泄露了只能等它过期或换 `admin.jwtKey` 并重启、代价是所有会话重登）。口令被刷的按 IP 锁定写在 `AbuseControlService.adminLoginAttempts`，是进程内 Caffeine：重启清零、多实例不共享。收紧来源的可用写法见 `deploy/Caddyfile` 末尾那段注释示例；不想动反代就换个只监听内网的端口把 `/` 与 `/api/v1/admin` 单独暴露。
 - 备份产物必须加密后才出机器（`deploy/backup/backup.sh` + age）。

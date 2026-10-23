@@ -10,7 +10,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -20,7 +20,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * 能把一条空消息的新 Space 顶过阈值——每次连接只回 resume_gap、永远等不到 resume_ok，
  * 客户端顶栏停在"连接中"而这条连接其实活得好好的（真服务体检 ② 抓到的）。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#databaseReady")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class LatestSeqScopeTest {
 

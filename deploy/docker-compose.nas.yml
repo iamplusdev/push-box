@@ -1,16 +1,19 @@
-# 给"没有 .env、只能在图形界面里逐条填变量"的机器：飞牛 FNOS、群晖 Container Manager、1Panel 的
-# Compose 项目都可以直接把这一本贴进去。与 docker-compose.yml 的分工写在 docs/软件设计方案.md D76：
-#   · docker-compose.yml —— 有 .env、有 Caddy 反代、外接对象存储的生产拓扑。
-#   · 本文件 —— 一台 NAS、一个 MySQL、图片落在卷里的自用拓扑。
+# 给"没有 .env、只能在图形界面里点"的机器：飞牛 FNOS、群晖 Container Manager、1Panel 的
+# Compose 项目都可以直接把这一本贴进去。与 docker-compose.yml 的分工：
+#   · docker-compose.yml —— 有 .env、有 Caddy 反代的生产拓扑（对外只暴露 80/443）。
+#   · 本文件 —— 一台 NAS、一个 MySQL、局域网里手机直连 7404 的自用拓扑。
+#
+# 服务端不读环境变量，所以这本文件里**一个变量都没有**：库地址、库口令、要不要对象存储、
+# 加密口令、管理台口令，全都在首次启动弹出的安装页里填。up 之后浏览器打开
+#   http://<NAS_IP>:7404/
+# 看到的就是安装页，填完点「保存并启动」，同一个容器接着起服务，不用重启也不用回来改这个文件。
+#
 # 两条铁律：
 #   1) 本文件刻意不使用任何 ${VAR} 插值。图形界面里没有文件可编辑，解析阶段的
 #      "required variable ... is missing a value" 既读不懂也改不动——那正是 2026-10-22 有人
-#      在飞牛上撞到的那条。要改的值一律写成字面量。
-#   2) 需要人填的只有两处：库地址 PB_DB_HOST 与库口令 PB_DB_PASSWORD。其余项都有默认值
-#      （存储模式等烘焙在镜像的 ENV 段，桶那套在 application-prod.yml），列在这里只是为了让人看得见
-#      它们存在；s3 那几项**刻意不在本文件里出现**——只列一半（没有 endpoint 与 AK/SK）会让人以为
-#      "桶已经配好了"，真要用桶按 NAS部署指南 里那七行一起加。
-#      口令一律不要提交回仓库：这份文件贴进 NAS 之后就留在那台机器上，不要反过来把填好值的它 push 上去。
+#      在飞牛上撞到的那条。现在连必填项都挪进安装页了，这一条只是留给下面那段可选的 mysql。
+#   2) 走「创建容器」表单（不用本文件）时同样成立：镜像声明了 VOLUME /app/data，表单里会自动
+#      出现这一行，宿主文件夹仍需自己选。要填的东西在安装页里，不在表单里。
 
 name: pushbox-nas
 
@@ -21,57 +24,25 @@ services:
     # 想用自己现场出的镜像（ARM 机型，或不想等发版），把下面这行换成 pushbox:local：
     #   docker build -f deploy/Dockerfile -t pushbox:local .
     image: docker.io/iamplusdev/push-box:latest
-    environment:
-      # ==== 只有这两项必须改 ====
-      # 库在哪。⚠ 不要写 127.0.0.1 或 localhost：容器里那个环回是它自己，不是 NAS。
-      # 飞牛上装的 MySQL（应用中心或自己起的容器）就填 NAS 的局域网 IP，例如 192.0.2.20。
-      # 用下面那段自带 mysql 的走法时，这里填服务名 mysql。
-      PB_DB_HOST: 192.0.2.20
-      PB_DB_PASSWORD: 把库口令填在这里
-      # ==== 以下都有默认值，按需再看 ====
-      PB_DB_PORT: "3306"
-      PB_DB_NAME: pushbox
-      PB_DB_USERNAME: pushbox
-      # 镜像里跑的是 uid 10001，对象与日志都落在下面这两个 named volume 里。
-      # 别改成"挂一个 NAS 共享文件夹进来"：绑定挂载会把宿主目录的属主带进容器，而图形界面建出来的
-      # 目录属 root，uid 10001 写不动。那种配法不会让容器起不来，只会让每条带图的消息停在 failed。
-      # 真要用共享文件夹，先在 NAS 上把它交给 10001：sudo chown -R 10001:10001 <那个目录>
-      PB_STORAGE_TYPE: local
-      PB_STORAGE_LOCAL_PATH: /app/data/media
-      PB_LOG_DIR: /app/logs
-      # 明文落在自己的盘上（逐文件 600 权限）。想连本地盘也加密就改成：
-      #   PB_S3_OBJECT_ENCRYPT: sse-c
-      #   KEK 二选一：
-      #     PB_S3_MASTER_KEY: <base64 的 32 字节：openssl rand -base64 32>
-      #     PB_S3_MASTER_PASSPHRASE: <至少 12 个字符的口令；KEK 由 Argon2id 派生，口令本身不落库>
-      #   两个都配会拒绝启动。用过的 KEK 不可轮换——换了它旧图片再也解不开。
-      PB_S3_OBJECT_ENCRYPT: none
-      # 管理台：两把都留空 = 整个管理台不开放（客户端收发消息、建频道照常在 Android/PC 里做）。
-      # 要用浏览器管理就同时填两项，各生成一把、不许相同：openssl rand -base64 32
-      # 只填口令不填签名钥、或两把同值，容器会在启动前点名拒绝，不会静默降级。
-      PB_ADMIN_SECRET: ""
-      PB_ADMIN_JWT_SECRET: ""
-      PB_SERVER_PORT: "7404"
     ports:
-      # 局域网内手机/PC 直连这个端口就够（注册时填 http://<NAS_IP>:7404）。
+      # 局域网内手机/PC 直连这个端口就够（注册时填 http://<NAS_IP>:7404）。安装页也在这里。
       # 要暴露到公网就得自己上 HTTPS 反代：明文链路上跑的是消息正文与管理台口令。
       - "7404:7404"
     volumes:
-      # 图形界面里的「存储位置」就是这两行：容器里的地址不变，宿主侧由 named volume 兜着。
-      # 不用本文件、走「创建容器」表单时，镜像声明的 VOLUME 会把容器内路径带出来，宿主文件夹仍需自己选。
-      # NAS 界面可能把 named volume 显示成空（因为它们不在某个共享文件夹里），那是正常的——
-      # 数据仍在 <项目名>_server_media / <项目名>_server_logs 里，路径用
-      #   docker volume inspect <项目名>_server_media -f '{{.Mountpoint}}'
-      # 查。想直接落到自己在 NAS 上建的文件夹，就把这两行换成绑定挂载，并先把目录交给 uid 10001：
-      #   - /vol1/1000/pushbox/media:/app/data/media     # 换成你那台 NAS 上的真实路径
-      #   - /vol1/1000/pushbox/logs:/app/logs
+      # 一个卷装下全部可变状态：config/pushbox.json（安装页写的配置）、media/（图片与头像）、logs/。
+      # 图形界面里的「存储位置」就是这一行：容器里的地址不变，宿主侧由 named volume 兜着。
+      # 想直接落到自己在 NAS 上建的文件夹（方便备份），就换成绑定挂载，并先把目录交给 uid 10001：
+      #   - /vol1/1000/pushbox:/app/data        # 换成你那台 NAS 上的真实路径
       #   sudo chown -R 10001:10001 /vol1/1000/pushbox
-      # 一行都不挂也起得来，但对象落进容器可写层，docker rm 之后图片全没。
-      - server_media:/app/data/media
-      - server_logs:/app/logs
+      # 不 chown 就用绑定挂载的话，容器起 1 秒就退，entrypoint 会点名"数据目录不可写"并给出这两种修法。
+      # 一行都不挂也起得来，但配置与图片落进容器可写层，docker rm 之后全没——包括安装页填的那些值。
+      # NAS 界面可能把 named volume 显示成空（因为它们不在某个共享文件夹里），那是正常的；路径用
+      #   docker volume inspect pushbox-nas_pushbox_data -f '{{.Mountpoint}}'
+      # 查。
+      - pushbox_data:/app/data
     healthcheck:
-      # 只做 TCP 探活：`/healthz` 会真连库，用业务探活做 healthcheck 等于让一次数据库抖动就把容器判死
-      # （镜像里有 curl，选 TCP 是因为判据不同，不是因为缺工具）。
+      # 只做 TCP 探活：`/healthz` 会真连库，用业务探活做 healthcheck 等于让一次数据库抖动就把容器判死；
+      # 而且没配置完时容器停在安装页上，那会儿 /healthz 根本不存在，但 7404 已经有人监听。
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7404"]
       interval: 10s
       timeout: 3s
@@ -80,9 +51,10 @@ services:
     restart: unless-stopped
 
   # ---- 想在同一个项目里顺带起一个 MySQL（NAS 上还没有库时）----
-  # 取消注释后：上面的 PB_DB_HOST 改成 mysql，PB_DB_PASSWORD 与这里的 MYSQL_PASSWORD 填同一个值
+  # 取消注释后，安装页里的「数据库地址」填服务名 mysql，「密码」填这里的 MYSQL_PASSWORD 同一个值
   # （compose 没法在一个文件里引用自己写过的值，两处同值是这套写法的代价）。
-  # 首启 Flyway 要建九张表，慢个几十秒是正常的；entrypoint 会先把库等到可达才交给 Java。
+  # 首启 Flyway 要建九张表，慢个几十秒是正常的；安装页的「测试连接」会当场告诉你通不通，
+  # 连不上就一个字节都不写，改完再点一次即可。
   #
   # mysql:
   #   image: docker.io/library/mysql:8.4
@@ -99,9 +71,10 @@ services:
   #
   # 不发布 3306 端口是刻意的：pushbox 容器与它在同一个默认网络上，按服务名就能连，
   # 而把一个能读写 pushbox 库的端口摆到局域网里没有任何收益。
+  # 空库首次初始化在 NAS 上普遍要 1～2 分钟：这期间安装页的「测试连接」会报连不上，
+  # 用 docker logs <mysql 容器名> --tail 20 看它到哪一步了，起好再回来点一次。
 
 volumes:
-  server_media: {}
-  server_logs: {}
+  pushbox_data: {}
   # 用了上面那段 mysql 才需要：
   # db_data: {}

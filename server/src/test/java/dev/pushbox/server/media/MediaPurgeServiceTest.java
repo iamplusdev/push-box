@@ -15,7 +15,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -23,7 +23,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * §4.5 的宽限期巡检测试：真 MySQL + 真 RustFS，但图片字节由测试自己 PutObject，
  * 不依赖公网图床——这里要验的是"什么时候才允许 DeleteObject"，不是抓取。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#objectStorageReady")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class MediaPurgeServiceTest {
 

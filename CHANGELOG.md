@@ -7,6 +7,64 @@
 
 ---
 
+## 未发布 —— 配置模型重构：安装页取代环境变量（第三十四轮）
+
+> 起点：一条来自真实安装的抱怨。v1.1.4 为了让飞牛的「环境变量」表单有行可填，往镜像里烘了 5 枚 `__SET_ME__` 占位值；v1.1.5 紧接着修的就是"只配主钥的人被那个占位口令判成二选一冲突"。**为了让表单有行可填而塞假值、再为了让假值不生效而在 entrypoint 里 `unset` 它**——这个形状说明该换的不是键的数量，而是配置的形态。维护者的判断是"不要设计太复杂，要符合用户逻辑，而不是死板追求安全性"，并明确推翻了"凭据只走环境变量"这条硬规则（它本来就只是开发环境的口径）。
+
+### 新形态
+
+- **服务端不再读任何环境变量**。配置只有一份 JSON：`data/config/pushbox.json`（容器里 `/app/data/config/pushbox.json`），模型类 `setup/RuntimeConfig`，到 Spring 属性的翻译收在一处（`RuntimeConfig#toSpringProperties`，经 `META-INF/spring.factories` 注册的 `EnvironmentPostProcessor` 在上下文刷新前注入）。
+- **首次启动弹安装页**。没有配置文件时 `main()` 先用 JDK 自带的 `HttpServer` 在服务端将要用的**同一个端口**（默认 7404）上起一个迷你服务：根路径 `/` 是表单，提交走 `POST /api/v1/setup`，另有 `?action=test`（只测库）与 `?action=restore`（从库里找回上一次的配置）。写盘之后**同一个 JVM 接着 `SpringApplication.run`，不用重启容器**。选"同端口 + 同 JVM"是为了让 NAS 上那条 `docker run` 保持一条；代价是 healthcheck 的 TCP 探活在安装期间也通，`healthy` 从此不代表"配好了"。
+- **提交即校验，不过则一个字节都不写**：`validate()`（格式层）→ `checkDatabase()`（真连一次，顺手 `CREATE DATABASE IF NOT EXISTS`，建不动不判死）→ `checkS3()`（勾了对象存储才走，headBucket + putObject + deleteObject 各一次）。于是"配了一半"这种状态不存在，"库地址对、口令错"这类最高频的错在装机当场就是一句人话，不再是 MySQL 的 1045 加几百行 Hikari WARN。
+- **存储从三档开关变成两个布尔**：`storage.s3`（改用对象存储）与 `storage.encrypted`（加密存储）。**加密与"用不用对象存储"解耦**——本地目录模式同样按这个开关决定落盘的是明文还是 `KeyWrap.seal` 封装后的密文，读侧按 `media_objects`/`senders` 各自记的 `enc_mode` 逐对象解读。勾了加密后 KEK 来源二选一：口令（≥12 个码点，Argon2id 派生）或 base64 的 32 字节主钥；两个都填拒绝提交。
+- **管理台从"两把钥"变成一个口令**：`admin.password`（≥8 字符，**留空 = 管理台整个关闭**，`AdminAuthController` 的 403「管理台未启用」不变），签名钥 `admin.jwtKey` 由 `RuntimeConfig#normalize()` 首次启动自动生成并回写。部署者不再需要生成两个强随机值并记住它们必须不同。
+- **配置副本落库**：启动后整份配置抄进 `app_state.runtime_config_v1`，重装或换机器时只带库凭据就能把上次的配置拉回来改（**KEK 不在副本里**，它从来不落库，那一栏得手工重填）。
+
+### 删掉的
+
+- 全部服务端 `PB_*` 键，**连兼容别名一起删、不留过渡期**（留别名等于留两套真值）。
+- `application-dev.yml` 与 `application-prod.yml`（合成一份 `application.yml`）。
+- `DevCredentialsGuard`（它判的"该配的键没配"由 `validate()` 在提交时判，且判得更早）与 `ProdPlaintextMediaGuard` + `PB_ALLOW_PLAINTEXT_MEDIA` 逃生阀（明文不再是"忘了配"的默认结果，而是表单上一个开关的显式表态）。
+- 镜像里全部 17 项 `ENV`；entrypoint 收成**只做一件事**：`/app/data` 的写入探针（探不过就打出 `chown -R 10001:10001` 与"删掉那行让 Docker 建匿名卷"两种修法，而不是让人去读一段 Logback 的 `Permission denied` 堆栈）。v1.1.5 那 25 条 entrypoint 场景矩阵随之作废。
+- 两个 `VOLUME`（`/app/data/media` + `/app/logs`）收敛成**一个 `VOLUME /app/data`**，装下 `config/` + `media/` + `logs/`。理由是"人只需要管一处"：「存储位置」只有一行要选、备份脚本只指一个目录、`chown` 只 chown 一次。
+- `deploy/env/set-user-env.ps1` 与 `local.env.example`；`deploy/run-dev.sh` 只剩 `exec java -jar`。
+
+### 明文凭据是刻意的
+
+`pushbox.json` 里明文存着库口令、桶 AK/SK、管理台口令与加密口令。**这不是漏配，是把不变式换了位置**：旧规则"凭据只走环境变量"在真实部署里从没真的成立过——部署者总要把真值写在某个地方（compose 的 `environment`、NAS 的表单、`.env`、systemd 的 `EnvironmentFile`），那条规则换来的只是"那个地方由部署工具管、没人管权限"。新的不变式是"**明文只在一个地方，且它进不了提交**"：文件原子写（同目录临时文件 + move）、权限 `rw-------`、`.gitignore` 排掉 `/data/` 与 `/server/data/`，`release-verify.sh` 断言这几条忽略规则还在、并直接问 git。代价写明白：拿到那个卷就等于拿到全部凭据，包括派生媒体 KEK 的口令。
+
+### 缺陷与修法（真跑一次容器才照出来的三条）
+
+- **安装页在 fat jar 里连不上库**：`DriverManager` 初始化时用**系统类加载器**跑 `ServiceLoader`，而 Spring Boot 把 `mysql-connector-j`（`server/pom.xml` 里是 `runtime` scope）放在 `BOOT-INF/lib/` 下，只有 `LaunchedClassLoader` 看得见——安装页跑在 Spring 之前，于是 `POST /api/v1/setup` 一律 `No suitable driver found for jdbc:mysql://…`。Spring 那条路不受影响（Hikari 自己按线程上下文类加载器 `Class.forName`），`mvn test` 也不受影响（exploded classpath 上系统类加载器本来就看得见驱动），所以**这条只有真跑一次 `java -jar` 才验得到**。修法：`InstallServer.loadMysqlDriver()` 显式 `Class.forName`；判据落在新脚本 `scripts/install-page-smoke.sh`（真出包、真起 fat jar、真 POST 一次），由 `release-server.sh` 第 3 步调用，`release-verify.sh` 断言这个脚本在位、过 `bash -n` 且真的被调用。
+- **安装明明成功了，部署脚本却报"连不上安装页"**：`install()` 在 `return` 之前就 `configured.countDown()`，`awaitConfiguration()` 一醒就在 `finally` 里 `server.stop(0)`——`0` 是"不等在途请求写完"，于是配置真的落盘了、Spring 也起来了，而 curl 只拿到被截断的空响应。修法：`countDown()` 挪到 `handleSetup` 里 `respondJson(...)` 之后，`stop(1)` 再给一秒余量。`InstallServerTest` ⑬ 真起一次 HttpServer、真打一次 POST 钉住它；做过负测——把两处改回原样，这条当场红成 `HTTP/1.1 header parser received no bytes`，正是容器里 curl 看到的那个症状。
+- **内网图床没有任何一处能放行**：`SsrfGuard` 默认拒绝回环/私网/CGNAT（这一条是对的，自建对象存储常落在 `100.64.0.0/10`），豁免只有 `pb.media.allow-hosts` 一个入口，而它既不在 `application.yml`、也不在安装页上。NAS 与内网部署于是每条图片都 `media_objects.error=ssrf_blocked`，而表单里找不到任何能改的地方——这是"所有配置都要能在表单填写"漏掉的一项。修法：`RuntimeConfig.Media.allowHosts` 进表单（第 2 节「图片抓取放行主机」），翻成 `pb.media.allow-hosts`；落盘前 `normalize()` 归一成小写去空白（`SsrfGuard` 是精确等值比较，写成 `IMG.lan` 或带个空格等于没填）。与之相对的 `pb.media.allow-private`（整段放开私网）**刻意不进表单**：豁免按主机点名，不给"一键关掉 SSRF 校验"的开关。
+
+### 新增
+
+- `deploy/pushbox.json.example`：一份带注释的配置样张，TLS 口径（`useSSL=false` 与 `http://` 意味着什么、跨主机该怎么改）从 `prod.env.example` 搬到这里。
+- `deploy/backup/backup.sh` **第 0 步：备份配置文件**，产出 `config-<UTC>.json.age`。库副本能让安装页找回配置，但**KEK 的盐与校验值在 `app_state.media_kek_v1`、KEK 本身不在库里**，缺这一份的结果是"库恢复成功、图片全部解不开"，而它长得就像一次成功的恢复。两个 `CONFIG_*` 都没给时脚本只打一条 `⚠️` 并**继续跑完**（退出码仍是 0），所以判据是产物清单里有没有 `config-*`，不是退出码。
+- 测试门控从一档拆成两档：只需连得上库的 13 个类挂 `TestConfig#databaseReady`（开发机照跑），真要桶的 5 个 media 类挂 `objectStorageReady`（它们验 SSE-C 客户钥、61B 封装格式、无钥读 400 这类 S3 语义，本地目录照不出来）。本机跳过数因此从 114 降到 33。
+- **发布改走脚本，不再手敲命令**：`scripts/release.sh`（总入口：汇总三端最新标签与仓库现值、算出下一个 patch/minor/major、按需分发）+ `scripts/release-server.sh` / `release-android.sh` / `release-windows.sh`（各端自己的六步）+ `scripts/release-common.sh`（公共部分）。顺序是刻意的：**先跑本地构建与测试，再写版本号，再提交打标签**，测试红了就退出、工作区一个字节都没改；推远端要显式 `--push`，且 `PB_REMOTE` 只可能是 `github`（gitee/gitea 不在授权范围内）。版本号只从**标签**算，仓库现值只用来对账——跑过 `set-version.sh` 却忘了打标签那种半成品状态会把基线抬错，汇总表里那一栏直接写成「⚠ 现值领先标签」。每端另有一道只对自己成立的断言：服务端数 surefire 报告并与 `ci.yml` 的 `if tests < N` 比（跑之前先 `rm -rf` 两个 `surefire-reports`：`mvn test` 不清 `target`，被删掉的测试类留下的孤儿报告会一直把总数抬上去，那一轮实测 344 vs 当时真值 327）；Android 比 `apksigner` 指纹与 `android/release-cert.sha256`、核 `versionCode == major*10000+minor*100+patch`；Windows 从 `crypto.trx` 数用例并与 `ci.yml` 的 `$CS_BASELINE` 比、核 csproj 与 `PushBox.iss` 同值。`skipped == 0` 这一档本机判不了（runner 上才喂了 DB/S3 凭据），脚本打 WARN 说明"全绿不代表测过"而不是当通过。
+
+### 验证
+
+- **Java 全量 331 条（core 43 + server 288，298 执行 + 33 跳过）、0 失败 0 错误**，BUILD SUCCESS。新增用例集中在 `setup/`：`RuntimeConfigTest` 10 + `InstallServerTest` 14 + `RuntimeConfigEnvironmentPostProcessorTest` 5 = 29 条；同时删掉 `DevCredentialsGuardTest` 10 与 `ProdPlaintextMediaGuardTest` 7，净 `+12`（319 → 331）。
+- **`scripts/release-verify.sh` 84 通过 / 0 失败 / 2 警告**（两条警告是"本机没有 docker CLI 判不了镜像体积"与"工作区有未提交文件"）。本轮新增第 8 节「检查发布脚本」8 条判据，判的是**形状**（五个脚本都在、都过 `bash -n`、三端各自"本地测试那一步的行号 < 写版本号那一步的行号"、`PB_REMOTE` 唯一取值 `github`、没有任何一行把 `push` 与 `gitee`/`gitea` 写在一起、`PB_PUSH` 初值是 0）——这些脚本自己不会被任何工作流触发，坏了没人替你发现。**六条都做过负测**：把 `set-version` 那行挪到测试之前、在 `release-windows.sh` 末尾塞半截 `if`、`PB_REMOTE` 改 `gitee`、`PB_PUSH` 改 1、往 `release-android.sh` 塞一行 `git push gitee main`、把 `release.sh` 挪走，六种改法逐个把对应判据判红，恢复后与备份逐字节相同、闸门回绿。写它时踩到一次自指：判据本来用 `scripts/release*.sh` 这个 glob 扫，把 `release-verify.sh` 自己也扫进去了，而它的判据文本里同时写着 `push` 与 `gitee`，第一跑就把自己判红——改成只扫那五个文件名（与 compose 那条 `${VAR:?}` 判据同一类失效：给人读的说明文字被自己的闸门当成违规）。
+- **发布脚本本身验到哪儿**：`release.sh` 的 `--list`、单端 / 多端 / `--all` 的 `--dry-run`、显式旧版本号被判死、部分成功部分失败时的统计与"剩下的端该跑哪条命令"提示、`--bump=minor` 与 `--push` 的参数转发，都实跑过；服务端那一步（`3/6`）是把脚本里那段**原样抽出来真跑的**——`mvn -B -pl server -am test` 出 331 条 / 33 跳过 / 298 执行、与 `ci.yml` 基线相等，`web-admin` 构建出非空 `dist/index.html`，`release-verify.sh` 零 FAIL。**Android 与 Windows 那两步没有真跑过**（`gradlew :app:assembleRelease` + `apksigner` 比指纹、`dotnet test` + 数 trx + `build-installer.sh`），判据是照 `ci.yml` / `build-apk.yml` 抄的，只过了 `bash -n` 与 dry-run；也**没有创建过任何提交或标签、没有推过任何远端**。
+- **WSL Docker 上真跑了一次安装页全流程**：从改过的源码重建镜像 → `docker compose up` → 删掉容器里的 `pushbox.json` 把安装页重新武装 → `deploy/deploy-wsl.sh setup` 把表单值 POST 进去 → 在容器内 `/app/data/config/pushbox.json` 里确认 `media.allowHosts` 等字段真的落盘 → `/healthz` 200 → `PushBox.LiveCheck` 12/12 → 入站 `POST /message` 带一张内网图片。上面那三条缺陷就是这么照出来的，`mvn test` 一条都抓不到。图片链路终态：`media_objects.status=ready`、`enc_mode=sse-c`、`length(sse_key_wrapped)=61`、`size=79`、`object_key` 非空，`senders.avatar_key` 也非空；桶里那份 `xl.meta` 既没有 PNG 魔数也没有 `IHDR`，落盘确实是密文。顺带验到两条设计行为：同一 URL 的第二条消息按 sha256 复用了前一条的 `object_key`；先前 `ssrf_blocked` 的那一行在放行主机进配置之后被重试器自己救回了 `ready`。
+- **加密媒体的读侧仍然没验**：`/api/v1/media/{msgId}/{idx}` 与 `/api/v1/avatars/{token}` 都要 `DeviceGuard` 的设备签名，curl 复现不出来，而 `LiveCheck` ⑦ 只覆盖 404/hint 那条路；真要桶的那 5 个 IT 类挂在 `objectStorageReady` 上，本机没跑。
+- **端点闸补了一处盲区**：它原来只从 `web/*.java` 的 `@*Mapping` 与 `registry.addHandler` 提路由，而 `POST /api/v1/setup` 是 `InstallServer` 用 JDK HttpServer 的 `createContext` 注册的、跑在 Spring 之前，永远不会有注解——闸门因此把文档里那个**真实存在**的端点判成"代码里找不到"。修法是把 `createContext("/api…")` 也纳入提取（只收 `/api` 开头的，同一个 `createContext` 还注册了表单页 `/`，那不是接口路径）。
+- 文档侧全部按新口径重写：README、`deploy/部署快速参考.md`、`deploy/NAS部署指南.md`、`deploy/WSL部署指南.md`、`docs/用户使用手册.md`、`docs/开发指南.md`、`SECURITY.md`、`site/` 五页、`发布检查清单.md` 四节、`发布准备报告.md`。`docs/软件设计方案.md` **不改写 §11 正文**，而是新增 **D77** 记录"为什么推翻 D76"，并在 §11 章首挂一条失效横幅——把旧决策改写成新的，"我们曾经认为明文凭据不可接受"这个事实就没了，而下一个人正是需要它才能判断新取舍是不是又想回去。
+
+### 未做 / 边界
+
+- **安装页在浏览器里的实际渲染没看过**：本轮端到端是脚本直接 POST `/api/v1/setup`，没有真人点过表单；飞牛/群晖的「存储位置」表单只剩一行之后长什么样，也还没看。
+- **从旧版本（≤1.1.5，只读环境变量）回退不是改一行 image tag**：旧镜像不认 `pushbox.json`，得把整套 `PB_*` 重新配齐，且加密口令必须与新配置里那一份**逐字相同**，否则旧封装钥解不开（症状是图片集体 404）。反方向没有这个问题。
+- ARM 机型仍然没验（发布工作流没传 `platforms`，Hub 上是 amd64）。
+- 未实现 KEK 轮换或旧对象重封装。
+
+---
+
 ## v1.1.5（2026-10-22）—— 修主钥模式被镜像里的口令占位值误杀（第三十三轮）
 
 > 起点：v1.1.4 发布后复查 `docker run` 的主钥路径。镜像 ENV 里烘焙了 `PB_S3_MASTER_PASSPHRASE=__SET_ME__`，用户只传 `PB_S3_MASTER_KEY` 时这一行仍是非空字符串，entrypoint 的二选一检查把"主钥 + 占位口令"当成两个真实来源，直接拒绝启动。`prod.env.example` 与 README 都仍把主钥列为可用选项，这是 v1.1.4 带出去的兼容性回归。

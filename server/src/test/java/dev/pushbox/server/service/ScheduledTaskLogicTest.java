@@ -31,7 +31,7 @@ import org.mockito.ArgumentCaptor;
 
 /**
  * 定时推送的调度规则（不碰库、不碰容器）：cron 下次时间、时隙 CAS、幂等 msg_key、止损停用与校验。
- * 真正落库的幂等与投递结果由 {@code @EnabledIfEnvironmentVariable} 的集成用例守着，
+ * 真正落库的幂等与投递结果由 ScheduledTaskStoreTest 那批集成用例守着，
  * 这里只锁住"扫描一轮会发生什么"这套不会因为网络或数据库状态漂移的判断。
  */
 class ScheduledTaskLogicTest {

@@ -12,7 +12,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -20,7 +20,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * §4.4 的限流与凭据锁定。锁定状态在库里（{@code channels.fail_count/locked_until}），
  * 所以这条必须跑真库；窗口计数是内存的，每个用例都 new 一个新 service 保证互不串扰。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#databaseReady")
 // RANDOM_PORT 不是随手写的：MOCK 上下文里 WebSocketConfig 的 ServletServerContainerFactoryBean
 // 拿不到 jakarta.websocket.server.ServerContainer，整个应用上下文直接启动失败。
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)

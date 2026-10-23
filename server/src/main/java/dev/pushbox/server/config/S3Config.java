@@ -20,15 +20,16 @@ public class S3Config {
    * <p>{@code @Bean} 方法 return null 时 Spring 注册的是 {@code NullBean}，而 {@code NullBean} 对
    * 必须注入的构造参数等于"没有这个 bean"：{@code MediaObjects} 起手就撞上
    * {@code NoSuchBeanDefinitionException: No qualifying bean of type 'S3Client'}，进程在
-   * DataSource 之后、任何业务调用之前死掉。症状是"配了 PB_STORAGE_TYPE=local 反而起不来"，
+   * DataSource 之后、任何业务调用之前死掉。症状是"选了本地存储反而起不来"，
    * 而单测全是 {@code new MediaObjects(null, props)} 手工构造，永远照不出这条接线，
    * 所以本地存储这条路只在单元测试里通过过一次。
    *
-   * <p>默认值与 {@link PbProperties.Storage#getType()} 保持一致（s3）：变量没配时该建客户端。
-   * {@code havingValue} 的比较不区分大小写，所以 {@code PB_STORAGE_TYPE=S3} 也认。
+   * <p>{@code matchIfMissing=false} 与 {@link PbProperties.Storage#getType()} 的默认值 local 一致：
+   * 读不到配置时该走本地目录，而不是拿一组空凭据去建 S3 客户端。
+   * {@code havingValue} 的比较不区分大小写，所以 {@code type=S3} 也认。
    */
   @Bean
-  @ConditionalOnProperty(prefix = "pb.storage", name = "type", havingValue = "s3", matchIfMissing = true)
+  @ConditionalOnProperty(prefix = "pb.storage", name = "type", havingValue = "s3")
   public S3Client s3Client(PbProperties props) {
     PbProperties.S3 s3 = props.getS3();
     // 空值必须在这里拒绝启动。晚一拍的代价是：容器起来了、TCP 健康检查过了、/healthz 也说 db=up，
@@ -49,7 +50,8 @@ public class S3Config {
 
   private static void require(String value, String name) {
     if (value == null || value.isBlank()) {
-      throw new IllegalStateException(name + " 不能为空（容器里它由 PB_S3_* 透传，见 deploy/env/prod.env.example）");
+      throw new IllegalStateException(name + " 不能为空：安装页里勾了「改用对象存储」就要把这几项填全，"
+          + "或者删掉 data/config/pushbox.json 重新走一遍安装");
     }
   }
 

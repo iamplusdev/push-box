@@ -14,7 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -23,7 +23,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * 这里刻意把并发和队列都压到 1，为的是用两个阻塞任务就能确定性地制造出"队列已满"，
  * 而不是靠往全局池里灌几百个任务去碰运气。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#databaseReady")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {"pb.media.concurrency=1", "pb.media.queue-capacity=1",
         "pb.notify.media-wait=200ms"})

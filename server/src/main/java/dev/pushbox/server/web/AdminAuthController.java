@@ -122,17 +122,17 @@ public class AdminAuthController {
     }
     if (jwtSecret == null || jwtSecret.isBlank()) {
       throw new IllegalStateException("""
-          管理台已启用（pb.admin.secret 非空）但缺少 JWT 签名钥：pb.admin.jwt-secret 为空。
-              容器里它是 PB_ADMIN_JWT_SECRET（entrypoint 在启动 Java 之前就会挡住并给出这条），
-              生成方式：openssl rand -base64 32。
+          管理台已启用（配了登录口令）但没有 JWT 签名钥。
+              正常情况下这一项由服务端自动生成并回写 data/config/pushbox.json 的 admin.jwtKey，
+              走到这条说明那个文件被手工改坏了：删掉 admin.jwtKey 这一行重启即可重新生成。
               签名钥与登录口令必须是两个不同的值：同一个值既当口令又当 HMAC 钥时，谁都轮换不了。""");
     }
     byte[] key = jwtSecret.getBytes(StandardCharsets.UTF_8);
     if (key.length < MIN_JWT_SECRET_BYTES) {
       throw new IllegalStateException("""
-          pb.admin.jwt-secret（PB_ADMIN_JWT_SECRET）太短：当前 %d 字节，至少需要 %d 字节。
+          管理台的 JWT 签名钥（admin.jwtKey）太短：当前 %d 字节，至少需要 %d 字节。
               HS256 的签名钥短于 256 位时，离线把签名算出来比猜口令还容易。
-              生成方式：openssl rand -base64 32（该值必须与 PB_ADMIN_SECRET 不同）"""
+              这一项本该由服务端自动生成；手填过就删掉它，重启后会重新生成一把。"""
           .formatted(key.length, MIN_JWT_SECRET_BYTES));
     }
     return key;

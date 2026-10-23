@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PushBox 安装</title>
+<style>
+  :root {
+    --bg: #f2f5f9; --card: #fff; --line: #e5e8ee; --text: #1f2329; --muted: #7a828e;
+    --accent: #07c160; --accent-dark: #06ad56; --danger: #e5493a; --warn: #b8860b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 32px 20px 64px; }
+  header { margin-bottom: 24px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  section {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px; margin-bottom: 14px;
+  }
+  h2 { font-size: 16px; margin: 0 0 4px; }
+  .desc { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 0 0 4px; }
+  input[type=text], input[type=number], input[type=password], textarea {
+    width: 100%; padding: 8px 10px; font-size: 15px; color: var(--text);
+    border: 1px solid #dcdfe6; border-radius: 6px; background: #fff; outline: none;
+  }
+  input:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+  .row { display: flex; gap: 12px; }
+  .row > div { flex: 1; }
+  .field { margin-bottom: 12px; }
+  .switch { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 15px; color: var(--text); }
+  .switch input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .hint { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
+  .sub { border-left: 2px solid var(--line); padding-left: 14px; margin: 0 0 12px; }
+  button {
+    font-size: 15px; padding: 9px 18px; border-radius: 6px; border: 1px solid transparent;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button:hover { background: var(--accent-dark); }
+  button.ghost { background: #fff; color: var(--text); border-color: #dcdfe6; }
+  button.ghost:hover { border-color: var(--accent); color: var(--accent); background: #fff; }
+  button:disabled { opacity: .55; cursor: default; }
+  .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  #msg { font-size: 14px; margin: 12px 0 0; min-height: 22px; }
+  #msg.ok { color: var(--accent-dark); }
+  #msg.err { color: var(--danger); }
+  #msg.info { color: var(--muted); }
+  .hidden { display: none; }
+  code { background: #f5f6f8; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>PushBox 安装</h1>
+    <p>填完点「保存并启动」，服务端会立刻接着启动，不需要重启容器。带 <b>*</b> 的必填，其余留空即用默认值。</p>
+  </header>
+
+  <section>
+    <h2>1 · 数据库</h2>
+    <p class="desc">消息与频道都存在 MySQL 里（8.0 及以上）。库不存在时安装会顺手建一个。</p>
+    <div class="row">
+      <div class="field" style="flex:2">
+        <label>地址 *</label>
+        <input type="text" id="dbHost" value="127.0.0.1" autocomplete="off">
+        <p class="hint">库和 PushBox 在同一台机器上时，也别填 127.0.0.1：容器里的 127.0.0.1 是容器自己，要填局域网 IP。</p>
+      </div>
+      <div class="field" style="flex:0 0 110px">
+        <label>端口 *</label>
+        <input type="number" id="dbPort" value="3306">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>库名 *</label>
+        <input type="text" id="dbName" value="pushbox" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>用户名 *</label>
+        <input type="text" id="dbUser" value="pushbox" autocomplete="off">
+      </div>
+    </div>
+    <div class="field">
+      <label>密码 *</label>
+      <input type="password" id="dbPass" autocomplete="new-password">
+    </div>
+    <div class="actions">
+      <button class="ghost" id="testDb" type="button">测试连接</button>
+      <button class="ghost" id="restore" type="button">从数据库找回上次配置</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 · 图片与头像存哪里</h2>
+    <p class="desc">默认存在 PushBox 自己的数据目录里，不需要额外的存储服务。</p>
+    <div class="field">
+      <label>本地存储目录</label>
+      <input type="text" id="localPath" value="data/media" autocomplete="off">
+      <p class="hint">容器里是 <code>/app/data/media</code>，把 <code>/app/data</code> 挂到 NAS 的文件夹上就能保住图片。</p>
+    </div>
+    <label class="switch"><input type="checkbox" id="useS3"> 改用对象存储（RustFS / MinIO / 阿里云 OSS 等）</label>
+    <div id="s3Box" class="sub hidden">
+      <div class="field">
+        <label>服务地址 *</label>
+        <input type="text" id="s3Endpoint" placeholder="http://192.0.2.10:9000" autocomplete="off">
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>桶名 *</label>
+          <input type="text" id="s3Bucket" value="pushbox" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>区域</label>
+          <input type="text" id="s3Region" value="us-east-1" autocomplete="off">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Access Key *</label>
+          <input type="text" id="s3Ak" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Secret Key *</label>
+          <input type="password" id="s3Sk" autocomplete="new-password">
+        </div>
+      </div>
+      <label class="switch"><input type="checkbox" id="s3PathStyle" checked> Path-Style 访问（自建 MinIO/RustFS 需要勾上）</label>
+    </div>
+    <label class="switch"><input type="checkbox" id="encrypted"> 加密存储的图片与头像</label>
+    <div id="encBox" class="sub hidden">
+      <div class="field">
+        <label>加密口令（推荐）</label>
+        <input type="password" id="passphrase" autocomplete="new-password" placeholder="至少 12 个字符">
+        <p class="hint">口令本身不存盘，服务端用它派生出加密密钥，只保存校验信息。<b>忘了它就解不开已存的图片，且无法重设。</b></p>
+      </div>
+      <div class="field">
+        <label>或者：主钥（高级，与口令二选一）</label>
+        <input type="text" id="masterKey" placeholder="base64 的 32 字节，openssl rand -base64 32" autocomplete="off">
+      </div>
+    </div>
+    <div class="field">
+      <label>图片抓取放行主机（可选）</label>
+      <input type="text" id="mediaAllowHosts" placeholder="img.lan,10.0.0.20:8080" autocomplete="off">
+      <p class="hint">内网地址默认一律不抓（防 SSRF），所以图床在内网时必须在这里点名。写 <code>host</code> 或 <code>host:port</code>，逗号分隔，不带 <code>http://</code> 与路径。</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>3 · 管理台与服务</h2>
+    <p class="desc">管理台用来看频道、设备与搜索消息。留空即不启用（登录返回 403）。</p>
+    <div class="field">
+      <label>管理台口令</label>
+      <input type="password" id="adminPass" autocomplete="new-password" placeholder="留空 = 不启用管理台">
+      <p class="hint">登录时只填这一个口令，没有用户名。签名密钥由服务端自动生成，不需要你管。</p>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>服务端口</label>
+        <input type="number" id="port" value="7404">
+      </div>
+      <div class="field" style="flex:2">
+        <label>运维端点放行网段（可选）</label>
+        <input type="text" id="cidrs" placeholder="172.16.0.0/12,10.0.0.0/8" autocomplete="off">
+      </div>
+    </div>
+    <p class="hint"><code>/healthz</code> 与 <code>/actuator/**</code> 默认只允许本机访问；要从别的机器抓监控指标就在这里写网段。</p>
+  </section>
+
+  <section>
+    <div class="actions">
+      <button id="save" type="button">保存并启动</button>
+      <span id="msg" class="info"></span>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var msg = $('msg');
+
+  function say(text, kind) { msg.textContent = text || ''; msg.className = kind || 'info'; }
+
+  function toggle() {
+    $('s3Box').classList.toggle('hidden', !$('useS3').checked);
+    $('encBox').classList.toggle('hidden', !$('encrypted').checked);
+  }
+  $('useS3').addEventListener('change', toggle);
+  $('encrypted').addEventListener('change', toggle);
+
+  function collect() {
+    return {
+      port: parseInt($('port').value, 10) || 7404,
+      database: {
+        host: $('dbHost').value.trim(),
+        port: parseInt($('dbPort').value, 10) || 3306,
+        name: $('dbName').value.trim(),
+        username: $('dbUser').value.trim(),
+        password: $('dbPass').value
+      },
+      storage: {
+        s3: $('useS3').checked,
+        localPath: $('localPath').value.trim() || 'data/media',
+        endpoint: $('s3Endpoint').value.trim(),
+        region: $('s3Region').value.trim() || 'us-east-1',
+        bucket: $('s3Bucket').value.trim() || 'pushbox',
+        accessKey: $('s3Ak').value.trim(),
+        secretKey: $('s3Sk').value,
+        pathStyle: $('s3PathStyle').checked,
+        encrypted: $('encrypted').checked,
+        passphrase: $('passphrase').value,
+        masterKey: $('masterKey').value.trim()
+      },
+      admin: { password: $('adminPass').value },
+      security: {
+        internalCidrs: $('cidrs').value.split(/[\s,;]+/).filter(function (s) { return s.length > 0; })
+      },
+      media: {
+        allowHosts: $('mediaAllowHosts').value.split(/[\s,;]+/).filter(function (s) { return s.length > 0; })
+      }
+    };
+  }
+
+  function fill(config) {
+    if (!config) { return; }
+    var d = config.database || {}, s = config.storage || {}, a = config.admin || {}, sec = config.security || {};
+    var med = config.media || {};
+    if (config.port) { $('port').value = config.port; }
+    $('dbHost').value = d.host || ''; $('dbPort').value = d.port || 3306;
+    $('dbName').value = d.name || 'pushbox'; $('dbUser').value = d.username || 'pushbox';
+    $('dbPass').value = d.password || '';
+    $('useS3').checked = !!s.s3;
+    $('localPath').value = s.localPath || 'data/media';
+    $('s3Endpoint').value = s.endpoint || ''; $('s3Region').value = s.region || 'us-east-1';
+    $('s3Bucket').value = s.bucket || 'pushbox';
+    $('s3Ak').value = s.accessKey || ''; $('s3Sk').value = s.secretKey || '';
+    $('s3PathStyle').checked = s.pathStyle !== false;
+    $('encrypted').checked = !!s.encrypted;
+    $('passphrase').value = s.passphrase || ''; $('masterKey').value = s.masterKey || '';
+    $('adminPass').value = a.password || '';
+    $('cidrs').value = (sec.internalCidrs || []).join(',');
+    $('mediaAllowHosts').value = (med.allowHosts || []).join(',');
+    toggle();
+  }
+
+  function post(action, body) {
+    return fetch('/api/v1/setup' + (action ? '?action=' + action : ''), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); });
+  }
+
+  function busy(button, on, text) {
+    button.disabled = on;
+    if (text) { button.textContent = text; }
+  }
+
+  $('testDb').addEventListener('click', function () {
+    var b = this, old = b.textContent;
+    busy(b, true, '测试中…'); say('正在连接数据库…');
+    post('test', collect()).then(function (r) {
+      say(r.ok ? r.message : r.error, r.ok ? 'ok' : 'err');
+    }).catch(function (e) { say('请求失败：' + e, 'err'); })
+      .finally(function () { busy(b, false, old); });
+  });
+
+  $('restore').addEventListener('click', function () {
+    var b = this, old = b.textContent;
+    busy(b, true, '查找中…'); say('正在从库里找上一次的配置…');
+    post('restore', collect()).then(function (r) {
+      if (r.ok) { fill(r.config); say('已填回上次的配置，核对后点「保存并启动」。', 'ok'); }
+      else { say(r.error, 'err'); }
+    }).catch(function (e) { say('请求失败：' + e, 'err'); })
+      .finally(function () { busy(b, false, old); });
+  });
+
+  $('save').addEventListener('click', function () {
+    var b = this, old = b.textContent, config = collect();
+    busy(b, true, '校验中…'); say('正在校验并写入配置…');
+    post('', config).then(function (r) {
+      if (!r.ok) { say(r.error, 'err'); busy(b, false, old); return; }
+      busy(b, true, '已保存');
+      var same = config.port === (parseInt(location.port, 10) || 80);
+      say(same ? r.message + '（本页稍后会自动变成登录页）'
+               : r.message + ' 端口改成了 ' + config.port + '，请打开 http://' + location.hostname + ':' + config.port + '/',
+           'ok');
+    }).catch(function (e) { say('请求失败：' + e, 'err'); busy(b, false, old); });
+  });
+})();
+</script>
+</body>
+</html>

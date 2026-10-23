@@ -1,30 +1,40 @@
+# 这一份只放"不需要部署者决定的东西"：连接池、限流、巡检节奏、日志与端点口径。
+# 需要人填的（库地址与口令、存储、管理台口令、端口）全在 data/config/pushbox.json 里，
+# 由安装页写出来、RuntimeConfigEnvironmentPostProcessor 读进来，优先级高于本文件。
+# 没有 profile 之分：dev 与生产跑的是同一份 yml，差别只在那个 JSON 文件的内容。
 spring:
   application: { name: pushbox-server }
-  profiles: { active: dev }
   jackson:
     default-property-inclusion: non_null
     deserialization: { fail-on-unknown-properties: false }
   datasource:
+    # url/username/password 不在这里出现：它们来自 data/config/pushbox.json。
     # 数据库可能在几百毫秒 RTT 之外（本机联调走 Tailscale），连接必须常驻保温：
     # 新建一条 MySQL 连接本身就要好几个来回，冷连接池会把单条消息的端到端延迟拖到秒级。
     hikari:
       maximum-pool-size: 10
       minimum-idle: 10
-      connection-timeout: 15000
+      # 60s 就是"等库就绪"的全部机制：库和 PushBox 同时起（compose、NAS 一键部署）时，
+      # MySQL 首轮初始化要建系统表，20s 探活等不到它。以前这件事由入口脚本的
+      # 等待循环 + 一个环境变量负责，现在 Hikari 第一次取连接时自己等。
+      connection-timeout: 60000
       keepalive-time: 20000
       max-lifetime: 900000
   flyway: { enabled: true, out-of-order: false, baseline-on-migrate: true }
 
 server:
+  # 端口同样以 JSON 里的为准；这个默认值只在配置文件缺失时兜底（那种情况下跑的是安装页）。
   port: 7404
   compression: { enabled: false }
+  # 反代（Caddy/Nginx）在前时 X-Forwarded-* 只认一跳，而 §5.2 的运维端点准入故意只看
+  # getRemoteAddr()，不读任何客户端自填的头。
+  forward-headers-strategy: none
   # 入站 body 只可能是 JSON 与若干 URL（没有 multipart 上传口），留足余量即可
   tomcat:
     max-swallow-size: 8MB
     accesslog:
       # §13：正文不能出现在"任何"日志里，访问日志也是日志。默认 pattern 的 %r 含完整查询串，
       # 于是 /search?q=关键词 会把用户搜的内容落到另一个文件——所以默认关闭。
-      # 运维要开的话（-Dserver.tomcat.accesslog.enabled=true），只能用下面这条没有 %q/%r 的 pattern。
       enabled: false
       pattern: '%h %l %u %t "%m %U %H" %s %b'
   error: { include-message: never, include-stacktrace: never }
@@ -42,8 +52,7 @@ management:
       show-components: never
 
 # 日志格式不在这里配：见 logback-spring.xml。那边用 %pbmsg/%pbex 替代 %msg，
-# 落盘前统一过 LogMasking；logging.pattern.console 一旦写回来就会绕过脱敏，所以这里只留说明。
-# logging.level.* 仍然生效（Boot 在 logback 配置之后应用），需要临时调级别用 -Dlogging.level.dev.pushbox=DEBUG。
+# 落盘前统一过 LogMasking。logging.level.* 仍然生效，需要临时调级别用 -Dlogging.level.dev.pushbox=DEBUG。
 
 pb:
   ingest: { base-path: /message, credential-fail-lock: 5, lock-window: 5m }
@@ -62,10 +71,6 @@ pb:
   retention: { max-message-bytes: 32768 }
   # 抓图频率不在这里：那是 pb.media.fetch-rate-per-channel-per-min，管的不是"提交几条"而是"替它取几张"。
   ratelimit: { per-channel-per-min: 60, burst: 20, per-ip-per-min: 120, per-device-per-min: 300 }
-  # §5.2 运维端点（/healthz、/actuator/**）的准入白名单：默认空=只放行环回，
-  # 要放开别的源段就显式写 CIDR（逗号分隔，如 172.16.0.0/12），写错当场拒绝启动。
-  # prod 由 PB_SECURITY_INTERNAL_CIDRS 覆盖（见 application-prod.yml 与 deploy/docker-compose.yml）。
-  security: { internal-cidrs: "" }
   # §14 日计数器回收（DailyCounterSweep）：只按天累计、从不回收的表跑一年就是每频道 365 行死字节。
   counters: { retention-days: 90, sweep-interval: 24h }
   # 定时推送扫描。扫表间隔决定触发精度（cron 到分以下不会更准），batch-size 限制单轮最多投递几条。
@@ -73,3 +78,17 @@ pb:
   # D19 服务端全文搜索。fulltext=false 时一律 LIKE（临时绕开 ngram 索引问题用）；
   # max-limit 夹住客户端传的 limit，搜索是单条大查询，不能由客户端决定扫多少行。
   search: { fulltext: true, min-query-len: 1, max-limit: 200 }
+  # 存储：type 由 JSON 里的「是否使用对象存储」那个开关决定（true→s3，false→local），
+  # 这里只给两个都不需要人填的默认落点。相对路径以工作目录为基准，容器里就是 /app/data 下面。
+  storage: { type: local, local-path: data/media }
+  s3:
+    region: us-east-1
+    bucket: pushbox
+    path-style: true
+    delete-grace: 168h
+    # 宽限期巡检节奏（§4.5 media sweep）：tombstone 只把对象标成待删，过 delete-grace 才真删。
+    # 要现场看真删：--pb.s3.delete-grace=2s --pb.s3.purge-interval=5s（探针 ⑯ 就是这么跑的）
+    purge-initial-delay: 60s
+    purge-interval: 1h
+    # 桶内形态由 JSON 里的「加密存储的图片与头像」开关决定（true→sse-c）。
+    object-encrypt: none

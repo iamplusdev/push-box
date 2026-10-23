@@ -16,7 +16,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -24,7 +24,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * §4.5 头像转存的真链路测试（B3）：URL 头像走与正文图片同一道 SSRF 闸与同一套魔数复验，
  * 内联 data: 图解码后直接落桶、完全不出网。转存是异步的（200 早已回给第三方），所以只能轮询等结果。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#objectStorageReady")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class AvatarFetchTest {
 

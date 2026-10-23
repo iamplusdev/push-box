@@ -1,0 +1,5 @@
+# data/config/pushbox.json → Spring 属性的唯一入口（见 RuntimeConfigEnvironmentPostProcessor）。
+# Boot 3 仍然按 spring.factories 认 EnvironmentPostProcessor；
+# 换成 AutoConfiguration.imports 是另一回事，那个只管自动配置类。
+org.springframework.boot.env.EnvironmentPostProcessor=\
+dev.pushbox.server.setup.RuntimeConfigEnvironmentPostProcessor

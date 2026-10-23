@@ -27,7 +27,7 @@ class MediaObjectsConfigTest {
         Base64.getEncoder().encodeToString(new byte[33])}) {
       assertThatThrownBy(() -> build("sse-c", unusable))
           .isInstanceOf(IllegalStateException.class)
-          .hasMessageContaining("pb.s3.master-key");
+          .hasMessageContaining("主钥");
     }
   }
 

@@ -29,8 +29,8 @@ body:
     id: topology
     attributes:
       label: 部署拓扑
-      description: 存储用 s3 还是 local（`PB_STORAGE_TYPE`）、对象存储是哪台、服务端是否在容器里
-      placeholder: "PB_STORAGE_TYPE=s3，RustFS 同机 docker 网络内，服务端在容器里"
+      description: 安装页里勾没勾对象存储、对象存储是哪台、服务端是否在容器里（**不要贴配置文件，里面有口令**）
+      placeholder: "勾了对象存储，RustFS 同机 docker 网络内，服务端在容器里"
     validations:
       required: true
   - type: textarea

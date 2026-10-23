@@ -10,7 +10,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -20,7 +20,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * 这个 sweep 是全库扫的（不属于某个分组），所以夹具的 created_at 用 1/2/3 这种绝对老的毫秒值，
  * 保证在 ORDER BY created_at 与 limit 面前不受库里历史积压干扰。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#databaseReady")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class MediaRetryStoreTest {
 

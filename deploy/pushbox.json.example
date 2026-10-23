@@ -1,0 +1,33 @@
+{
+  "port": 7404,
+  "database": {
+    "host": "192.0.2.20",
+    "port": 3306,
+    "name": "pushbox",
+    "username": "pushbox",
+    "password": "把库口令填在这里"
+  },
+  "storage": {
+    "s3": false,
+    "localPath": "data/media",
+    "endpoint": "",
+    "region": "us-east-1",
+    "bucket": "pushbox",
+    "accessKey": "",
+    "secretKey": "",
+    "pathStyle": true,
+    "encrypted": false,
+    "passphrase": "",
+    "masterKey": ""
+  },
+  "admin": {
+    "password": "",
+    "jwtKey": ""
+  },
+  "security": {
+    "internalCidrs": []
+  },
+  "media": {
+    "allowHosts": []
+  }
+}

@@ -14,7 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -23,7 +23,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * <b>接入是投递过滤器不是权限边界</b>（§4.1 的读凭据仍是设备 token，密钥只作二次确认），
  * 以及<b>过滤模式必须由用户显式打开</b>——接第一个频道就静默掐断其余频道，是用户没要求过的动作。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#databaseReady")
 // RANDOM_PORT 不是随手写的：MOCK 上下文里 WebSocketConfig 的 ServletServerContainerFactoryBean
 // 拿不到 jakarta.websocket.server.ServerContainer，整个应用上下文直接启动失败。
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)

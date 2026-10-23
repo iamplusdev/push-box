@@ -2,20 +2,32 @@
 # §11.2 备份。库内是明文（加密只覆盖"服务端→客户端"一跳），所以上传异地前必须 age/gpg 加密。
 # 产物：
 #   pushbox-<UTC>.sql.gz.age    —— mysqldump --single-transaction（InnoDB 一致性快照，不锁表）
+#   config-<UTC>.json.age       —— data/config/pushbox.json（见第 0 步：丢了它，加密过的图片全解不开）
 #   rustfs-<UTC>.tar.age        —— RustFS/S3 数据卷打包（对象/图片；服务端是唯一归档源，丢了不可恢复）
-#   media-<UTC>.tar.age         —— 本地文件系统存储备份（PB_STORAGE_TYPE=local 时）
+#   media-<UTC>.tar.age         —— 本地存储目录备份（安装页没勾「改用对象存储」时图片落在这里）
 #
 # 依赖：mysqldump、age（默认；用 gpg 见下方注释）。挂到 cron/systemd timer 定时跑，产物再同步异地。
 #
 # 用法：
-#   MYSQL_HOST=<DB_HOST> PB_DB_PASSWORD=... PB_S3_ACCESS_KEY=... \
-#   AGE_RECIPIENT=<age 公钥或 ssh 公钥> [RUSTFS_DATA_DIR=/path/to/data/rustfs] [MEDIA_DIR=/path/to/data/media] ./backup.sh
+#   MYSQL_HOST=<DB_HOST> PB_DB_PASSWORD=... PB_S3_ACCESS_KEY=... AGE_RECIPIENT=<age 公钥或 ssh 公钥> \
+#   [CONFIG_FILE=/path/to/data/config/pushbox.json] [MEDIA_DIR=/path/to/data/media] \
+#   [RUSTFS_DATA_DIR=/path/to/rustfs/data] ./backup.sh
+#
+# 这几个 PB_* 是**本脚本自己的入参**，不是服务端读的：服务端现在只认 data/config/pushbox.json，
+# 不读环境变量。取值就在那份 JSON 里，现抄：
+#   PB_DB_PASSWORD   ← database.password        MYSQL_HOST/MYSQL_PORT ← database.host/port
+#   PB_S3_ENDPOINT   ← storage.endpoint         PB_S3_ACCESS_KEY/SECRET_KEY ← storage.accessKey/secretKey
+#   PB_S3_BUCKET     ← storage.bucket
 #
 # 复用远端 RustFS（拓扑 A，没有本地卷）时不设 RUSTFS_DATA_DIR，改把"取对象"交给 mc mirror：见第 2 步备注。
-# 使用本地文件系统存储（拓扑 C）时设置 MEDIA_DIR=<本地卷挂载点>，跳过 S3/RustFS 备份。
-#   compose 用的是 named volume，挂载点现查、不要抄：
-#     MEDIA_DIR="$(docker volume inspect pushbox_server_media -f '{{.Mountpoint}}')"
-#   自己换成宿主绑定挂载（./data/media）时，MEDIA_DIR 就直接指那个目录。
+# 使用本地存储（拓扑 C）时设置 MEDIA_DIR=<本地存储目录>，跳过 S3/RustFS 备份。
+#   compose 用的是 named volume（整卷挂在容器 /app/data，媒体在它的 media/ 子目录），挂载点现查、不要抄：
+#     docker volume ls | grep pushbox        # 先认卷名：它跟着起法走
+#     vol="$(docker volume inspect <卷名> -f '{{.Mountpoint}}')"
+#     CONFIG_FILE="$vol/config/pushbox.json" MEDIA_DIR="$vol/media" ./backup.sh
+#   卷名不是一个固定值：`docker run -v pushbox_data:/app/data` 建的就叫 pushbox_data，
+#   compose 会加项目名前缀（docker-compose.yml → pushbox_pushbox_data，nas 那本 → pushbox-nas_pushbox_data）。
+#   自己换成宿主绑定挂载（./data）时，两个路径直接指那个目录下的 config/pushbox.json 与 media。
 
 set -euo pipefail
 
@@ -34,6 +46,31 @@ mkdir -p "$dest"
 
 db_host="${MYSQL_HOST:-127.0.0.1}"
 db_port="${MYSQL_PORT:-3306}"
+
+# 0) 配置文件备份 —— 这一份丢了，前面几份都白备。
+#    data/config/pushbox.json 里明文存着库口令、桶 AK/SK、管理台口令，以及**派生媒体 KEK 的加密口令**
+#    （或那把 base64 主钥）。库的 app_state 只存派生用的盐与校验值，KEK 本身不在库里；
+#    所以"库备份恢复成功、图片全部 404 且不可恢复"是这份文件缺失的典型结局。
+#    它自己也含明文凭据，跟其它产物一样必须加密后才出机器。
+#    没给 CONFIG_FILE 就从容器里读（CONFIG_CONTAINER，默认按 compose 的命名规则拼一个）。
+config_src="${CONFIG_FILE:-}"
+container="${CONFIG_CONTAINER:-pushbox-pushbox-server-1}"
+if [ -z "$config_src" ] && command -v docker >/dev/null 2>&1; then
+  if docker exec "$container" test -f /app/data/config/pushbox.json >/dev/null 2>&1; then
+    config_src="$dest/pushbox.json"
+    docker exec "$container" cat /app/data/config/pushbox.json > "$config_src"
+    chmod 600 "$config_src"
+  fi
+fi
+if [ -n "$config_src" ] && [ -f "$config_src" ]; then
+  age -r "$recipient" -o "$dest/config-$stamp.json.age" "$config_src"
+  if [ "$config_src" = "$dest/pushbox.json" ]; then rm -f "$config_src"; fi
+  echo "✅ 配置文件已备份: $config_src"
+else
+  echo "⚠️  没有备份 data/config/pushbox.json —— 加密口令/主钥不在库里，缺了它恢复出来的图片全部解不开。" >&2
+  echo "   给它一条路：CONFIG_FILE=/path/to/data/config/pushbox.json，或 CONFIG_CONTAINER=<容器名>（默认 $container）。" >&2
+  echo "   卷里的路径：docker volume ls | grep pushbox; vol=\$(docker volume inspect <卷名> -f '{{.Mountpoint}}'); CONFIG_FILE=\"\$vol/config/pushbox.json\"" >&2
+fi
 
 # 1) 数据库逻辑备份
 #    --single-transaction 取一致性快照不锁 InnoDB；--quick 逐行流式、不把大表灌进内存；
@@ -74,7 +111,8 @@ else
     echo "✅ S3/RustFS 已通过 mc mirror 备份"
   else
     echo "⚠️  跳过对象备份：既没给 MEDIA_DIR/RUSTFS_DATA_DIR，也没装 mc。" >&2
-    echo "   如果使用本地存储，请设置 MEDIA_DIR=\"\$(docker volume inspect pushbox_server_media -f '{{.Mountpoint}}')\""
+    echo "   本地存储时指到卷里的 media 子目录：" >&2
+    echo "     vol=\$(docker volume inspect pushbox_pushbox_data -f '{{.Mountpoint}}'); MEDIA_DIR=\"\$vol/media\"" >&2
   fi
 fi
 
@@ -82,8 +120,11 @@ echo "备份完成 -> $dest"
 ls -lh "$dest"
 
 # ---- 恢复 ----
+#   配置文件：age -d -i ~/.age/id.key config-<UTC>.json.age > data/config/pushbox.json && chmod 600 同一路径
+#             （容器里是 /app/data/config/pushbox.json，属主 10001；先放它再启服务端，否则又回到安装页）
 #   数据库：age -d -i ~/.age/id.key "$dump" | gunzip | mysql -h.. -u pushbox -p pushbox
 #   RustFS：age -d -i ~/.age/id.key "$tarball" | tar -C ./data -xf -   # RustFS 停止时解压，再起容器
 #   本地存储：age -d -i ~/.age/id.key "$tarball" | tar -C ./data -xf -
+# 顺序上配置先落：加密口令/主钥要从配置派生出 KEK，才解得开库里那些对象钥封装。
 # 用 gpg 替代 age 的话，把管道里的 `age -r "$recipient"` 换成 `gpg --encrypt --recipient "$GPG_RECIPIENT"`，
 # 恢复端对应 `gpg --decrypt`。

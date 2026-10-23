@@ -32,7 +32,7 @@ android/dev/
 # pushbox-server 的日志用的是 named volume，不落在这里。
 deploy/data/
 
-# 本地文件系统存储数据（PB_STORAGE_TYPE=local 时）
+# 本地文件系统存储数据（安装页里没勾「改用对象存储」时图片落这里）
 deploy/media/
 
 .idea/
@@ -59,10 +59,11 @@ windows/bin/
 # Kotlin 编译缓存与错误报告（errors/ 与 sessions/ 都是每次构建重生的）
 android/.kotlin/
 
-# dev 的本地对象存储默认落点：application-dev.yml 里是 ./data/media，而对象键自带 `media/` 前缀，
-# 所以里面长成 data/media/media/<msg_id>/0.bin——多那一层是键的形状，不是配错了目录。
+# 运行期数据目录：安装页写出的 config/pushbox.json（**里面有库口令、Access/Secret Key、
+# 加密口令与主钥，全是明文**）、本地存储的图片、日志。落在哪取决于工作目录——
+# 直接跑 jar 是仓库根，`mvn -pl server test` 是 server/，所以两个路径都要挡。
+# 图片那层长成 data/media/media/<msg_id>/0.bin：多出来的一层是对象键自带的 `media/` 前缀，不是配错了目录。
 /data/
-# 同一件事的另一个形状：`mvn -pl server -am test` 的工作目录是 server/，local 模式下就在 server/data/ 里长出来
 /server/data/
 
 # 真机截图与验收现场，每次跑都换一批名字；留本机当证据，不入库

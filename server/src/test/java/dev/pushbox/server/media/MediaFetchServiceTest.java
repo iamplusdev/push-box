@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -25,7 +25,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * §4.5 抓取链路的真链路测试：真 MySQL + 真 RustFS + 真公网图床，不 mock。
  * 没有对象存储凭据时整类跳过（§13 要求 SSRF 与抓取用例都在 CI 之外可复跑）。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#objectStorageReady")
 // 应用上下文里有 WebSocket 配置，它要真实的 ServletContext，所以只能起随机端口的内嵌容器
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class MediaFetchServiceTest {

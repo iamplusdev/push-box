@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.ThrowableAssert.catchThrowableOfType;
 
 import dev.pushbox.server.config.PbProperties;
+import dev.pushbox.server.setup.RuntimeConfig;
+import dev.pushbox.server.test.TestConfig;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -14,7 +16,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
@@ -26,13 +28,13 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
  * §4.5 对象存储层与真实 RustFS 的对话，不做 mock：明文（none）与密文（sse-c）两种桶内形态都要过。
  * 没有凭据环境变量时整个类跳过，避免 CI/无存储环境红一片。
  */
-@EnabledIfEnvironmentVariable(named = "PB_S3_ACCESS_KEY", matches = ".+")
+@EnabledIf("dev.pushbox.server.test.TestConfig#objectStorageReady")
 class MediaObjectsTest {
 
   private static final String RUN_PREFIX = "pushbox-test/" + System.currentTimeMillis() + "/";
   /**
    * 只为这一批临时对象存在的测试主钥：跑完就连对象一起删掉，不绑任何环境的凭据，也不进生产配置。
-   * 生产的主钥必须从 PB_S3_MASTER_KEY 来（§4.5），一旦定下就不能换——换了旧对象再也读不出来。
+   * 生产的主钥来自 data/config/pushbox.json 的 storage.masterKey（§4.5），一旦定下就不能换——换了旧对象再也读不出来。
    */
   private static final String TEST_MASTER_KEY = Base64.getEncoder().encodeToString(new byte[] {
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
@@ -181,11 +183,12 @@ class MediaObjectsTest {
 
   private static MediaObjects build(String mode, String masterKey) {
     PbProperties.S3 config = new PbProperties.S3();
-    config.setEndpoint(System.getenv().getOrDefault("PB_S3_ENDPOINT", "http://127.0.0.1:7101"));
+    RuntimeConfig.Storage source = TestConfig.storage();
+    config.setEndpoint(source.getEndpoint());
     config.setRegion("us-east-1");
-    config.setBucket(System.getenv().getOrDefault("PB_S3_BUCKET", "pushbox"));
-    config.setAccessKey(System.getenv("PB_S3_ACCESS_KEY"));
-    config.setSecretKey(System.getenv("PB_S3_SECRET_KEY"));
+    config.setBucket(source.getBucket());
+    config.setAccessKey(source.getAccessKey());
+    config.setSecretKey(source.getSecretKey());
     config.setPathStyle(true);
     config.setObjectEncrypt(mode);
     config.setMasterKey(masterKey);
