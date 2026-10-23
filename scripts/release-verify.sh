@@ -700,6 +700,20 @@ else
     fail "docker-publish.yml 既没有注入也没有核对闸门：tag、pom、compose 三者对不上时没有任何东西会拦下来"
 fi
 
+# Hub 上只留版本标签。2026-10-23 的口径：一个每次合并都移动的 `main` 与一串没人会去拉的 `sha-*`，
+# 换来的只是"能拉到最新合并"，代价是仓库里永远挂着一格不知道指向哪次构建的浮动镜像；
+# 而"回滚到上一版"靠的是留在 Hub 上的历史版本标签——它们本来就不可变，不需要浮动标签兜底。
+# 这条只能静态判：本机没有 docker，推上去才知道 metadata 算出什么。
+if [ -f "$DP" ]; then
+    if grep -qE 'type=(ref,event=branch|sha)' "$DP"; then
+        fail "docker-publish.yml 还在给分支出标签（main / sha-*）：这条链现在只该产 X.Y.Z / X.Y / latest"
+    elif ! grep -q 'value=latest' "$DP"; then
+        fail "docker-publish.yml 不再出 latest：装的人写的就是 :latest，去掉它等于把主路径的拉取指令作废"
+    else
+        pass "docker-publish.yml 只出版本标签（X.Y.Z / X.Y / latest），不产 main / sha-*"
+    fi
+fi
+
 # 三条链必须各认各的标签：自己的 <component>-v* 加上旧的 v*（三端一起发）。
 # 漏掉自己的前缀 = 打 tag 根本没有流水线跑；把别人的前缀写进 tags = "只改服务端"又把客户端带上。
 # 两种都是解耦承诺的破口，且在本机看不出来（tag 推上去才知道），所以在这里静态判死。

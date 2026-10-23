@@ -15,17 +15,19 @@ name: Build and Push Docker Image
 # workflow 不再现场改写它。旧写法在 tag 事件上跑 `set-version.sh "${GITHUB_REF_NAME#v}"`，于是"tag 说 1.2.3、
 # pom 说 1.1.0"也能构建成功：推上去的是一个自称 1.2.3、里面跑的却是 1.1.0 的镜像，而 Docker Hub 推出去收不回来——
 # 被人拉走的那份 manifest 就是错的。现在这种不一致在构建之前就被下面那道闸门拦红。
-# 版本标签只在 tag 事件上打（server-v1.1.2 / v1.1.2 → `1.1.2` / `1.1` / `latest`）；push main 只出 `main` 与 `sha-<7位>`。
-# 这不是偷懒，是不可变性：`1.1.0` 如果被每次合并都覆盖一次，钉着它的人今天和上周拉到的就不是同一个镜像，
-# "回滚到 1.1.0"这件事就不存在了。要让 main 也推 X.Y.Z，得先接受这一点。
-# 这一口径 2026-10-20 由维护者确认过（备选方案都否掉了），不是漏配——别把它"顺手补全"。
+# Hub 上**只有版本标签**：tag 事件（server-v1.1.2 / v1.1.2）出 `1.1.2` / `1.1` / `latest`，别的一个不出。
+# 2026-10-23 起去掉了 `main` 与 `sha-<7位>`：一个每次合并都要移动的分支标签，换来的只是"能拉到最新合并"，
+# 而"回滚到上一版"靠的是历史版本标签（`1.1.5`、`1.1.4`… 都留在 Hub 上且不可变），不需要浮动标签兜底。
+# 在**分支**上手动 dispatch 只构建不推（判据在下面 push 那道闸），要重出某个版本就在**那个 tag 上** dispatch。
+# 版本标签的不可变性是这套口径的底：`1.1.0` 如果被每次合并都覆盖一次，钉着它的人今天和上周拉到的
+# 就不是同一个镜像，"回滚到 1.1.0"这件事就不存在了。
 on:
   push:
     tags: ["server-v*", "v*"]
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 只构建、不推 Docker Hub（用来验 DOCKERHUB_* secrets 和 metadata 算出来的标签清单）
+        description: 只构建、不推 Docker Hub（在 tag 上 dispatch 时用来核对标签清单；在分支上 dispatch 本来就不推）
         type: boolean
         default: true
 
@@ -65,12 +67,14 @@ jobs:
       - name: 版本号一致性闸门
         id: version
         env:
-          # 用 github context 而不是 GITHUB_REF_TYPE 那个环境变量：本仓的门禁至今一次都没真跑过，
-          # 少依赖一个"文档里说有、没人验过"的隐式变量就少一处可能翻红。
-          REF_TYPE: ${{ github.ref_type }}
+          # 判"这次是不是要发某个版本"用 github.ref 的前缀，不用 GITHUB_REF_TYPE / github.ref_type：
+          # 后者在"于 tag 上点 workflow_dispatch"这种场景下到底是什么语义，本仓没有实测过，
+          # 而下面 push 那道闸要拿它当唯一依据——语义猜错就是"该推的没推"。refs/tags/ 前缀是看得见的字面量。
+          REF: ${{ github.ref }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          if [ "${REF#refs/tags/}" != "${REF}" ]; then IS_TAG=true; else IS_TAG=false; fi
           # 两条取值都要接 `|| true`：grep 没匹配上时退出码非 0，会被上面的 set -e 直接掐掉这一步，
           # 于是下面那两条错误说明永远打印不出来——闸门红了却没人知道为什么红。
           # pom 这条要连标签尖括号一起锚定：只写 grep -oE '[0-9]+\.[0-9]+\.[0-9]+' 的话，
@@ -78,7 +82,7 @@ jobs:
           # 哪天改成 SNAPSHOT 开发版，这条要在分支事件上容忍后缀，别把闸门删掉。
           POM_VERSION=$(grep -m1 -oE '<version>[0-9]+\.[0-9]+\.[0-9]+</version>' pom.xml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
           COMPOSE_TAG=$(grep -m1 -E 'image: docker\.io/iamplusdev/push-box:' infra/docker-compose.yml | sed -E 's#^.*:##' || true)
-          echo "ref=${REF_TYPE}/${REF_NAME} pom=${POM_VERSION} compose=${COMPOSE_TAG}"
+          echo "ref=${REF} (${IS_TAG}) pom=${POM_VERSION} compose=${COMPOSE_TAG}"
           if [ -z "${POM_VERSION}" ]; then
             echo "::error::没从 pom.xml 读出 X.Y.Z 版本号（pom 写法变了就改这条判据的取值方式，别把它删了）"
             exit 1
@@ -87,7 +91,7 @@ jobs:
             echo "::error::没在 infra/docker-compose.yml 找到 image: docker.io/iamplusdev/push-box:<tag>——照 compose 起的人不知道该拉哪一版"
             exit 1
           fi
-          if [ "${REF_TYPE}" = "tag" ]; then
+          if [ "${IS_TAG}" = "true" ]; then
             # server-v1.2.3 与旧的 v1.2.3 都取 X.Y.Z
             TAG_VERSION="${REF_NAME##*-v}"
             TAG_VERSION="${TAG_VERSION#v}"
@@ -102,25 +106,30 @@ jobs:
           fi
           echo "version=${POM_VERSION}" >> "$GITHUB_OUTPUT"
           echo "major_minor=${POM_VERSION%.*}" >> "$GITHUB_OUTPUT"
+          echo "is_tag=${IS_TAG}" >> "$GITHUB_OUTPUT"
           echo "✅ 版本口径一致：${POM_VERSION}"
 
-      # dry-run（workflow_dispatch 勾了"不推"）时只构建并 load 进 runner 本地 daemon：
-      # 用来验 DOCKERHUB_* 这对 secrets 到底能不能登录、metadata 算出的标签清单长什么样，
-      # 而不在 Docker Hub 上留下任何东西。注意 push=false 且没有任何导出目标时 buildx 会直接失败
-      # （没有 export target），所以这里必须配一个 load。
+      # 只有 tag 才可能真推 Hub，且 tag 上勾了 dry_run 也只构建。
+      # 分支 dispatch 永远不推：它的用途是"验 DOCKERHUB_* 能不能登录、这份 Dockerfile 还编不编得出来"。
+      # 注意 push=false 时下面仍需要一个标签给 buildx 当导出目标（没有 export target 时 buildx 直接失败），
+      # 所以 metadata 里配了一条只在非 tag 上启用的占位标签，它只活在 runner 本地。
       - name: 本次是否真推 Docker Hub
         id: gate
         env:
           EVENT_NAME: ${{ github.event_name }}
           DRY_RUN: ${{ inputs.dry_run }}
+          IS_TAG: ${{ steps.version.outputs.is_tag }}
         run: |
           set -euo pipefail
-          if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ "${DRY_RUN}" = "true" ]; then
+          if [ "${IS_TAG}" != "true" ]; then
+            echo "push=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::非 tag 触发（${EVENT_NAME} ${GITHUB_REF_NAME}）：只构建，Hub 上不会多任何东西"
+          elif [ "${DRY_RUN}" = "true" ]; then
             echo "push=false" >> "$GITHUB_OUTPUT"
             echo "::notice::dry-run：只构建，不推 Docker Hub。下面打印的标签本次不会真的写进仓库"
           else
             echo "push=true" >> "$GITHUB_OUTPUT"
-            echo "✅ 本次会真的推送（${EVENT_NAME}）"
+            echo "✅ 本次会真的推送（${EVENT_NAME} → tag）"
           fi
 
       - name: Set up Docker Buildx
@@ -138,17 +147,18 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            # 分支（main）：main + sha-<短>
-            type=ref,event=branch
-            type=sha,prefix=sha-,format=short
-            # 标签事件（server-v1.2.3 / v1.2.3）：X.Y.Z 与 X.Y。
+            # 只有 tag（server-v1.2.3 / v1.2.3，含在这个 tag 上手动 dispatch）才出标签：X.Y.Z / X.Y / latest。
             # 不用 type=semver：它只认 vX.Y.Z 这种裸 semver，组件前缀（server-v）会被整个忽略；
             # 版本值由上一道闸门从 pom 现读，这里直接引用它的输出。
-            type=raw,value=${{ steps.version.outputs.version }},enable=${{ github.ref_type == 'tag' }}
-            type=raw,value=${{ steps.version.outputs.major_minor }},enable=${{ github.ref_type == 'tag' }}
-            # latest 只给标签事件。能走到这里的 tag 已经过了"版本 = pom 的严格 X.Y.Z"那道闸，
+            # 分支与分支 dispatch 不再产 main / sha-<短>——Hub 上只留版本标签，见文件头那段。
+            type=raw,value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.is_tag == 'true' }}
+            type=raw,value=${{ steps.version.outputs.major_minor }},enable=${{ steps.version.outputs.is_tag == 'true' }}
+            # latest 只给 tag。能走到这里的 tag 已经过了"版本 = pom 的严格 X.Y.Z"那道闸，
             # 所以不存在把 latest 指向预发布版本的风险。
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=latest,enable=${{ steps.version.outputs.is_tag == 'true' }}
+            # 非 tag 时上面三条全关，而 push=false 仍要有一个导出目标（buildx 没有 tag 会直接失败），
+            # 所以给一个只存在于 runner 本地的占位标签。它永远不会到 Hub：push 那道闸已经先判了 false。
+            type=raw,value=dispatch-${{ github.run_number }},enable=${{ steps.version.outputs.is_tag != 'true' }}
           labels: |
             # 版本号还要打进镜像本身：`docker image inspect` 读得到，不用靠标签名猜自己跑的是哪一版。
             # metadata 自己的 org.opencontainers.image.version 在 tag 事件上取 git tag 名、
