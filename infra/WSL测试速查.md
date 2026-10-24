@@ -69,12 +69,12 @@ docker compose -f docker-compose-wsl.yml --env-file wsl-test.env ps
 
 ## 2. 镜像标签要对得上
 
-`docker-compose-wsl.yml` 里写死的是 `image: pushbox/server:1.1.0`（跟 `pom.xml` 走，
+`docker-compose-wsl.yml` 里写死的是 `image: pushbox/server:1.1.1`（跟 `pom.xml` 走，
 由 `scripts/set-version.sh --only=server` 统一改）。绕开 compose 自己构建时必须打成同一个标签，
 否则 compose 找不到镜像又去拉远端：
 
 ```bash
-docker buildx build --network=host -f infra/Dockerfile -t pushbox/server:1.1.0 --load .
+docker buildx build --network=host -f infra/Dockerfile -t pushbox/server:1.1.1 --load .
 ```
 
 `--network=host` 是为了躲开下面 Q3 那个 IPv6 坑，它只影响构建，不进镜像、不影响运行时网络。
