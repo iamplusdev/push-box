@@ -1,0 +1,36 @@
+# 换行规则写在这里，索引一律存 LF，检出时按下面的规则给行尾。
+# 只靠安装级 core.autocrlf 时，任何读不到那份配置的 Git（WSL 的、IDE 自带的）
+# 都会把 Windows 侧检出的 CRLF 文件读成"已修改"，而内容其实一字未动。
+
+* text=auto
+
+# 要在容器、WSL、CI 里直接执行的，必须 LF
+*.sh text eol=lf
+*.mjs text eol=lf
+*.sql text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+
+# cmd.exe 对 LF 的容错不值得赌
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制不参与任何换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.jar binary
+*.zip binary
+*.exe binary
+*.dll binary
+*.pdb binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.jks binary
+*.keystore binary
