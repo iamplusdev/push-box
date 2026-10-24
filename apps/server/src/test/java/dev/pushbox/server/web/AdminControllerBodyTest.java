@@ -65,6 +65,8 @@ class AdminControllerBodyTest {
           });
       assertThatThrownBy(() -> controller.createScheduledTask(bad, request()))
           .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.status()).isEqualTo(400));
+      assertThatThrownBy(() -> controller.previewScheduledTask(bad, request()))
+          .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.status()).isEqualTo(400));
       assertThatThrownBy(() -> controller.updateScheduledTask("t-1", bad, request()))
           .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.status()).isEqualTo(400));
       assertThatThrownBy(() -> controller.setScheduledTaskEnabled("t-1", bad, request()))

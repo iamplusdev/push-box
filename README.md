@@ -357,7 +357,7 @@ output/       各端编译产物（jar / apk / exe），不入库，由 release 
 
 | 跑法 | 判什么 |
 |------|--------|
-| `JAVA_HOME=… mvn -B -pl :pushbox-core,:pushbox-server test` | 服务端与加密库（**332/332**，core 43 + server 289）。不再 source 任何环境变量：配置读的是 surefire 工作目录下的 `apps/server/data/config/pushbox.json`（就是安装页写出的那份）。分两档门控——只需连得上库的 13 个类挂 `databaseReady`，开发机上照跑；要真桶的 media 5 个类挂 `objectStorageReady`，本地存储模式下跳过。所以本机是 **299 执行 + 33 跳过**，而 `mvn test` 的退出码仍然是 0 |
+| `JAVA_HOME=… mvn -B -pl :pushbox-core,:pushbox-server test` | 服务端与加密库（**359/359**，core 50 + server 309）。不再 source 任何环境变量：配置读的是 surefire 工作目录下的 `apps/server/data/config/pushbox.json`（就是安装页写出的那份）。分两档门控——只需连得上库的 13 个类挂 `databaseReady`，开发机上照跑；要真桶的 media 5 个类挂 `objectStorageReady`，本地存储模式下跳过。所以本机是 **326 执行 + 33 跳过**，而 `mvn test` 的退出码仍然是 0 |
 | `node infra/probe/p0-e2e.mjs` | 端到端协议（**0 失败**；条数以脚本末行的 `N/N` 为准） |
 | `cd apps/android && ./gradlew :app:assembleDebug` | Android 编译通过 |
 | `cd apps/web-admin && npm ci && npm run build` | 管理台 `vue-tsc` 类型检查与 `dist/` 产物 |

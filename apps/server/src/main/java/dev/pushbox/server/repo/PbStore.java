@@ -904,14 +904,15 @@ public class PbStore {
   public void insertScheduledTask(Row task) {
     Db.insertBySql("""
         INSERT INTO scheduled_tasks (task_id, group_id, channel_no, name, category, title, content,
-                                    level, sender_name, images_json, cron_expr, enabled,
+                                    level, sender_name, images_json, cron_expr, timezone, enabled,
                                     next_fire_at, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         task.getString("task_id"), task.getString("group_id"), task.getString("channel_no"),
         task.getString("name"), task.getString("category"), task.getString("title"),
         task.getString("content"),
         task.getString("level"), task.getString("sender_name"), task.getString("images_json"),
-        task.getString("cron_expr"), task.getInt("enabled"), task.getLong("next_fire_at"),
+        task.getString("cron_expr"), task.getString("timezone"), task.getInt("enabled"),
+        task.getLong("next_fire_at"),
         task.getLong("created_at"), task.getLong("updated_at"));
   }
 
@@ -919,13 +920,14 @@ public class PbStore {
   public int updateScheduledTask(Row task) {
     return Db.updateBySql("""
         UPDATE scheduled_tasks SET channel_no = ?, name = ?, category = ?, title = ?, content = ?,
-               level = ?, sender_name = ?, images_json = ?, cron_expr = ?, enabled = ?,
-               next_fire_at = ?, updated_at = ?
+               level = ?, sender_name = ?, images_json = ?, cron_expr = ?, timezone = ?,
+               enabled = ?, next_fire_at = ?, updated_at = ?
         WHERE task_id = ?""",
         task.getString("channel_no"), task.getString("name"), task.getString("category"),
         task.getString("title"),
         task.getString("content"), task.getString("level"), task.getString("sender_name"),
-        task.getString("images_json"), task.getString("cron_expr"), task.getInt("enabled"),
+        task.getString("images_json"), task.getString("cron_expr"), task.getString("timezone"),
+        task.getInt("enabled"),
         task.getLong("next_fire_at"), task.getLong("updated_at"), task.getString("task_id"));
   }
 

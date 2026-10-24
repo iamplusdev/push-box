@@ -152,7 +152,7 @@ jobs:
 
       # 闸门用例的存在性证明：skipped 必须为 0，且执行总数不低于实测基线。
       # 只判"mvn 退出码 0"是不够的 —— 凭据没传进去时它同样退 0。
-      # 基线是 2026-10-23 用 JDK 21 实跑出来的 surefire 汇总：server 289 + core 43 = 332。
+      # 基线是 2026-10-24 用 JDK 21 实跑出来的 surefire 汇总：server 309 + core 50 = 359。
       # 这个数字只许涨不许跌；跌了说明有人删了测试或改了 include 规则，而不是"环境不一样"。
       # 223 → 227 是 AdminControllerBodyTest 那 4 条（管理台坏请求体返 400 的收口用例）；
       # 227 → 232 是 DeviceControllerBodyTest 那 5 条（设备侧同一收口），两次都是同版本 JDK 实跑抬的。
@@ -199,6 +199,14 @@ jobs:
       # normalize() 把大小写与空格归一——SsrfGuard 是精确等值比较，不归一就等于这一项白填）。
       # 331 → 332 是 InstallServerTest ⑮：未配置时 /dashboard、/login、/admin 一律 302 回 `/`，
       # 且页面里注入的是安装页真实监听的端口（容器 7405→7404 时 location.port 是宿主那侧，不能用）。
+      # 332 → 350 是定时任务时区与正文变量：core 43 → 50（TemplatesTest 7 条，钉死单层 `${}` 语义与
+      # 非法 pattern 留原文），server 289 → 300（ScheduledTaskLogicTest 新增 7 条时区/cron/渲染判据、
+      # ScheduledTaskStoreTest 1 条 V10 往返、IngestVariableRenderTest 3 条第三方渲染不碰签名）。
+      # 350 → 352 是表单预览：ScheduledTaskLogicTest ⑩d⑩e 两条（预览与触发同源、超限只标红不落库）。
+      # 352 → 359 是多 cron（一个任务多行表达式）：ScheduledTaskLogicTest 新增 7 条——③d 取最近的一条、
+      # ③e CRLF/空行忽略、③f 错误里带「第 N 条」、③g 超过 8 条 400、③h 同秒重叠只发一条、
+      # ③i 落库前归一、⑩f 预览逐条回 next_fires。
+      # 总基线从此是 server 309 + core 50 = 359。
       - name: 断言 DB 闸门用例真的执行了
         run: |
           set -euo pipefail
@@ -216,8 +224,8 @@ jobs:
           if skipped != 0:
               print("::error::有 %d 条用例被跳过：DB/S3 凭据没传到位（见本 job 顶部说明），全绿不代表测过" % skipped)
               sys.exit(1)
-          if tests < 332:
-              print("::error::用例总数 %d 低于基线 332，测试被静默裁剪了" % tests); sys.exit(1)
+          if tests < 359:
+              print("::error::用例总数 %d 低于基线 359，测试被静默裁剪了" % tests); sys.exit(1)
           print("✅ 闸门用例全部执行")
           PY
 

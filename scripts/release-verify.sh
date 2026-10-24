@@ -924,7 +924,7 @@ else
     fi
 fi
 
-# 文档站的导航完整性：admin-api.html 有 16 个端点的完整契约，页面之间互相链到才有用。
+# 文档站的导航完整性：admin-api.html 有 17 个端点的完整契约，页面之间互相链到才有用。
 # 判据不列页面名单——加新页面时不该顺手来改这条。
 if [ -f "$ROOT_DIR/site/admin-api.html" ]; then
     pass "site/admin-api.html 存在"
@@ -939,7 +939,7 @@ if [ -f "$ROOT_DIR/site/admin-api.html" ]; then
         fail "这些页面的侧栏缺管理台 API 链接：$UNLINKED"
     fi
 else
-    fail "site/admin-api.html 缺失：管理台那 16 个端点又没有文档了"
+    fail "site/admin-api.html 缺失：管理台那 17 个端点又没有文档了"
 fi
 
 # ========================================

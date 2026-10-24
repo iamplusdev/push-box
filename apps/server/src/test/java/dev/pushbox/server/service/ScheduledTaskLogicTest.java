@@ -17,27 +17,32 @@ import com.mybatisflex.core.row.Row;
 import dev.pushbox.core.api.IngestRequest;
 import dev.pushbox.core.api.IngestResponse;
 import dev.pushbox.server.config.PbProperties;
+import dev.pushbox.server.config.ServerIdentity;
 import dev.pushbox.server.repo.PbStore;
 import dev.pushbox.server.web.ApiException;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 /**
- * 定时推送的调度规则（不碰库、不碰容器）：cron 下次时间、时隙 CAS、幂等 msg_key、止损停用与校验。
- * 真正落库的幂等与投递结果由 ScheduledTaskStoreTest 那批集成用例守着，
+ * 定时推送的调度规则（不碰库、不碰容器）：cron 下次时间、时区、正文变量、时隙 CAS、幂等 msg_key、
+ * 止损停用与校验。真正落库的幂等与投递结果由 ScheduledTaskStoreTest 那批集成用例守着，
  * 这里只锁住"扫描一轮会发生什么"这套不会因为网络或数据库状态漂移的判断。
  */
 class ScheduledTaskLogicTest {
 
   private static final String TASK_ID = "01TASK000000000000000000";
   private static final String CHANNEL_NO = "SCHED001";
+  /** 用例统一按上海时间算，不跟跑测试那台机器的默认时区走。 */
+  private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
 
   private PbStore store;
   private IngestService ingest;
@@ -47,7 +52,8 @@ class ScheduledTaskLogicTest {
   void setUp() {
     store = mock(PbStore.class);
     ingest = mock(IngestService.class);
-    service = new ScheduledTaskService(store, ingest, new PbProperties(), 50);
+    service = new ScheduledTaskService(store, ingest, new PbProperties(),
+        new ServerIdentity(Optional.empty()), 50);
   }
 
   // ---------- cron ----------
@@ -57,12 +63,12 @@ class ScheduledTaskLogicTest {
   void requiresSixFieldCron() {
     long now = System.currentTimeMillis();
 
-    assertThatThrownBy(() -> ScheduledTaskService.nextFireAt("0 9 * * *", now))
+    assertThatThrownBy(() -> ScheduledTaskService.nextFireAt("0 9 * * *", now, ZONE))
         .isInstanceOfSatisfying(ApiException.class, e -> {
           assertThat(e.status()).isEqualTo(400);
           assertThat(e.toError().hint()).contains("6 段");
         });
-    assertThatThrownBy(() -> ScheduledTaskService.nextFireAt("   ", now))
+    assertThatThrownBy(() -> ScheduledTaskService.nextFireAt("   ", now, ZONE))
         .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.status()).isEqualTo(400));
   }
 
@@ -72,10 +78,10 @@ class ScheduledTaskLogicTest {
     LocalDateTime today8am = LocalDateTime.of(2026, 1, 1, 8, 0, 0);
     long from = millis(today8am);
 
-    long next = ScheduledTaskService.nextFireAt("0 0 9 * * *", from);
+    long next = ScheduledTaskService.nextFireAt("0 0 9 * * *", from, ZONE);
     assertThat(local(next)).isEqualTo(LocalDateTime.of(2026, 1, 1, 9, 0, 0));
     // 09:00:01 再问，就该跳到第二天——不能把已经过去的那次补回来
-    assertThat(local(ScheduledTaskService.nextFireAt("0 0 9 * * *", next + 1_000L)))
+    assertThat(local(ScheduledTaskService.nextFireAt("0 0 9 * * *", next + 1_000L, ZONE)))
         .isEqualTo(LocalDateTime.of(2026, 1, 2, 9, 0, 0));
   }
 
@@ -84,11 +90,144 @@ class ScheduledTaskLogicTest {
   void stepAndDayOfWeekCron() {
     LocalDateTime from = LocalDateTime.of(2026, 1, 1, 9, 3, 10);
 
-    assertThat(local(ScheduledTaskService.nextFireAt("0 */5 * * * *", millis(from))))
+    assertThat(local(ScheduledTaskService.nextFireAt("0 */5 * * * *", millis(from), ZONE)))
         .isEqualTo(LocalDateTime.of(2026, 1, 1, 9, 5, 0));
     // 2026-01-01 是周四，下一个工作日 09:00 是周五
-    assertThat(local(ScheduledTaskService.nextFireAt("0 0 9 * * 1-5", millis(from))))
+    assertThat(local(ScheduledTaskService.nextFireAt("0 0 9 * * 1-5", millis(from), ZONE)))
         .isEqualTo(LocalDateTime.of(2026, 1, 2, 9, 0, 0));
+  }
+
+  @Test
+  @DisplayName("③b cron 不带时区：同一个表达式在东京比在上海早一小时触发")
+  void cronIsInterpretedInTheTaskZone() {
+    // 2026-01-01T00:00:00Z = 上海 08:00 = 东京 09:00
+    long from = Instant.parse("2026-01-01T00:00:00Z").toEpochMilli();
+
+    assertThat(Instant.ofEpochMilli(
+        ScheduledTaskService.nextFireAt("0 0 9 * * *", from, ZoneId.of("Asia/Shanghai"))))
+        .isEqualTo(Instant.parse("2026-01-01T01:00:00Z"));
+    // 东京此刻正好 09:00，严格未来就只能是第二天 09:00 JST
+    assertThat(Instant.ofEpochMilli(
+        ScheduledTaskService.nextFireAt("0 0 9 * * *", from, ZoneId.of("Asia/Tokyo"))))
+        .isEqualTo(Instant.parse("2026-01-02T00:00:00Z"));
+  }
+
+  @Test
+  @DisplayName("③c 时区非法就 400，不落库；空值落到默认 Asia/Shanghai")
+  void invalidTimezoneIsRejected() {
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+
+    assertThatThrownBy(() -> service.create(inputWithTimezone("Mars/Olympus")))
+        .isInstanceOfSatisfying(ApiException.class, e -> {
+          assertThat(e.status()).isEqualTo(400);
+          assertThat(e.toError().hint()).contains("timezone");
+        });
+    verify(store, never()).insertScheduledTask(any());
+
+    assertThat(ScheduledTaskService.zoneOf(null).getId()).isEqualTo("Asia/Shanghai");
+    assertThat(ScheduledTaskService.zoneOf("  ").getId()).isEqualTo("Asia/Shanghai");
+    assertThat(ScheduledTaskService.zoneOf("UTC").getId()).isEqualTo("UTC");
+  }
+
+  // ---------- 多条 cron ----------
+
+  @Test
+  @DisplayName("③d 多条 cron 取最近的一次：工作日 09:00 + 周末 12:00，周四问是周五，周五 09:01 问是周六")
+  void earliestAcrossMultipleCrons() {
+    String cron = "0 0 9 * * 1-5\n0 0 12 * * 0,6";
+
+    // 2026-01-01 周四 09:03：工作日那条给周五 09:00，周末那条给周六 12:00，取近的
+    assertThat(local(ScheduledTaskService.nextFireAt(cron,
+        millis(LocalDateTime.of(2026, 1, 1, 9, 3, 0)), ZONE)))
+        .isEqualTo(LocalDateTime.of(2026, 1, 2, 9, 0, 0));
+    // 2026-01-02 周五 09:01：工作日那条已经要等到周一，周末那条是周六 12:00
+    assertThat(local(ScheduledTaskService.nextFireAt(cron,
+        millis(LocalDateTime.of(2026, 1, 2, 9, 1, 0)), ZONE)))
+        .isEqualTo(LocalDateTime.of(2026, 1, 3, 12, 0, 0));
+  }
+
+  @Test
+  @DisplayName("③e 空行与 CRLF 不算一条：textarea 里多敲的回车不该让任务存不下来")
+  void blankLinesAndCrlfAreIgnored() {
+    String cron = "  0 0 9 * * 1-5  \r\n\r\n0 0 12 * * 0,6\r\n";
+
+    assertThat(ScheduledTaskService.splitCrons(cron))
+        .containsExactly("0 0 9 * * 1-5", "0 0 12 * * 0,6");
+    assertThat(local(ScheduledTaskService.nextFireAt(cron,
+        millis(LocalDateTime.of(2026, 1, 1, 9, 3, 0)), ZONE)))
+        .isEqualTo(LocalDateTime.of(2026, 1, 2, 9, 0, 0));
+  }
+
+  @Test
+  @DisplayName("③f 多行里坏了一条要说清是第几条：八行挑一个错字段，只说「cron 不合法」等于让人逐行试")
+  void invalidLineIsReportedWithItsNumber() {
+    assertThatThrownBy(() -> ScheduledTaskService.nextFireAt(
+        "0 0 9 * * *\n0 9 * * *", System.currentTimeMillis(), ZONE))
+        .isInstanceOfSatisfying(ApiException.class, e -> {
+          assertThat(e.status()).isEqualTo(400);
+          assertThat(e.toError().hint()).contains("第 2 条").contains("6 段");
+        });
+    // 单行时保持老措辞，不去编一个"第 1 条"
+    assertThatThrownBy(() -> ScheduledTaskService.nextFireAt(
+        "0 9 * * *", System.currentTimeMillis(), ZONE))
+        .isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.toError().hint()).startsWith("cron 不合法"));
+  }
+
+  @Test
+  @DisplayName("③g 超过 8 条 400：上限是为了让调度规则还看得过来，不是为了省空间")
+  void tooManyCronsAreRejected() {
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+    String nine = String.join("\n", java.util.Collections.nCopies(9, "0 0 9 * * *"));
+
+    assertThatThrownBy(() -> ScheduledTaskService.nextFireAt(
+        nine, System.currentTimeMillis(), ZONE))
+        .isInstanceOfSatisfying(ApiException.class, e -> {
+          assertThat(e.status()).isEqualTo(400);
+          assertThat(e.toError().hint()).contains("最多 8 条").contains("9 条");
+        });
+    assertThatThrownBy(() -> service.create(inputWithCron(nine)))
+        .isInstanceOfSatisfying(ApiException.class, e -> {
+          assertThat(e.status()).isEqualTo(400);
+          assertThat(e.toError().hint()).contains("最多 8 条");
+        });
+    verify(store, never()).insertScheduledTask(any());
+  }
+
+  @Test
+  @DisplayName("③h 两条规则撞在同一秒也只触发一次：一轮扫描对每个任务只投递一条")
+  void overlappingCronsFireOncePerSlot() {
+    long slot = millis(LocalDateTime.of(2026, 1, 2, 9, 0, 0));
+    Row task = dueTask(slot);
+    task.set("cron_expr", "0 0 9 * * *\n0 0 9 * * 1-5");
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+    when(store.dueScheduledTasks(anyLong(), anyInt())).thenReturn(List.of(task));
+    when(store.claimScheduledTaskSlot(anyString(), anyLong(), anyLong(), anyLong())).thenReturn(1);
+    when(ingest.ingestInternal(any(), any())).thenReturn(new IngestResponse(true, "MSG-1", 7L,
+        "摘要", "none", 0, "info"));
+
+    assertThat(service.sweepOnce()).isEqualTo(1);
+
+    verify(ingest, times(1)).ingestInternal(any(), any());
+    ArgumentCaptor<IngestRequest> captor = ArgumentCaptor.forClass(IngestRequest.class);
+    verify(ingest).ingestInternal(any(), captor.capture());
+    assertThat(captor.getValue().msgKey()).isEqualTo(ScheduledTaskService.msgKey(TASK_ID, slot));
+  }
+
+  @Test
+  @DisplayName("③i 落库存按行归一化后的 cron：多行用 \\n 连接、单行原样")
+  void cronIsNormalizedBeforePersisting() {
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+    when(store.findScheduledTask(anyString())).thenReturn(dueTask(1000L));
+
+    service.create(inputWithCron("  0 0 9 * * *  \r\n\r\n0 0 12 * * 0,6 "));
+    service.create(inputWithCron("0 0 9 * * *"));
+
+    ArgumentCaptor<Row> captor = ArgumentCaptor.forClass(Row.class);
+    verify(store, times(2)).insertScheduledTask(captor.capture());
+    assertThat(captor.getAllValues().get(0).getString("cron_expr"))
+        .isEqualTo("0 0 9 * * *\n0 0 12 * * 0,6");
+    assertThat(captor.getAllValues().get(1).getString("cron_expr")).isEqualTo("0 0 9 * * *");
   }
 
   // ---------- 幂等 msg_key ----------
@@ -205,6 +344,116 @@ class ScheduledTaskLogicTest {
         any(), anyInt(), anyLong());
   }
 
+  @Test
+  @DisplayName("⑩b 触发那一刻才展开变量：${scheduled_at} 是计划时隙、${timezone} 是任务时区、认不出的原样保留")
+  void contentIsRenderedAtFireTime() {
+    long slot = millis(LocalDateTime.of(2026, 1, 1, 9, 0, 0));
+    Row task = dueTask(slot);
+    task.set("timezone", "Asia/Tokyo");
+    task.set("name", "晨报");
+    task.set("content", "计划 ${scheduled_at}（${timezone}）发出，未知 ${nope} 保持原样");
+    when(store.dueScheduledTasks(anyLong(), anyInt())).thenReturn(List.of(task));
+    when(store.claimScheduledTaskSlot(anyString(), anyLong(), anyLong(), anyLong())).thenReturn(1);
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+    when(ingest.ingestInternal(any(), any())).thenReturn(new IngestResponse(true, "MSG-1", 7L,
+        "摘要", "none", 0, "info"));
+
+    service.sweepOnce();
+
+    ArgumentCaptor<IngestRequest> captor = ArgumentCaptor.forClass(IngestRequest.class);
+    verify(ingest).ingestInternal(any(), captor.capture());
+    // 上海 09:00 的时隙落到东京是 10:00；计划时刻与实际渲染时刻分开，补跑时也不会算错
+    assertThat(captor.getValue().content())
+        .isEqualTo("计划 2026-01-01 10:00:00（Asia/Tokyo）发出，未知 ${nope} 保持原样");
+  }
+
+  @Test
+  @DisplayName("⑩c 正文里写 ${timezone:UTC} 也压不过任务时区：渲染时区只有一个来源")
+  void timezoneInContentNeverOverridesTheTaskZone() {
+    Row task = dueTask(1000L);
+    task.set("timezone", "Europe/Berlin");
+    task.set("content", "${timezone:UTC} / ${scheduled_at}");
+    when(store.dueScheduledTasks(anyLong(), anyInt())).thenReturn(List.of(task));
+    when(store.claimScheduledTaskSlot(anyString(), anyLong(), anyLong(), anyLong())).thenReturn(1);
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+    when(ingest.ingestInternal(any(), any())).thenReturn(new IngestResponse(true, "MSG-1", 7L,
+        "摘要", "none", 0, "info"));
+
+    service.sweepOnce();
+
+    ArgumentCaptor<IngestRequest> captor = ArgumentCaptor.forClass(IngestRequest.class);
+    verify(ingest).ingestInternal(any(), captor.capture());
+    assertThat(captor.getValue().content())
+        .isEqualTo("Europe/Berlin / 1970-01-01 01:00:01");
+  }
+
+  @Test
+  @DisplayName("⑩d 表单预览：时区与 ${scheduled_at} 跟触发时同源，${channel_name} 取频道行的 name 列")
+  void previewRendersLikeTheRealFire() {
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+    ScheduledTaskService.TaskInput input = new ScheduledTaskService.TaskInput(CHANNEL_NO,
+        "晨报", "标题", "${timezone} / ${channel_name} / ${scheduled_at}", "info", "定时推送",
+        List.of(), "0 0 9 * * *", 1, null, "Asia/Tokyo");
+
+    Map<String, Object> res = service.preview(input);
+
+    long now = (Long) res.get("now");
+    ZoneId tokyo = ZoneId.of("Asia/Tokyo");
+    long slot = ScheduledTaskService.nextFireAt("0 0 9 * * *", now, tokyo);
+    String slotText = LocalDateTime.ofInstant(Instant.ofEpochMilli(slot), tokyo)
+        .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+    assertThat(res.get("timezone")).isEqualTo("Asia/Tokyo");
+    assertThat(res.get("next_fire_at")).isEqualTo(slot);
+    // ${channel_name} 以前读的是频道行里根本不存在的 channel_name 列，预览把它照出来了
+    assertThat(res.get("content")).isEqualTo("Asia/Tokyo / 运维频道 / " + slotText);
+    verify(store, never()).insertScheduledTask(any());
+  }
+
+  @Test
+  @DisplayName("⑩e 表单预览：渲染后超限如实标出，但预览本身不落库、也不抛 400")
+  void previewReportsOverLimitWithoutPersisting() {
+    Row small = channel();
+    small.set("max_body_bytes", 8);
+    when(store.findChannel(CHANNEL_NO)).thenReturn(small);
+    ScheduledTaskService.TaskInput input = new ScheduledTaskService.TaskInput(CHANNEL_NO,
+        "晨报", null, "一二三四五六七八九十", "info", null, List.of(),
+        "0 0 9 * * *", 1, null, null);
+
+    Map<String, Object> res = service.preview(input);
+
+    assertThat(res.get("bytes")).isEqualTo(30);
+    assertThat(res.get("max_body_bytes")).isEqualTo(8);
+    assertThat(res.get("over_limit")).isEqualTo(true);
+    verify(store, never()).insertScheduledTask(any());
+    verify(store, never()).updateScheduledTask(any());
+  }
+
+  @Test
+  @DisplayName("⑩f 预览逐条回下次触发：两行 cron 各自的时刻，总的是最近的那个")
+  void previewReturnsPerLineNextFire() {
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+    ScheduledTaskService.TaskInput input = new ScheduledTaskService.TaskInput(CHANNEL_NO,
+        "晨报", null, "正文", "info", null, List.of(),
+        "0 0 9 * * 1-5\n0 0 12 * * 0,6", 1, null, "Asia/Shanghai");
+
+    Map<String, Object> res = service.preview(input);
+
+    long now = (Long) res.get("now");
+    List<?> fires = (List<?>) res.get("next_fires");
+    assertThat(fires).hasSize(2);
+    Map<?, ?> weekday = (Map<?, ?>) fires.get(0);
+    Map<?, ?> weekend = (Map<?, ?>) fires.get(1);
+    // 顺序跟填写顺序一致，管理台才能把"下次触发"贴回对应的那一行
+    assertThat(weekday.get("cron")).isEqualTo("0 0 9 * * 1-5");
+    assertThat(weekend.get("cron")).isEqualTo("0 0 12 * * 0,6");
+    assertThat(weekday.get("next_fire_at"))
+        .isEqualTo(ScheduledTaskService.nextFireAt("0 0 9 * * 1-5", now, ZONE));
+    assertThat(weekend.get("next_fire_at"))
+        .isEqualTo(ScheduledTaskService.nextFireAt("0 0 12 * * 0,6", now, ZONE));
+    assertThat(res.get("next_fire_at")).isEqualTo(Math.min((Long) weekday.get("next_fire_at"),
+        (Long) weekend.get("next_fire_at")));
+  }
+
   // ---------- CRUD 校验 ----------
 
   @Test
@@ -241,15 +490,59 @@ class ScheduledTaskLogicTest {
   }
 
   @Test
+  @DisplayName("⑪d 量的是渲染后的正文：模板 ${now} 只有 6 字节，展开成 19 字节照样要被拦下")
+  void bodyCapAppliesToRenderedContent() {
+    Row narrow = channel();
+    narrow.set("max_body_bytes", 10);
+    when(store.findChannel(CHANNEL_NO)).thenReturn(narrow);
+
+    assertThatThrownBy(() -> service.create(input("${now}")))
+        .isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.toError().hint()).contains("渲染后 19 字节"));
+    verify(store, never()).insertScheduledTask(any());
+  }
+
+  @Test
+  @DisplayName("⑪e 任务时区随载荷落库，非法时区不落库；列表与详情都回这个字段")
+  void timezoneIsStoredAndReturned() {
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+    Row stored = dueTask(1000L);
+    stored.set("timezone", "Asia/Tokyo");
+    when(store.findScheduledTask(anyString())).thenReturn(stored);
+    when(store.listScheduledTasks()).thenReturn(List.of(stored));
+
+    service.create(inputWithTimezone("Asia/Tokyo"));
+
+    ArgumentCaptor<Row> row = ArgumentCaptor.forClass(Row.class);
+    verify(store).insertScheduledTask(row.capture());
+    assertThat(row.getValue().getString("timezone")).isEqualTo("Asia/Tokyo");
+    assertThat(service.listAll().get(0).get("timezone")).isEqualTo("Asia/Tokyo");
+    assertThat(service.detail(TASK_ID).get("timezone")).isEqualTo("Asia/Tokyo");
+  }
+
+  @Test
+  @DisplayName("⑪f 编辑不传 timezone 就落回默认时区，不会把老任务的时间悄悄留在旧值上")
+  void blankTimezoneFallsBackToDefault() {
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+    when(store.findScheduledTask(anyString())).thenReturn(dueTask(1000L));
+
+    service.create(inputWithTimezone("  "));
+
+    ArgumentCaptor<Row> row = ArgumentCaptor.forClass(Row.class);
+    verify(store).insertScheduledTask(row.capture());
+    assertThat(row.getValue().getString("timezone")).isEqualTo("Asia/Shanghai");
+  }
+
+  @Test
   @DisplayName("⑪c level 落库前归一到 wire 值：库里只能出现 info/warning/error，别存下触发时才静默降级的写法")
   void levelIsNormalizedOnSave() {
     when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
     when(store.findScheduledTask(anyString())).thenReturn(dueTask(1000L));
 
     service.create(new ScheduledTaskService.TaskInput(CHANNEL_NO, "任务", null, "正文", "warning",
-        null, List.of(), "0 0 9 * * *", 1, null));
+        null, List.of(), "0 0 9 * * *", 1, null, null));
     service.create(new ScheduledTaskService.TaskInput(CHANNEL_NO, "任务", null, "正文", "warn",
-        null, List.of(), "0 0 9 * * *", 1, null));
+        null, List.of(), "0 0 9 * * *", 1, null, null));
 
     ArgumentCaptor<Row> captor = ArgumentCaptor.forClass(Row.class);
     verify(store, times(2)).insertScheduledTask(captor.capture());
@@ -370,16 +663,17 @@ class ScheduledTaskLogicTest {
   }
 
   private static long millis(LocalDateTime time) {
-    return time.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+    return time.atZone(ZONE).toInstant().toEpochMilli();
   }
 
   private static LocalDateTime local(long millis) {
-    return LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneId.systemDefault());
+    return LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZONE);
   }
 
   private static Row channel() {
     Row row = new Row();
     row.set("channel_no", CHANNEL_NO);
+    row.set("name", "运维频道");
     row.set("group_id", "sched-test-group");
     row.set("max_level", "warning");
     row.set("max_images", 4);
@@ -413,16 +707,26 @@ class ScheduledTaskLogicTest {
 
   private static ScheduledTaskService.TaskInput input(String channelNo, String content) {
     return new ScheduledTaskService.TaskInput(channelNo, "每日晨报", "晨报", content, "info",
-        "定时推送", List.of(), "0 0 9 * * *", 1, null);
+        "定时推送", List.of(), "0 0 9 * * *", 1, null, null);
   }
 
   private static ScheduledTaskService.TaskInput inputWithImages(String... urls) {
     return new ScheduledTaskService.TaskInput(CHANNEL_NO, "带图任务", null, "正文", "info", null,
-        List.of(urls), "0 0 9 * * *", 1, null);
+        List.of(urls), "0 0 9 * * *", 1, null, null);
   }
 
   private static ScheduledTaskService.TaskInput inputWithCategory(String category) {
     return new ScheduledTaskService.TaskInput(CHANNEL_NO, "每日晨报", "晨报", "正文", "info", null,
-        List.of(), "0 0 9 * * *", 1, category);
+        List.of(), "0 0 9 * * *", 1, category, null);
+  }
+
+  private static ScheduledTaskService.TaskInput inputWithTimezone(String timezone) {
+    return new ScheduledTaskService.TaskInput(CHANNEL_NO, "每日晨报", "晨报", "正文", "info", null,
+        List.of(), "0 0 9 * * *", 1, null, timezone);
+  }
+
+  private static ScheduledTaskService.TaskInput inputWithCron(String cron) {
+    return new ScheduledTaskService.TaskInput(CHANNEL_NO, "每日晨报", "晨报", "正文", "info", null,
+        List.of(), cron, 1, null, null);
   }
 }

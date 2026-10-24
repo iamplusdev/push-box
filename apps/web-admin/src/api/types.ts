@@ -41,6 +41,8 @@ export interface ScheduledTask {
   level: string
   sender_name: string
   cron_expr: string
+  /** IANA 时区名；cron 与正文时间变量都按它解释，老任务升级后是 Asia/Shanghai。 */
+  timezone: string
   enabled: number
   next_fire_at: number
   last_fire_at: number

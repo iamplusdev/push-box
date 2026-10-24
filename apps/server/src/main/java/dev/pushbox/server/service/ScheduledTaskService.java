@@ -6,15 +6,20 @@ import dev.pushbox.core.api.IngestResponse;
 import dev.pushbox.core.id.Ulid;
 import dev.pushbox.core.model.Level;
 import dev.pushbox.core.protocol.Json;
+import dev.pushbox.core.text.Templates;
 import dev.pushbox.server.config.PbProperties;
+import dev.pushbox.server.config.ServerIdentity;
 import dev.pushbox.server.repo.PbStore;
 import dev.pushbox.server.web.ApiException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +36,14 @@ import org.springframework.stereotype.Service;
  * <p>投递复用 {@link IngestService#ingestInternal}，与外部 {@code POST /message} 走同一条入库+下发链路，
  * 客户端分不出这条消息是谁发的——这是刻意的：定时推送不该有第二套语义。
  *
+ * <p>每个任务自带时区（默认 Asia/Shanghai）：cron 的"每天 09:00"按它解释，正文里的
+ * {@code ${now}} 这类时间变量也按它渲染。正文一律存模板原文，到触发那一刻才用
+ * {@link Templates#render} 展开——建任务的那一秒不该被固化成每天的正文。
+ * 正文里写 {@code ${timezone:xx}} 改不了这个时区，只会在输出里显示任务自己的时区。
+ *
+ * <p>{@code cron_expr} 可以写多行，每行一条（最多 {@link #MAX_CRONS} 条），
+ * {@code next_fire_at} 取所有行里最近的那一次——"工作日 09:00 + 周末 12:00"因此是一条任务而不是两条。
+ *
  * <p>调度用"扫表 + {@code next_fire_at} CAS 抢占"而不是给每个任务注册 Trigger：
  * 状态全在库里，重启不丢、崩溃能补跑一次、多实例天然安全，任务的增删改也不需要碰任何内存注册表。
  * 代价是触发精度受扫描周期限制（默认 15s），对分钟级以上的 cron 足够；亚分钟级 cron 会被推迟到下个扫描点，
@@ -46,17 +59,26 @@ public class ScheduledTaskService {
   /** 发送者标识：定时消息统一归到这一个会话，客户端一眼能看出是自建推送。 */
   private static final String SENDER_ID = "scheduled";
   private static final int MAX_LIST_BATCH = 200;
+  /** 一个任务最多几条 cron。够放下"工作日 / 周末 / 节前"这类写法，又不至于让正文被调度规则淹没。 */
+  static final int MAX_CRONS = 8;
+  /** 与 V11 迁移后的列宽一致：超了宁可 400，也别让 MySQL 严格模式在落库时抛 500。 */
+  private static final int MAX_CRON_CHARS = 512;
+  /** ${scheduled_at} 的格式：计划时隙是"哪一刻该发"，与 ${now}（实际送达）分属两件事。 */
+  private static final DateTimeFormatter SLOT_TIME =
+      DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
   private final PbStore store;
   private final IngestService ingest;
   private final PbProperties props;
+  private final ServerIdentity identity;
   private final int batchSize;
 
   public ScheduledTaskService(PbStore store, IngestService ingest, PbProperties props,
-      @Value("${pb.scheduled.batch-size:50}") int batchSize) {
+      ServerIdentity identity, @Value("${pb.scheduled.batch-size:50}") int batchSize) {
     this.store = store;
     this.ingest = ingest;
     this.props = props;
+    this.identity = identity;
     this.batchSize = Math.max(1, Math.min(batchSize, MAX_LIST_BATCH));
   }
 
@@ -66,10 +88,11 @@ public class ScheduledTaskService {
   public Map<String, Object> create(TaskInput input) {
     long now = System.currentTimeMillis();
     Row channel = requireChannel(input.channelNo());
-    Row task = toRow(newTaskId(), channel, input, nextFireAt(input.cronExpr(), now), now);
+    ZoneId zone = zoneOf(input.timezone());
+    Row task = toRow(newTaskId(), channel, input, zone, nextFireAt(input.cronExpr(), now, zone), now);
     store.insertScheduledTask(task);
-    log.info("定时任务已创建 task_id={} channel={} cron={}", task.getString("task_id"),
-        channel.getString("channel_no"), input.cronExpr());
+    log.info("定时任务已创建 task_id={} channel={} cron={} zone={}", task.getString("task_id"),
+        channel.getString("channel_no"), input.cronExpr(), zone.getId());
     return view(store.findScheduledTask(task.getString("task_id")), false);
   }
 
@@ -78,7 +101,8 @@ public class ScheduledTaskService {
     long now = System.currentTimeMillis();
     requireTask(taskId);
     Row channel = requireChannel(input.channelNo());
-    Row task = toRow(taskId, channel, input, nextFireAt(input.cronExpr(), now), now);
+    ZoneId zone = zoneOf(input.timezone());
+    Row task = toRow(taskId, channel, input, zone, nextFireAt(input.cronExpr(), now, zone), now);
     store.updateScheduledTask(task);
     return view(store.findScheduledTask(taskId), false);
   }
@@ -92,7 +116,8 @@ public class ScheduledTaskService {
   public Map<String, Object> setEnabled(String taskId, boolean enabled) {
     long now = System.currentTimeMillis();
     Row task = requireTask(taskId);
-    long nextFireAt = enabled ? nextFireAt(task.getString("cron_expr"), now)
+    long nextFireAt = enabled
+        ? nextFireAt(task.getString("cron_expr"), now, zoneOrFallback(task.getString("timezone")))
         : longValue(task, "next_fire_at", now);
     store.setScheduledTaskEnabled(taskId, enabled ? 1 : 0, nextFireAt, now);
     return view(store.findScheduledTask(taskId), false);
@@ -108,6 +133,45 @@ public class ScheduledTaskService {
 
   public Map<String, Object> detail(String taskId) {
     return view(requireTask(taskId), true);
+  }
+
+  /**
+   * 表单里的「预览」：按当前时刻把正文渲染一遍，不落库、不要求正文非空。
+   *
+   * <p>渲染必须留在服务端：{@code ${now:yyyy-MM-dd}} 用的是 Java 的 {@code DateTimeFormatter}，
+   * 前端复刻一套只会在两边慢慢长歪，预览与真正发出去的就不是同一条消息了。
+   * 时区与 {@code scheduled_at} 的取法与触发时完全一致——预览看到的时区就是任务落库后的时区。
+   */
+  public Map<String, Object> preview(TaskInput input) {
+    long now = System.currentTimeMillis();
+    Row channel = requireChannel(input.channelNo());
+    ZoneId zone = zoneOf(input.timezone());
+    long slot = nextFireAt(input.cronExpr(), now, zone);
+    String template = input.content() == null ? "" : input.content();
+    String rendered = Templates.render(template, zone, Instant.ofEpochMilli(now),
+        templateVars(input.name(), input.senderName(), channel, zone, slot));
+    int bytes = rendered.getBytes(StandardCharsets.UTF_8).length;
+    int maxBodyBytes = intValue(channel, "max_body_bytes", props.getRetention().getMaxMessageBytes());
+
+    // 逐条列出来：多 cron 的"下次触发"只有一个时间，看不出是哪条规则撑起来的
+    List<Map<String, Object>> nextFires = new ArrayList<>();
+    for (Map.Entry<String, Long> e : nextFires(input.cronExpr(), now, zone).entrySet()) {
+      Map<String, Object> item = new LinkedHashMap<>();
+      item.put("cron", e.getKey());
+      item.put("next_fire_at", e.getValue());
+      nextFires.add(item);
+    }
+
+    Map<String, Object> out = new LinkedHashMap<>();
+    out.put("timezone", zone.getId());
+    out.put("now", now);
+    out.put("next_fire_at", slot);
+    out.put("next_fires", nextFires);
+    out.put("content", rendered);
+    out.put("bytes", bytes);
+    out.put("max_body_bytes", maxBodyBytes);
+    out.put("over_limit", bytes > maxBodyBytes);
+    return out;
   }
 
   // ---------- 调度 ----------
@@ -134,19 +198,20 @@ public class ScheduledTaskService {
     for (Row task : due) {
       String taskId = task.getString("task_id");
       long slot = longValue(task, "next_fire_at", now);
+      ZoneId zone = zoneOrFallback(task.getString("timezone"));
       // 从 now 往后算下一次：宕机几小时后不逐分钟补跑，只补当前这一次，之后回到正常节律
-      long next = nextFireAt(task.getString("cron_expr"), now);
+      long next = nextFireAt(task.getString("cron_expr"), now, zone);
       if (store.claimScheduledTaskSlot(taskId, slot, next, now) != 1) {
         continue;  // 被另一个实例抢走了
       }
-      fire(task, slot, now);
+      fire(task, slot, now, zone);
       fired++;
     }
     return fired;
   }
 
   /** 已抢到时隙，投递一条消息并把结论写回任务行。 */
-  private void fire(Row task, long slot, long now) {
+  private void fire(Row task, long slot, long now, ZoneId zone) {
     String taskId = task.getString("task_id");
     Row channel = store.findChannel(task.getString("channel_no"));
     if (channel == null || channel.getLong("archived_at") != null) {
@@ -156,8 +221,11 @@ public class ScheduledTaskService {
           task.getString("channel_no"));
       return;
     }
+    // 时区取任务自己的：正文里写 ${timezone:xx} 也改不了它，只会在输出里原样显示任务时区
+    String content = Templates.render(task.getString("content"), zone, Instant.ofEpochMilli(now),
+        templateVars(task.getString("name"), task.getString("sender_name"), channel, zone, slot));
     IngestRequest request = new IngestRequest(channel.getString("channel_no"), null, null,
-        task.getString("content"), SENDER_ID, stringValue(task, "sender_name"), null,
+        content, SENDER_ID, stringValue(task, "sender_name"), null,
         task.getString("title"), task.getString("level"), null, readImages(task),
         msgKey(taskId, slot), null, null, null);
     try {
@@ -174,27 +242,111 @@ public class ScheduledTaskService {
     return MSG_KEY_PREFIX + taskId + ":" + (slotMillis / 60_000L);
   }
 
-  /** cron 的下次触发时刻（毫秒）。字段必须是 6 段——Spring 不认 5 段 unix cron。 */
-  static long nextFireAt(String cronExpr, long fromMillis) {
-    CronExpression expression = parseCron(cronExpr);
-    LocalDateTime from = LocalDateTime.ofInstant(Instant.ofEpochMilli(fromMillis),
-        ZoneId.systemDefault());
-    LocalDateTime next = expression.next(from);
-    if (next == null) {
-      throw ApiException.invalidParam("这个 cron 已经没有下一次触发了，换一个表达式");
+  /**
+   * cron 的下次触发时刻（毫秒）。可以写多行，取所有行里最近的那一次。
+   * 字段必须是 6 段——Spring 不认 5 段 unix cron。
+   * {@code zone} 决定"09:00"指的是哪里的 09:00，cron 本身不带时区。
+   */
+  static long nextFireAt(String cronExpr, long fromMillis, ZoneId zone) {
+    Map<String, Long> fires = nextFires(cronExpr, fromMillis, zone);
+    if (fires.isEmpty()) {
+      throw ApiException.invalidParam(splitCrons(cronExpr).size() > 1
+          ? "这些 cron 都已经没有下一次触发了，换一个表达式"
+          : "这个 cron 已经没有下一次触发了，换一个表达式");
     }
-    return next.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+    return Collections.min(fires.values());
   }
 
-  private static CronExpression parseCron(String cronExpr) {
+  /** 每条 cron 各自的下次触发时刻，按填写顺序返回；已经不会再触发的那条不出现在结果里。 */
+  static Map<String, Long> nextFires(String cronExpr, long fromMillis, ZoneId zone) {
+    List<String> lines = splitCrons(cronExpr);
+    boolean multi = lines.size() > 1;
+    ZoneId effective = zone == null ? ZoneId.of(Templates.DEFAULT_ZONE) : zone;
+    LocalDateTime from = LocalDateTime.ofInstant(Instant.ofEpochMilli(fromMillis), effective);
+    Map<String, Long> out = new LinkedHashMap<>();
+    for (int i = 0; i < lines.size(); i++) {
+      String line = lines.get(i);
+      LocalDateTime next;
+      try {
+        next = CronExpression.parse(line).next(from);
+      } catch (IllegalArgumentException e) {
+        // 多行时必须说清是哪一行坏了：八行里挑出一个错字段，只说"cron 不合法"等于让人逐行试
+        String which = multi ? "第 " + (i + 1) + " 条 cron 不合法" : "cron 不合法";
+        throw ApiException.invalidParam(which + "（需要 6 段：秒 分 时 日 月 周）：" + e.getMessage());
+      }
+      if (next != null) {
+        out.put(line, next.atZone(effective).toInstant().toEpochMilli());
+      }
+    }
+    return out;
+  }
+
+  /** 管理台传进来的时区；空值落到默认时区，非法值当场 400——别存进一个永远不会按预期触发的任务。 */
+  static ZoneId zoneOf(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return ZoneId.of(Templates.DEFAULT_ZONE);
+    }
+    try {
+      return ZoneId.of(raw.trim());
+    } catch (DateTimeException e) {
+      throw ApiException.invalidParam(
+          "timezone 不合法（例如 Asia/Shanghai、UTC、Europe/Berlin）：" + raw.trim());
+    }
+  }
+
+  /** 读库用：老行或脏值都不该让一轮扫描整体失败，统一回落到默认时区。 */
+  static ZoneId zoneOrFallback(String raw) {
+    try {
+      return zoneOf(raw);
+    } catch (ApiException e) {
+      return ZoneId.of(Templates.DEFAULT_ZONE);
+    }
+  }
+
+  /**
+   * 把 {@code cron_expr} 拆成逐条表达式：每行一条，空行与首尾空白都丢掉（管理台的 textarea 里
+   * 多敲一个回车不该让任务存不下来）。
+   */
+  static List<String> splitCrons(String cronExpr) {
     if (cronExpr == null || cronExpr.isBlank()) {
       throw ApiException.invalidParam("cron_expr 必填");
     }
-    try {
-      return CronExpression.parse(cronExpr.trim());
-    } catch (IllegalArgumentException e) {
-      throw ApiException.invalidParam("cron 不合法（需要 6 段：秒 分 时 日 月 周）：" + e.getMessage());
+    List<String> lines = new ArrayList<>();
+    for (String raw : cronExpr.split("\\R")) {
+      String line = raw.trim();
+      if (!line.isEmpty()) {
+        lines.add(line);
+      }
     }
+    if (lines.isEmpty()) {
+      throw ApiException.invalidParam("cron_expr 必填");
+    }
+    if (lines.size() > MAX_CRONS) {
+      throw ApiException.invalidParam(
+          "cron_expr 最多 " + MAX_CRONS + " 条（每行一条），现在是 " + lines.size() + " 条");
+    }
+    int total = String.join("\n", lines).length();
+    if (total > MAX_CRON_CHARS) {
+      throw ApiException.invalidParam(
+          "cron_expr 太长：" + total + " 字符，上限 " + MAX_CRON_CHARS);
+    }
+    return lines;
+  }
+
+  private static List<CronExpression> parseCrons(String cronExpr) {
+    List<String> lines = splitCrons(cronExpr);
+    boolean multi = lines.size() > 1;
+    List<CronExpression> out = new ArrayList<>(lines.size());
+    for (int i = 0; i < lines.size(); i++) {
+      try {
+        out.add(CronExpression.parse(lines.get(i)));
+      } catch (IllegalArgumentException e) {
+        // 多行时必须说清是哪一行坏了：八行里挑出一个错字段，只说"cron 不合法"等于让人逐行试
+        String which = multi ? "第 " + (i + 1) + " 条 cron 不合法" : "cron 不合法";
+        throw ApiException.invalidParam(which + "（需要 6 段：秒 分 时 日 月 周）：" + e.getMessage());
+      }
+    }
+    return out;
   }
 
   // ---------- 校验与映射 ----------
@@ -221,17 +373,20 @@ public class ScheduledTaskService {
     return channel;
   }
 
-  private void validate(Row channel, TaskInput input) {
+  private void validate(Row channel, TaskInput input, ZoneId zone, long slot, long now) {
     if (input.content() == null || input.content().isBlank()) {
       throw ApiException.invalidParam("content 不能为空");
     }
     // 按字节而不是字符判：与投递时 ingestAccepted 用的是同一把尺子，
     // 否则一个"32K 个汉字"的任务会创建成功、然后每分钟失败一次。
+    // 量的是渲染之后的正文：${now} 这类占位符展开后可能比模板长，只量模板会漏掉这种情况。
     int maxBodyBytes = intValue(channel, "max_body_bytes",
         props.getRetention().getMaxMessageBytes());
-    int bytes = input.content().getBytes(StandardCharsets.UTF_8).length;
+    String rendered = Templates.render(input.content(), zone, Instant.ofEpochMilli(now),
+        templateVars(input.name(), input.senderName(), channel, zone, slot));
+    int bytes = rendered.getBytes(StandardCharsets.UTF_8).length;
     if (bytes > maxBodyBytes) {
-      throw ApiException.invalidParam("正文 " + bytes + " 字节，超过该频道的 max_body_bytes "
+      throw ApiException.invalidParam("正文渲染后 " + bytes + " 字节，超过该频道的 max_body_bytes "
           + maxBodyBytes);
     }
     if (input.images() != null && input.images().size() > IngestRequest.MAX_IMAGES) {
@@ -241,6 +396,30 @@ public class ScheduledTaskService {
       for (String raw : input.images()) {
         requireHttpUrl(raw);
       }
+    }
+  }
+
+  /**
+   * 正文模板可用的变量。{@code scheduled_at} 是计划时隙（这一条本该什么时候发），
+   * 与 {@code ${now}}（实际渲染时刻）刻意分开：扫描延迟、宕机补跑都会让两者相差几十秒到几分钟。
+   */
+  private Map<String, String> templateVars(String taskName, String senderName, Row channel,
+      ZoneId zone, long slot) {
+    Map<String, String> vars = new LinkedHashMap<>();
+    putIfPresent(vars, "task_name", taskName);
+    putIfPresent(vars, "channel_no", channel.getString("channel_no"));
+    // findChannel 是 SELECT *，列名就是 name；模板变量名才叫 channel_name
+    putIfPresent(vars, "channel_name", channel.getString("name"));
+    putIfPresent(vars, "sender_name", senderName);
+    vars.put("scheduled_at", SLOT_TIME.format(Instant.ofEpochMilli(slot).atZone(zone)));
+    vars.put("host", identity.host());
+    vars.put("version", identity.version());
+    return vars;
+  }
+
+  private static void putIfPresent(Map<String, String> vars, String key, String value) {
+    if (value != null && !value.isBlank()) {
+      vars.put(key, value);
     }
   }
 
@@ -268,10 +447,12 @@ public class ScheduledTaskService {
     return Ulid.next();
   }
 
-  private Row toRow(String taskId, Row channel, TaskInput input, long nextFireAt, long now) {
-    validate(channel, input);
-    String cron = input.cronExpr().trim();
-    parseCron(cron);
+  private Row toRow(String taskId, Row channel, TaskInput input, ZoneId zone, long nextFireAt,
+      long now) {
+    validate(channel, input, zone, nextFireAt, now);
+    // 按行归一化后落库：空行与 CRLF 不进库，否则列表里显示的是"带着一片空白的 cron"
+    String cron = String.join("\n", splitCrons(input.cronExpr()));
+    parseCrons(cron);
     Row row = new Row();
     row.set("task_id", taskId);
     row.set("group_id", channel.getString("group_id"));
@@ -279,6 +460,7 @@ public class ScheduledTaskService {
     row.set("name", clamp(input.name(), 64));
     row.set("category", normalizeCategory(input.category()));
     row.set("title", clamp(input.title(), 512));
+    // 存模板原文，渲染留到触发那一刻：存渲染结果的话，建任务时的那一秒会被固化成每天的正文
     row.set("content", input.content());
     // 归一化到 Level 的 wire 值：存 "warn" 这类近义写法会在触发时被 fromWire 静默降级成 info，
     // 任务看着是 warn、消息却是 info，排查起来没有任何报错可循。
@@ -287,6 +469,7 @@ public class ScheduledTaskService {
     row.set("images_json", input.images() == null || input.images().isEmpty() ? null
         : Json.write(input.images()));
     row.set("cron_expr", cron);
+    row.set("timezone", zone.getId());
     row.set("enabled", input.enabled() == null || input.enabled() == 1 ? 1 : 0);
     row.set("next_fire_at", nextFireAt);
     row.set("created_at", now);
@@ -331,6 +514,7 @@ public class ScheduledTaskService {
     out.put("level", nullToEmpty(task.getString("level")));
     out.put("sender_name", nullToEmpty(task.getString("sender_name")));
     out.put("cron_expr", task.getString("cron_expr"));
+    out.put("timezone", zoneOrFallback(task.getString("timezone")).getId());
     out.put("enabled", intValue(task, "enabled", 1));
     out.put("next_fire_at", nullToZero(longValueRaw(task, "next_fire_at")));
     out.put("last_fire_at", nullToZero(longValueRaw(task, "last_fire_at")));
@@ -410,9 +594,11 @@ public class ScheduledTaskService {
 
   /**
    * 管理台请求体。命名沿用管理台既有接口的驼峰风格（响应才是下划线）。
-   * {@code category} 排在最后而不是紧跟 {@code name}：这个 record 在本仓有按位置构造的调用点，
-   * 插到中间会让后面每个参数集体错位，而它们大多同为 String，编译器拦不住。
+   * {@code category} 与 {@code timezone} 排在最后而不是紧跟 {@code cronExpr}：
+   * 这个 record 在本仓有按位置构造的调用点，插到中间会让后面每个参数集体错位，
+   * 而它们大多同为 String，编译器拦不住。
    */
   public record TaskInput(String channelNo, String name, String title, String content, String level,
-      String senderName, List<String> images, String cronExpr, Integer enabled, String category) {}
+      String senderName, List<String> images, String cronExpr, Integer enabled, String category,
+      String timezone) {}
 }

@@ -243,6 +243,16 @@ public class AdminController {
     return resp;
   }
 
+  /** 表单预览：只渲染、不落库。请求体与建任务同一份，靠 {@code /preview} 这一段落区分。 */
+  @PostMapping("/scheduled-tasks/preview")
+  public Map<String, Object> previewScheduledTask(@RequestBody byte[] body, HttpServletRequest http) {
+    guard.require(http, null);
+    Map<String, Object> resp = new LinkedHashMap<>();
+    resp.put("ok", true);
+    resp.put("preview", scheduledTasks.preview(readTaskInput(body)));
+    return resp;
+  }
+
   @PutMapping("/scheduled-tasks/{taskId}")
   public Map<String, Object> updateScheduledTask(@PathVariable String taskId,
       @RequestBody byte[] body, HttpServletRequest http) {

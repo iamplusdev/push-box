@@ -60,6 +60,23 @@ class ScheduledTaskStoreTest {
   }
 
   @Test
+  @DisplayName("①b 时区同样是一次 INSERT/SELECT 往返：V10 的列没被写漏，扫描行里也带得到它")
+  void timezoneSurvivesInsertAndReadBack() {
+    Row row = task("运维巡检");
+    row.set("timezone", "Europe/Berlin");
+    store.insertScheduledTask(row);
+
+    assertThat(store.findScheduledTask(TASK_ID).getString("timezone")).isEqualTo("Europe/Berlin");
+    // 投递时要按任务自己的时区渲染正文，扫描那条 SELECT * 必须带着这一列
+    assertThat(timezoneIn(store.dueScheduledTasks(SLOT, 200))).isEqualTo("Europe/Berlin");
+
+    Row edited = task("运维巡检");
+    edited.set("timezone", "UTC");
+    assertThat(store.updateScheduledTask(edited)).isEqualTo(1);
+    assertThat(store.findScheduledTask(TASK_ID).getString("timezone")).isEqualTo("UTC");
+  }
+
+  @Test
   @DisplayName("② 编辑整体覆盖分类，清空落回空串而不是 null——列是 NOT NULL DEFAULT ''")
   void updateOverwritesCategoryAndEmptyIsNotNull() {
     store.insertScheduledTask(task("公告"));
@@ -81,6 +98,13 @@ class ScheduledTaskStoreTest {
         .orElse(null);
   }
 
+  private String timezoneIn(List<Row> rows) {
+    return rows.stream().filter(r -> TASK_ID.equals(r.getString("task_id")))
+        .map(r -> r.getString("timezone"))
+        .findFirst()
+        .orElse(null);
+  }
+
   /** 一行分类用例的任务；{@code category} 之外全部是与被测点无关的合法值。 */
   private static Row task(String category) {
     Row row = new Row();
@@ -95,6 +119,7 @@ class ScheduledTaskStoreTest {
     row.set("sender_name", "定时推送");
     row.set("images_json", null);
     row.set("cron_expr", "0 0 9 * * *");
+    row.set("timezone", "Asia/Shanghai");
     row.set("enabled", 1);
     // 放在很久以前会被任何一台真服务的扫描当成到期行，所以往未来摆：只有用例传进来的 now 能命中它
     row.set("next_fire_at", SLOT);

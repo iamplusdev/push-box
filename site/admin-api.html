@@ -152,7 +152,7 @@ TOKEN=$(curl -sS -X POST "$BASE/api/v1/admin/login" \
   </ul>
 
   <h2 id="endpoint-table">端点总表</h2>
-  <p>16 个，全部在 <code>/api/v1/admin</code> 下，全部要带 Bearer 头。</p>
+  <p>17 个，全部在 <code>/api/v1/admin</code> 下，全部要带 Bearer 头。</p>
   <table>
     <thead><tr><th>方法 · 路径</th><th>用途</th><th>响应里的键</th></tr></thead>
     <tbody>
@@ -169,6 +169,7 @@ TOKEN=$(curl -sS -X POST "$BASE/api/v1/admin/login" \
       <tr><td><span class="tag get">GET</span> <code>/scheduled-tasks</code></td><td>所有任务，不含正文</td><td><code>tasks[]</code></td></tr>
       <tr><td><span class="tag get">GET</span> <code>/scheduled-tasks/{taskId}</code></td><td>单条详情，含正文与图片</td><td><code>task</code></td></tr>
       <tr><td><span class="tag post">POST</span> <code>/scheduled-tasks</code></td><td>建任务</td><td><code>task</code></td></tr>
+      <tr><td><span class="tag post">POST</span> <code>/scheduled-tasks/preview</code></td><td>只渲染正文与下次触发时间，不落库</td><td><code>preview</code></td></tr>
       <tr><td><span class="tag put">PUT</span> <code>/scheduled-tasks/{taskId}</code></td><td>整体覆盖载荷与调度</td><td><code>task</code></td></tr>
       <tr><td><span class="tag post">POST</span> <code>/scheduled-tasks/{taskId}/enabled</code></td><td>启用 / 停用</td><td><code>task</code></td></tr>
       <tr><td><span class="tag del">DELETE</span> <code>/scheduled-tasks/{taskId}</code></td><td>删任务</td><td><code>task_id</code></td></tr>
@@ -357,10 +358,18 @@ curl -sS -X DELETE "$BASE/api/v1/admin/devices/01J8ZK3Q7M2XW4V9HTNBSFY6PD" \
   "level": "info",
   "senderName": "值守机器人",
   "images": ["https://example.com/chart.png"],
-  "cronExpr": "0 30 21 * * *",
+  "cronExpr": "0 0 9 * * 1-5\n0 0 12 * * 0,6",
+  "timezone": "Asia/Shanghai",
   "enabled": 1
 }</code></pre>
-      <span class="sub"><code>cronExpr</code> 是 <b>6 段：秒 分 时 日 月 周</b>，不认 5 段 unix cron。"每天 21:30" 写 <code>0 30 21 * * *</code>。</span>
+      <span class="sub"><code>cronExpr</code> 每行一条，<b>6 段：秒 分 时 日 月 周</b>，不认 5 段 unix cron。"每天 21:30" 写 <code>0 30 21 * * *</code>。多行就是一条任务挂多套作息：上面这个例子工作日 09:00、周末 12:00 各发一次，最多 8 行，空行会被忽略。</span>
+    </li>
+    <li>
+      <b>先预览，再落库</b>
+      <pre class="code" data-code="bash"><code>curl -sS -X POST "$BASE/api/v1/admin/scheduled-tasks/preview" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  --data-binary @task.json | jq .preview</code></pre>
+      <span class="sub">请求体与建任务同一份，只渲染、不落库：<code>content</code> 是变量替换后的正文，<code>bytes</code> 对上 <code>max_body_bytes</code>，超了只把 <code>over_limit</code> 标成 <code>true</code>，这里不报 400——真正拦人的闸在保存那一步。<code>next_fires</code> 逐条列出每条 cron 的下次触发，<code>next_fire_at</code> 是所有规则里最近的那一次。</span>
     </li>
     <li>
       <b>提交</b>
@@ -392,8 +401,9 @@ curl -sS -X DELETE "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;" \
     <thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead>
     <tbody>
       <tr><td><code>channelNo</code></td><td><span class="tag req">必填</span></td><td>目标频道；不存在 404，已归档 400</td></tr>
-      <tr><td><code>content</code></td><td><span class="tag req">必填</span></td><td>正文，UTF-8 字节数不得超过该频道的 <code>max_body_bytes</code>（默认 32768）</td></tr>
-      <tr><td><code>cronExpr</code></td><td><span class="tag req">必填</span></td><td>6 段 cron；段数或取值非法、或已经没有下一次，都是 400</td></tr>
+      <tr><td><code>content</code></td><td><span class="tag req">必填</span></td><td>正文，UTF-8 字节数不得超过该频道的 <code>max_body_bytes</code>（默认 32768）。支持 <code>${now}</code> / <code>${now:yyyy-MM-dd HH:mm}</code> / <code>${scheduled_at}</code> 等变量，认不出的原样保留</td></tr>
+      <tr><td><code>cronExpr</code></td><td><span class="tag req">必填</span></td><td>每行一条 6 段 cron，最多 8 条，触发取所有行里最近的一次；段数或取值非法、超过 8 条、或全部已经没有下一次，都是 400（多行时错误里带「第 N 条」）</td></tr>
+      <tr><td><code>timezone</code></td><td><span class="tag opt">可选</span></td><td>IANA 时区名（<code>Asia/Shanghai</code>、<code>UTC</code>…），省略按 <code>Asia/Shanghai</code> 落库；cron 与正文里的时间变量都按它算，非法值 400</td></tr>
       <tr><td><code>level</code></td><td><span class="tag opt">可选</span></td><td><code>info</code> / <code>warning</code> / <code>error</code>；写错会安静变成 <code>info</code>，不报错</td></tr>
       <tr><td><code>name</code> / <code>title</code> / <code>senderName</code></td><td><span class="tag opt">可选</span></td><td>去空白后分别最长 64 / 512 / 64 字符</td></tr>
       <tr><td><code>category</code></td><td><span class="tag opt">可选</span></td><td>列表用的自由标签，最长 32 字符，不校验取值</td></tr>
@@ -410,7 +420,7 @@ curl -sS -X DELETE "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;" \
       <tr><td><code>channel_name</code></td><td>只有列表</td><td>详情和三个写操作的响应里都没有这个键</td></tr>
       <tr><td><code>content_head</code></td><td>列表和写操作</td><td>正文前 80 个字符，这两种形状故意不回全文</td></tr>
       <tr><td><code>content</code>、<code>images</code></td><td>只有详情</td><td>要完整载荷就读详情；详情里没有 <code>content_head</code></td></tr>
-      <tr><td><code>next_fire_at</code>、<code>last_fire_at</code>、<code>created_at</code>、<code>updated_at</code></td><td>都有</td><td>epoch 毫秒；没值回 <code>0</code>，不是 <code>null</code>，键也不会消失</td></tr>
+      <tr><td><code>next_fire_at</code>、<code>last_fire_at</code>、<code>created_at</code>、<code>updated_at</code></td><td>都有（<code>next_fires</code> 只有预览）</td><td>epoch 毫秒；没值回 <code>0</code>，不是 <code>null</code>，键也不会消失。多行 cron 时 <code>next_fire_at</code> 是最近的那一次，逐条时刻看预览响应的 <code>next_fires[]</code></td></tr>
       <tr><td><code>last_result</code>、<code>last_error</code>、<code>last_msg_id</code></td><td>跑过之后才有</td><td>从没跑过的任务里这三个键都不存在；哪个出现由下面那条说明决定</td></tr>
     </tbody>
   </table>
@@ -449,6 +459,7 @@ curl -sS -X DELETE "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;" \
 
   <h3>执行口径</h3>
   <ul>
+    <li><b>多条 cron 是一条任务，不是多条任务。</b>所有行共用同一份正文、时区与启停状态；哪一行先到就按那一刻发，撞在同一秒也只发一条（时隙幂等键按任务算，不按行算）。</li>
     <li><b>精度到分钟，不到秒。</b>亚分钟级的 cron 会被推迟到下一个扫描点，实际效果是<b>每分钟最多一条</b>；<code>0/5 * * * * *</code> 不会每 5 秒发一条。</li>
     <li>扫描周期 <code>pb.scheduled.sweep-interval</code>（默认 15 秒），每轮最多处理 <code>pb.scheduled.batch-size</code>（默认 50）条。</li>
     <li>宕机几小时后<b>只补当前这一次</b>，不逐分钟回补，之后回到正常节律。</li>

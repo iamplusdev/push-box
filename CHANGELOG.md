@@ -9,6 +9,70 @@
 
 ---
 
+## 未发布 —— 定时推送支持多条 cron（第三十八轮）
+
+> 起因是一个很具体的需求：「工作日 09:00 发一次、周末 12:00 发一次」。此前只能建两个只差 cron 的任务——正文、时区、启停各维护一份，改文案要改两处、还容易只改一处。这一轮让一个任务的 `cron_expr` 装多行表达式（每行一条 6 段 cron，最多 8 条），触发取所有行里最近的那一次。
+
+### 服务端
+
+- **`scheduled_tasks.cron_expr` 由 `VARCHAR(64)` 放宽到 `VARCHAR(512)`**（`V11__scheduled_task_multi_cron.sql`）：按 8 条 × 单行上限留的余量；老数据都是单行，升级后原样可读，列注释写明「每行一条、最多 8 条、触发取最近的一条」。
+- **`ScheduledTaskService` 改为逐行解析**：`splitCrons` 按行拆（CRLF 与空行都吃掉，规范化后落库），超过 8 条直接 400；`nextFires` 逐行调 `CronExpression.next`，`next_fire_at` 取其中最小的那一个。某条规则已经没有下一次时不拖垮整个任务，只是不参与取最小；全部都没有下一次才 400。
+- **错误定位到行**：多行时提示是「第 2 条 cron 不合法（需要 6 段：秒 分 时 日 月 周）：…」，单行仍是原来的「cron 不合法」——八行里挑一个错字段，只说"cron 不合法"等于让人逐行试。
+- **幂等仍然按任务算**：`msg_key` 是 `sched:<taskId>:<slot/60000>`，不含 cron 行，所以两条规则落在同一分钟（例如 `0 0 9 * * *` 与 `0 0 9 * * 1-5`）也只发一条。
+- **预览多回一份 `next_fires`**：`[{cron, next_fire_at}, …]`，顺序与填写顺序一致；`next_fire_at` 仍是所有行的最小值，正文里的 `${scheduled_at}` 按它渲染。
+
+### 管理台
+
+- cron 从单行输入框改成**可增删的多行**：每行一个输入框，行尾显示该行的下次触发（点一次「预览」才填，改 cron 或时区会清空重算），至少保留一行；「快捷添加」里的预设（每天 9:00 / 工作日 9:00 / 周末 12:00 …）改为"追加一行"，已经在列表里的不再重复添加。
+- 列表的 cron 列只显示第一行 + 「等 N 条」，完整表达式挂在 tooltip 上；预览弹窗在多条时逐行列出每条的下次触发，底部口径改成"`${scheduled_at}` 按所有规则里最近的那一次渲染"。
+
+### 文档
+
+- `site/admin-api.html` 的定时推送一节改成多行示例（工作日 + 周末），请求体、响应、执行口径三处都补上「每行一条、最多 8 条、取最近一次、多行错误带第 N 条、同秒只发一条」。
+
+### 测试
+
+- `ScheduledTaskLogicTest` 新增 7 条：③d 取所有行里最近的一次（工作日 9:00 + 周末 12:00，跨过周五/周六边界）、③e CRLF 与空行忽略、③f 多行错误带行号、③g 9 条 400 且不落库、③h 两条同秒规则只发一条、③i 落库前归一、⑩f 预览逐条回 `next_fires` 且顺序与填写一致。
+- web-admin `npm run build` 通过（`vue-tsc` 无错）；Maven 全量 **359 条（core 50 + server 309），0 失败 0 错误**，本机 326 执行 + 33 跳过（DB/S3 门控，与基线逐条一致）。
+
+---
+
+## 未发布 —— 定时推送的任务时区、正文变量与表单预览（第三十七轮）
+
+> 起因是一个很具体的问题：定时任务的「每天 09:00」到底按哪里的 09:00 算？此前 cron 走 `ZoneId.systemDefault()`，容器里通常是 UTC，于是运维在管理台写的 09:00 实际落在北京时间 17:00；正文里也没有任何办法写"当前时间"。这一轮把时区变成任务自己的属性，并给正文加一套只做替换、不做逻辑的变量。
+
+### 服务端
+
+- **`scheduled_tasks` 加 `timezone` 列**（`V10__scheduled_task_timezone.sql`，`NOT NULL DEFAULT 'Asia/Shanghai' AFTER cron_expr`）：老任务升级后行为不变，新建任务在管理台里可改。`next_fire_at` 的计算从 `systemDefault()` 改成按任务时区换算——`CronExpression` 本身不带时区，这一步漏了就会"存的是上海时间、算的是 UTC 时间"。
+- **核心渲染器 `packages/core/.../text/Templates.java`**：只认一层 `${名字}` / `${名字:参数}`，没有条件、循环、嵌套与转义。未知变量、非法格式串、没闭合的 `${` 一律原样保留；`${now}` 支持自定义 `DateTimeFormatter` 格式。**时区权威只有一处**：`render(text, zone, now, vars)` 拿到哪个时区就用哪个，`${timezone:xx}` 的参数不参与计算。
+- **定时推送在触发时渲染**：正文存模板原文，`fire()` 里按任务时区 + 计划时隙展开。变量：`now`（可带格式）、`date`、`time`、`weekday`、`timestamp`、`scheduled_at`、`timezone`、`task_name`、`channel_no`、`channel_name`、`sender_name`、`host`、`version`。`scheduled_at` 与 `${now}` 刻意分开：前者是"本该几点发"，后者是"实际渲染的此刻"，补跑时两者能差几分钟。
+- **第三方 `POST /message` 也认这套变量**：时区取正文里第一处 `${timezone:xx}`，没写或写错落 `Asia/Shanghai`（不跟部署机器的 TZ 走）。渲染发生在验签之后，`strict_auth` 仍签原文；入库正文、`summary`、`daily_counters.bytes` 都用渲染后的值。内部入口 `ingestInternal` 不做二次展开，避免定时任务展开出的字面量被再解释一遍。
+- **字节上限判渲染之后**：模板 `${now}` 只有 6 字节、展开成 19 字节，只量模板会放过一个"创建成功、每分钟必失败"的任务；创建/更新时按渲染结果判 400，触发时 `ingestAccepted` 再判一次。
+- **`ServerIdentity`**：为 `${host}` / `${version}` 提供来源（`HOSTNAME` 环境变量 → JVM 主机名 → `unknown`；版本走 `build-info` → `Implementation-Version` → `unknown`），只在渲染这两处使用，`/healthz` 仍然不回版本号。
+- **表单预览 `POST /api/v1/admin/scheduled-tasks/preview`**：与建任务同一份请求体，按当前时刻渲染一遍、**不落库也不要求正文非空**，回 `{timezone, now, next_fire_at, content, bytes, max_body_bytes, over_limit}`。渲染留在服务端是刻意的——`${now:yyyy-MM-dd}` 用的是 Java 的 `DateTimeFormatter`，前端复刻一套只会在两边慢慢长歪。顺手修掉一处真缺陷：`${channel_name}` 原来读的是频道行上不存在的 `channel_name` 列（`findChannel` 是 `SELECT *`，列名就是 `name`），定时任务里这个变量一直是字面量，预览把它照出来了。
+
+### 管理台
+
+- 「定时推送」表单新增**时区**下拉（可过滤、可直接输入任意 IANA 名，默认 `Asia/Shanghai`），列表新增一列显示它；正文框下面挂一排**可点击插入**的变量标签，每个带一句说明。请求体新增 `timezone`，响应同步回显。
+- 表单底部新增**预览**：拿当前填写的内容调一次服务端，弹窗里显示渲染后的正文、发送者/级别/标题、预计下次触发时刻，以及"渲染后字节 / 频道上限"——超限当场标红（保存仍会被服务端拒绝）。`${now}` 与 `${scheduled_at}` 的口径在弹窗底部写清楚：前者是预览这一刻，后者是 cron 算出的下一次时隙，到点发出时两个值都会变。弹窗里的「预计下次触发」按**任务自己的时区**显示（`Intl.DateTimeFormat` 带 `timeZone`），不跟浏览器本地时区走——否则标签写着 `Asia/Tokyo`、旁边的时间却是本机的，正好和 `${scheduled_at}` 自相矛盾。
+- 变量标签按「时间」「任务/频道」**分组**放进一步带边框的面板，面板头一句"点一下插入到正文末尾，悬停看说明"；说明文案也补齐了实际输出形状（`${date}` 是 `2026-10-24`、`${weekday}` 是 `星期六`）。
+- **频道被删后预览/保存不再只剩一句 `not_found`**：打开表单时重拉一次频道；点预览/保存前拿已加载的列表对一遍；服务端回 `404 not_found(hint=channel)` 或 `invalid_param(频道已归档)` 时清掉已选频道并再刷一次列表。拦截器也把 404 统一换成"请求的资源不存在，可能已被删除，请刷新后重试"，`invalid_param` 则优先显示服务端那句人话（如"频道已归档，不能作为定时推送目标"）而不是代码。频道列表为空时，目标频道下面直接提示先用 `POST /api/v1/admin/channels` 建一个（管理台没有建频道入口）。
+
+### 文档
+
+- `docs/用户使用手册.md` 新增 4.1「定时推送」与 4.2「第三方正文里的变量」：cron 与触发精度、时区归属规则、两张变量表、渲染后才判长度；并点明 `#{...}` 是 ddns-go 自己的占位符，不归 PushBox。
+- `docs/软件设计方案.md` 在 API 表后追加 2026-10-24 的订正段（V10、模板语义、时区优先级、变量清单、落库与上限），D33 原文保持不动。
+
+### 测试
+
+- 新增 `TemplatesTest` 7 条（别名、东京时区偏移、自定义格式、时区优先级、认不出/写错的原样保留）。
+- `ScheduledTaskLogicTest` 28 条：新增任务时区影响下次触发、非法时区 400、默认时区兜底、触发时展开 `${scheduled_at}`/`${timezone}`、正文里的 `${timezone:...}` 压不过任务时区、渲染后超限 400、时区随载荷落库与回显；另加 2 条预览用例（预览与触发同源且 `${channel_name}` 取频道行的 `name` 列、超限只标红不落库）。
+- 新增 `IngestVariableRenderTest` 3 条：第三方路径展开、缺省时区回落、内部路径不二次展开（不依赖真库）。
+- `ScheduledTaskStoreTest` 增加时区往返一条（INSERT/SELECT/UPDATE 三个动作都带这一列），跑真库时生效。
+- web-admin `npm run build` 通过；Maven 全量 **352 条**（当轮 core 50 与 server 302 两档合计），0 失败 0 错误，本机 319 执行 + 33 跳过（DB/S3 门控，与基线逐条一致）。真库门控的 `ScheduledTaskStoreTest` 时区往返这条本机没跑起来（MySQL 未启动），由 CI 的 service container 覆盖。
+
+---
+
 ## 未发布 —— 发布线重置：三端版本号回到 1.1.0，历史标签与 Release 撤销（第三十六轮）
 
 > 起点是上一轮收尾时的一条事实：Docker Hub 上的标签已被手动清光（复查 `count: 0`、单查全 404），而 GitHub 上还挂着 `server-v1.1.2`…`server-v1.1.6` 五枚服务端标签与两条客户端 Release。留下一条"号在后面、镜像不在"的半截发布线，比重新开始更难解释——维护者拍板**整条线回到 1.1.0 重发**，历史标签与历史 Release 全部撤销，Hub 上从这一枚起算。
@@ -39,7 +103,7 @@
 
 ### 验证（本轮实测）
 
-- Maven 全量 **332** 条（core 43 + server 289），0 失败、33 跳过（DB/S3 门控，与基线逐条一致）；`Reactor Summary for pushbox-parent 1.1.0` 顺带证号写对了。
+- Maven 全量 **332** 条（core 43 条与 server 289 条），0 失败、33 跳过（DB/S3 门控，与基线逐条一致）；`Reactor Summary for pushbox-parent 1.1.0` 顺带证号写对了。
 - `dotnet test` **554 通过 / 0 失败 / 0 跳过**。
 - `bash scripts/install-page-smoke.sh` **5 通过 / 0 失败**，跑的是新产物 `apps/server/target/pushbox-server-1.1.0.jar`（自带端口 7499，用户手起的 7404 实例没动）。
 - `bash scripts/release-verify.sh` **88 通过 / 0 失败**，2 条警告是"本机没有 docker CLI 判不了镜像体积"与"工作区 18 个文件未提交"——提交后第二条应消失，回到 88 / 0 / 1。
@@ -144,7 +208,7 @@
 
 ### 验证
 
-- **Java 全量 332 条（core 43 + server 289，299 执行 + 33 跳过）、0 失败 0 错误**，BUILD SUCCESS。新增用例集中在 `setup/`：`RuntimeConfigTest` 10 + `InstallServerTest` 15 + `RuntimeConfigEnvironmentPostProcessorTest` 5 = 30 条；同时删掉 `DevCredentialsGuardTest` 10 与 `ProdPlaintextMediaGuardTest` 7，净 `+13`（319 → 332）。`InstallServerTest` ⑮ 是真起一次 `HttpServer` 的交接判据：`GET /` 200 且 meta 里是实际端口、`/dashboard` `/login` `/admin` 三条 302 且 `Location: /`。
+- **Java 全量 332 条（core 43 条与 server 289 条，299 执行 + 33 跳过）、0 失败 0 错误**，BUILD SUCCESS。新增用例集中在 `setup/`：`RuntimeConfigTest` 10 + `InstallServerTest` 15 + `RuntimeConfigEnvironmentPostProcessorTest` 5 = 30 条；同时删掉 `DevCredentialsGuardTest` 10 与 `ProdPlaintextMediaGuardTest` 7，净 `+13`（319 → 332）。`InstallServerTest` ⑮ 是真起一次 `HttpServer` 的交接判据：`GET /` 200 且 meta 里是实际端口、`/dashboard` `/login` `/admin` 三条 302 且 `Location: /`。
 - **`scripts/release-verify.sh` 84 通过 / 0 失败 / 2 警告**（两条警告是"本机没有 docker CLI 判不了镜像体积"与"工作区有未提交文件"）。本轮新增第 8 节「检查发布脚本」8 条判据，判的是**形状**（五个脚本都在、都过 `bash -n`、三端各自"本地测试那一步的行号 < 写版本号那一步的行号"、`PB_REMOTE` 唯一取值 `github`、没有任何一行把 `push` 与 `gitee`/`gitea` 写在一起、`PB_PUSH` 初值是 0）——这些脚本自己不会被任何工作流触发，坏了没人替你发现。**六条都做过负测**：把 `set-version` 那行挪到测试之前、在 `release-windows.sh` 末尾塞半截 `if`、`PB_REMOTE` 改 `gitee`、`PB_PUSH` 改 1、往 `release-android.sh` 塞一行 `git push gitee main`、把 `release.sh` 挪走，六种改法逐个把对应判据判红，恢复后与备份逐字节相同、闸门回绿。写它时踩到一次自指：判据本来用 `scripts/release*.sh` 这个 glob 扫，把 `release-verify.sh` 自己也扫进去了，而它的判据文本里同时写着 `push` 与 `gitee`，第一跑就把自己判红——改成只扫那五个文件名（与 compose 那条 `${VAR:?}` 判据同一类失效：给人读的说明文字被自己的闸门当成违规）。
 - **发布脚本本身验到哪儿**：`release.sh` 的 `--list`、单端 / 多端 / `--all` 的 `--dry-run`、显式旧版本号被判死、部分成功部分失败时的统计与"剩下的端该跑哪条命令"提示、`--bump=minor` 与 `--push` 的参数转发，都实跑过；服务端那一步（`3/6`）是把脚本里那段**原样抽出来真跑的**——`mvn -B -pl :pushbox-server -am test` 出 332 条 / 33 跳过 / 299 执行、与 `ci.yml` 基线相等，`web-admin` 构建出非空 `dist/index.html`，`release-verify.sh` 零 FAIL。**Android 与 Windows 那两步没有真跑过**（`gradlew :app:assembleRelease` + `apksigner` 比指纹、`dotnet test` + 数 trx + `build-installer.sh`），判据是照 `ci.yml` / `build-apk.yml` 抄的，只过了 `bash -n` 与 dry-run；也**没有创建过任何提交或标签、没有推过任何远端**。
 - **WSL Docker 上真跑了一次安装页全流程**：从改过的源码重建镜像 → `docker compose up` → 删掉容器里的 `pushbox.json` 把安装页重新武装 → `deploy/deploy-wsl.sh setup` 把表单值 POST 进去 → 在容器内 `/app/data/config/pushbox.json` 里确认 `media.allowHosts` 等字段真的落盘 → `/healthz` 200 → `PushBox.LiveCheck` 12/12 → 入站 `POST /message` 带一张内网图片。上面那三条缺陷就是这么照出来的，`mvn test` 一条都抓不到。图片链路终态：`media_objects.status=ready`、`enc_mode=sse-c`、`length(sse_key_wrapped)=61`、`size=79`、`object_key` 非空，`senders.avatar_key` 也非空；桶里那份 `xl.meta` 既没有 PNG 魔数也没有 `IHDR`，落盘确实是密文。顺带验到两条设计行为：同一 URL 的第二条消息按 sha256 复用了前一条的 `object_key`；先前 `ssrf_blocked` 的那一行在放行主机进配置之后被重试器自己救回了 `ready`。

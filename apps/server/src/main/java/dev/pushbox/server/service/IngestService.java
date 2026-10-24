@@ -9,7 +9,9 @@ import dev.pushbox.core.model.MediaStatus;
 import dev.pushbox.core.model.MsgType;
 import dev.pushbox.core.protocol.Frames;
 import dev.pushbox.core.text.Summary;
+import dev.pushbox.core.text.Templates;
 import dev.pushbox.server.config.PbProperties;
+import dev.pushbox.server.config.ServerIdentity;
 import dev.pushbox.server.media.AvatarSource;
 import dev.pushbox.server.media.MediaFetchService;
 import dev.pushbox.server.media.MediaObjects;
@@ -19,9 +21,13 @@ import dev.pushbox.server.web.ApiException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -47,17 +53,19 @@ public class IngestService {
   private final FrameAssembler assembler;
   private final NotifyCoordinator coordinator;
   private final MediaFetchService fetcher;
+  private final ServerIdentity identity;
   private final io.micrometer.core.instrument.Timer ingestTimer;
 
   public IngestService(PbStore store, PbProperties props, AbuseControlService abuse,
       FrameAssembler assembler, NotifyCoordinator coordinator, MediaFetchService fetcher,
-      io.micrometer.core.instrument.MeterRegistry meterRegistry) {
+      ServerIdentity identity, io.micrometer.core.instrument.MeterRegistry meterRegistry) {
     this.store = store;
     this.props = props;
     this.abuse = abuse;
     this.assembler = assembler;
     this.coordinator = coordinator;
     this.fetcher = fetcher;
+    this.identity = identity;
     this.ingestTimer = meterRegistry.timer("pushbox.ingest.duration",
         "description", "消息摄入总耗时（含数据库写入与媒体抓取入队）");
   }
@@ -142,8 +150,13 @@ public class IngestService {
     if (isBlank(request.content())) {
       throw ApiException.invalidParam("content 不能为空");
     }
+    String senderName = clamp(request.senderName(), 64);
+    // 第三方正文认 ${...}；定时推送那条路在 ScheduledTaskService 里已按任务时区渲染好，
+    // 到这里 external=false，不能二次展开——否则用户变量展开出来的字面量会被再解释一遍。
+    String content = external ? renderVariables(request.content(), channel, senderName, now)
+        : request.content();
     int maxBodyBytes = intValue(channel, "max_body_bytes", props.getRetention().getMaxMessageBytes());
-    if (request.content().getBytes(StandardCharsets.UTF_8).length > maxBodyBytes) {
+    if (content.getBytes(StandardCharsets.UTF_8).length > maxBodyBytes) {
       throw ApiException.tooLarge();
     }
 
@@ -175,22 +188,22 @@ public class IngestService {
       long createdAt = businessTime(request.ts(), now);
       Level level = Level.fromWire(request.level())
           .truncateTo(Level.fromWire(channel.getString("max_level")));
-      String summary = Summary.of(request.title(), request.content(), props.getNotify().getSummaryChars());
+      String summary = Summary.of(request.title(), content, props.getNotify().getSummaryChars());
       String mediaStatus = images.isEmpty() ? MediaStatus.NONE.wire() : MediaStatus.PENDING.wire();
       // 坏头像不拦消息（§5.1：content 才是必填），只是这条不带头像
       AvatarSource avatar = AvatarSource.parse(request.senderAvatar());
 
-      store.upsertSender(channelNo, senderId, clamp(request.senderName(), 64),
+      store.upsertSender(channelNo, senderId, senderName,
           avatar == null ? null : avatar.source(), MediaObjects.avatarToken(senderId), now);
       store.insertMessage(msgId, channelNo, groupId, senderId, type.wire(),
-          clamp(request.title(), 512), request.content(), summary, request.url(), level.wire(),
+          clamp(request.title(), 512), content, summary, request.url(), level.wire(),
           mediaStatus, createdAt, isBlank(request.msgKey()) ? null : clamp(request.msgKey().trim(), 64));
       for (int i = 0; i < images.size(); i++) {
         store.insertMedia(msgId, i, images.get(i), channelNo, groupId, now);
       }
       // §14：更新日计数器（消息数 + 图片数 + 正文字节数）。内部摄入不记账，见类注释。
       if (external) {
-        int contentBytes = request.content().getBytes(StandardCharsets.UTF_8).length;
+        int contentBytes = content.getBytes(StandardCharsets.UTF_8).length;
         store.incrementDailyCounter(channelNo, images.size(), contentBytes, now);
       }
       fetcher.enqueueAvatar(channelNo, senderId, avatar);
@@ -250,6 +263,33 @@ public class IngestService {
       out.add(value);
     }
     return out;
+  }
+
+  /**
+   * 第三方正文的 {@code ${...}} 展开。时区取正文里第一处 {@code ${timezone:区域}}，
+   * 没写或写错就用默认时区——不跟部署机器的 TZ 走，否则同一个脚本换个环境整体漂几小时。
+   *
+   * <p>只在签名校验通过之后调用（{@code strict_auth} 签的是原文的 sha256），
+   * 所以渲染结果不会影响鉴权；入库、摘要与日计数字节数用的都是渲染后的正文。
+   */
+  private String renderVariables(String content, Row channel, String senderName, long now) {
+    if (content.indexOf("${") < 0) {
+      return content;
+    }
+    ZoneId zone = Templates.resolveZone(content, ZoneId.of(Templates.DEFAULT_ZONE));
+    Map<String, String> vars = new LinkedHashMap<>();
+    putIfPresent(vars, "channel_no", channel.getString("channel_no"));
+    putIfPresent(vars, "channel_name", channel.getString("name"));
+    putIfPresent(vars, "sender_name", senderName);
+    vars.put("host", identity.host());
+    vars.put("version", identity.version());
+    return Templates.render(content, zone, Instant.ofEpochMilli(now), vars);
+  }
+
+  private static void putIfPresent(Map<String, String> vars, String key, String value) {
+    if (value != null && !value.isBlank()) {
+      vars.put(key, value);
+    }
   }
 
   private static boolean isBlank(String s) {

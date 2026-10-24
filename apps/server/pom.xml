@@ -103,6 +103,13 @@
               <goal>repackage</goal>
             </goals>
           </execution>
+          <!-- ${version} 变量要报的是构建时的版本号，靠 META-INF/build-info.properties 带进运行时 -->
+          <execution>
+            <id>build-info</id>
+            <goals>
+              <goal>build-info</goal>
+            </goals>
+          </execution>
         </executions>
       </plugin>
     </plugins>
