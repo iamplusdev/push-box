@@ -283,6 +283,44 @@ class ScheduledTaskLogicTest {
   }
 
   @Test
+  @DisplayName("⑥b 触发时把任务自带的 sender_id / sender_avatar 带进内部摄入：客户端才知道该归到谁")
+  void firePassesTaskSenderIdentity() {
+    Row task = dueTask(1000L);
+    task.set("sender_id", "OnceHuman");
+    task.set("sender_avatar", "https://cdn.test/avatar.png");
+    when(store.dueScheduledTasks(anyLong(), anyInt())).thenReturn(List.of(task));
+    when(store.claimScheduledTaskSlot(anyString(), anyLong(), anyLong(), anyLong())).thenReturn(1);
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+    when(ingest.ingestInternal(any(), any())).thenReturn(new IngestResponse(true, "MSG-1", 7L,
+        "摘要", "none", 0, "info"));
+
+    service.sweepOnce();
+
+    ArgumentCaptor<IngestRequest> captor = ArgumentCaptor.forClass(IngestRequest.class);
+    verify(ingest).ingestInternal(any(), captor.capture());
+    assertThat(captor.getValue().senderId()).isEqualTo("OnceHuman");
+    assertThat(captor.getValue().senderAvatar()).isEqualTo("https://cdn.test/avatar.png");
+  }
+
+  @Test
+  @DisplayName("⑥c 扫描行缺 sender_id 时回落到 scheduled，别把 null 送进 NOT NULL 的 senders 表")
+  void missingSenderIdFallsBackToScheduled() {
+    Row task = dueTask(1000L);
+    task.set("sender_id", null);
+    when(store.dueScheduledTasks(anyLong(), anyInt())).thenReturn(List.of(task));
+    when(store.claimScheduledTaskSlot(anyString(), anyLong(), anyLong(), anyLong())).thenReturn(1);
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+    when(ingest.ingestInternal(any(), any())).thenReturn(new IngestResponse(true, "MSG-1", 7L,
+        "摘要", "none", 0, "info"));
+
+    service.sweepOnce();
+
+    ArgumentCaptor<IngestRequest> captor = ArgumentCaptor.forClass(IngestRequest.class);
+    verify(ingest).ingestInternal(any(), captor.capture());
+    assertThat(captor.getValue().senderId()).isEqualTo("scheduled");
+  }
+
+  @Test
   @DisplayName("⑦ 频道没了或已归档：自动停用任务，不投递，也别每分钟失败一次刷屏日志")
   void missingChannelDisablesTheTask() {
     when(store.dueScheduledTasks(anyLong(), anyInt())).thenReturn(List.of(dueTask(1000L)));
@@ -393,7 +431,7 @@ class ScheduledTaskLogicTest {
     when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
     ScheduledTaskService.TaskInput input = new ScheduledTaskService.TaskInput(CHANNEL_NO,
         "晨报", "标题", "${timezone} / ${channel_name} / ${scheduled_at}", "info", "定时推送",
-        List.of(), "0 0 9 * * *", 1, null, "Asia/Tokyo");
+        List.of(), "0 0 9 * * *", 1, null, "Asia/Tokyo", null, null);
 
     Map<String, Object> res = service.preview(input);
 
@@ -417,7 +455,7 @@ class ScheduledTaskLogicTest {
     when(store.findChannel(CHANNEL_NO)).thenReturn(small);
     ScheduledTaskService.TaskInput input = new ScheduledTaskService.TaskInput(CHANNEL_NO,
         "晨报", null, "一二三四五六七八九十", "info", null, List.of(),
-        "0 0 9 * * *", 1, null, null);
+        "0 0 9 * * *", 1, null, null, null, null);
 
     Map<String, Object> res = service.preview(input);
 
@@ -434,7 +472,7 @@ class ScheduledTaskLogicTest {
     when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
     ScheduledTaskService.TaskInput input = new ScheduledTaskService.TaskInput(CHANNEL_NO,
         "晨报", null, "正文", "info", null, List.of(),
-        "0 0 9 * * 1-5\n0 0 12 * * 0,6", 1, null, "Asia/Shanghai");
+        "0 0 9 * * 1-5\n0 0 12 * * 0,6", 1, null, "Asia/Shanghai", null, null);
 
     Map<String, Object> res = service.preview(input);
 
@@ -540,15 +578,62 @@ class ScheduledTaskLogicTest {
     when(store.findScheduledTask(anyString())).thenReturn(dueTask(1000L));
 
     service.create(new ScheduledTaskService.TaskInput(CHANNEL_NO, "任务", null, "正文", "warning",
-        null, List.of(), "0 0 9 * * *", 1, null, null));
+        null, List.of(), "0 0 9 * * *", 1, null, null, null, null));
     service.create(new ScheduledTaskService.TaskInput(CHANNEL_NO, "任务", null, "正文", "warn",
-        null, List.of(), "0 0 9 * * *", 1, null, null));
+        null, List.of(), "0 0 9 * * *", 1, null, null, null, null));
 
     ArgumentCaptor<Row> captor = ArgumentCaptor.forClass(Row.class);
     verify(store, times(2)).insertScheduledTask(captor.capture());
     assertThat(captor.getAllValues().get(0).getString("level")).isEqualTo("warning");
     // "warn" 不是合法 wire 值，落到枚举默认档 info——存下来的永远是能被 Level.fromWire 认出的字符串
     assertThat(captor.getAllValues().get(1).getString("level")).isEqualTo("info");
+  }
+
+  @Test
+  @DisplayName("⑪g sender_id 留空按 scheduled 落库、自定义值原样保留，超长截到 64")
+  void senderIdFallsBackAndIsClamped() {
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+    when(store.findScheduledTask(anyString())).thenReturn(dueTask(1000L));
+
+    service.create(inputWithSender(null, null));
+    service.create(inputWithSender("OnceHuman", "https://cdn.test/a.png"));
+    service.create(inputWithSender("x".repeat(100), null));
+
+    ArgumentCaptor<Row> captor = ArgumentCaptor.forClass(Row.class);
+    verify(store, times(3)).insertScheduledTask(captor.capture());
+    List<Row> rows = captor.getAllValues();
+    assertThat(rows.get(0).getString("sender_id")).isEqualTo("scheduled");
+    assertThat(rows.get(0).getString("sender_avatar")).isNull();
+    assertThat(rows.get(1).getString("sender_id")).isEqualTo("OnceHuman");
+    assertThat(rows.get(1).getString("sender_avatar")).isEqualTo("https://cdn.test/a.png");
+    // 与外部摄入同一把尺子：sender_id 超长截断，不报 400
+    assertThat(rows.get(2).getString("sender_id")).hasSize(64);
+  }
+
+  @Test
+  @DisplayName("⑪h 头像只收 http(s)：data: 内联、相对路径、超 1024 都在保存前 400，不落库")
+  void avatarMustBeHttpUrl() {
+    when(store.findChannel(CHANNEL_NO)).thenReturn(channel());
+
+    for (String bad : List.of("data:image/png;base64,AAAA", "/avatar.png",
+        "https://cdn.test/" + "a".repeat(1024))) {
+      assertThatThrownBy(() -> service.create(inputWithSender("OnceHuman", bad)))
+          .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.status()).isEqualTo(400));
+    }
+    verify(store, never()).insertScheduledTask(any());
+  }
+
+  @Test
+  @DisplayName("⑪i 列表与详情都回 sender_id / sender_avatar，编辑器才能把这两栏填回去")
+  void senderIdentityIsReturned() {
+    Row row = dueTask(1000L);
+    row.set("sender_id", "OnceHuman");
+    row.set("sender_avatar", "https://cdn.test/a.png");
+    when(store.listScheduledTasks()).thenReturn(List.of(row));
+    when(store.findScheduledTask(TASK_ID)).thenReturn(row);
+
+    assertThat(service.listAll().get(0).get("sender_id")).isEqualTo("OnceHuman");
+    assertThat(service.detail(TASK_ID).get("sender_avatar")).isEqualTo("https://cdn.test/a.png");
   }
 
   @Test
@@ -692,6 +777,8 @@ class ScheduledTaskLogicTest {
     row.set("content", "到点自动推一条");
     row.set("level", "info");
     row.set("sender_name", "定时推送");
+    row.set("sender_id", "scheduled");
+    row.set("sender_avatar", null);
     row.set("images_json", null);
     row.set("cron_expr", "0 0 9 * * *");
     row.set("enabled", 1);
@@ -707,26 +794,31 @@ class ScheduledTaskLogicTest {
 
   private static ScheduledTaskService.TaskInput input(String channelNo, String content) {
     return new ScheduledTaskService.TaskInput(channelNo, "每日晨报", "晨报", content, "info",
-        "定时推送", List.of(), "0 0 9 * * *", 1, null, null);
+        "定时推送", List.of(), "0 0 9 * * *", 1, null, null, null, null);
   }
 
   private static ScheduledTaskService.TaskInput inputWithImages(String... urls) {
     return new ScheduledTaskService.TaskInput(CHANNEL_NO, "带图任务", null, "正文", "info", null,
-        List.of(urls), "0 0 9 * * *", 1, null, null);
+        List.of(urls), "0 0 9 * * *", 1, null, null, null, null);
   }
 
   private static ScheduledTaskService.TaskInput inputWithCategory(String category) {
     return new ScheduledTaskService.TaskInput(CHANNEL_NO, "每日晨报", "晨报", "正文", "info", null,
-        List.of(), "0 0 9 * * *", 1, category, null);
+        List.of(), "0 0 9 * * *", 1, category, null, null, null);
   }
 
   private static ScheduledTaskService.TaskInput inputWithTimezone(String timezone) {
     return new ScheduledTaskService.TaskInput(CHANNEL_NO, "每日晨报", "晨报", "正文", "info", null,
-        List.of(), "0 0 9 * * *", 1, null, timezone);
+        List.of(), "0 0 9 * * *", 1, null, timezone, null, null);
   }
 
   private static ScheduledTaskService.TaskInput inputWithCron(String cron) {
     return new ScheduledTaskService.TaskInput(CHANNEL_NO, "每日晨报", "晨报", "正文", "info", null,
-        List.of(), cron, 1, null, null);
+        List.of(), cron, 1, null, null, null, null);
+  }
+
+  private static ScheduledTaskService.TaskInput inputWithSender(String senderId, String avatar) {
+    return new ScheduledTaskService.TaskInput(CHANNEL_NO, "每日晨报", "晨报", "正文", "info",
+        "七日世界助手", List.of(), "0 0 9 * * *", 1, null, null, senderId, avatar);
   }
 }

@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,6 +64,10 @@ public class ScheduledTaskService {
   static final int MAX_CRONS = 8;
   /** 与 V11 迁移后的列宽一致：超了宁可 400，也别让 MySQL 严格模式在落库时抛 500。 */
   private static final int MAX_CRON_CHARS = 512;
+  /** 与外部摄入的截断口径一致（{@code IngestService} 也把 sender_id 收到 64）。 */
+  private static final int MAX_SENDER_ID_CHARS = 64;
+  /** 与 senders.avatar_url 的列宽一致：超长 URL 存下来也是一条取不到的地址。 */
+  private static final int MAX_AVATAR_URL_CHARS = 1024;
   /** ${scheduled_at} 的格式：计划时隙是"哪一刻该发"，与 ${now}（实际送达）分属两件事。 */
   private static final DateTimeFormatter SLOT_TIME =
       DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -225,7 +230,8 @@ public class ScheduledTaskService {
     String content = Templates.render(task.getString("content"), zone, Instant.ofEpochMilli(now),
         templateVars(task.getString("name"), task.getString("sender_name"), channel, zone, slot));
     IngestRequest request = new IngestRequest(channel.getString("channel_no"), null, null,
-        content, SENDER_ID, stringValue(task, "sender_name"), null,
+        content, senderIdOf(task), stringValue(task, "sender_name"),
+        stringValue(task, "sender_avatar"),
         task.getString("title"), task.getString("level"), null, readImages(task),
         msgKey(taskId, slot), null, null, null);
     try {
@@ -392,9 +398,12 @@ public class ScheduledTaskService {
     if (input.images() != null && input.images().size() > IngestRequest.MAX_IMAGES) {
       throw ApiException.invalidParam("images 最多 " + IngestRequest.MAX_IMAGES + " 条");
     }
+    if (input.senderAvatar() != null && !input.senderAvatar().isBlank()) {
+      requireAvatarUrl(input.senderAvatar());
+    }
     if (input.images() != null) {
       for (String raw : input.images()) {
-        requireHttpUrl(raw);
+        requireHttpUrl(raw, "images");
       }
     }
   }
@@ -423,24 +432,36 @@ public class ScheduledTaskService {
     }
   }
 
-  private static void requireHttpUrl(String raw) {
+  private static void requireHttpUrl(String raw, String field) {
     if (raw == null || raw.isBlank()) {
-      throw ApiException.invalidParam("images 每项必须是非空 URL");
+      throw ApiException.invalidParam(field + " 每项必须是非空 URL");
     }
     URI uri;
     try {
       uri = URI.create(raw.trim());
     } catch (IllegalArgumentException e) {
-      throw ApiException.invalidParam("images 仅支持 http(s) URL");
+      throw ApiException.invalidParam(field + " 仅支持 http(s) URL");
     }
     String scheme = uri.getScheme();
     if (scheme == null || (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme))
         || uri.getHost() == null) {
-      throw ApiException.invalidParam("images 仅支持 http(s) URL");
+      throw ApiException.invalidParam(field + " 仅支持 http(s) URL");
     }
-    if (raw.trim().length() > 1024) {
-      throw ApiException.invalidParam("images 单条 URL 不能超过 1024 字符");
+    if (raw.trim().length() > MAX_AVATAR_URL_CHARS) {
+      throw ApiException.invalidParam(field + " URL 不能超过 " + MAX_AVATAR_URL_CHARS + " 字符");
     }
+  }
+
+  /**
+   * 头像只收 http(s)。{@code data:} 内联图在外部摄入里是合法来源，但任务行要把它存 1024 字符的列里，
+   * 一张正常头像的 base64 根本放不下——与其存成截断的废串，不如在保存时就说清该传到图床。
+   */
+  private static void requireAvatarUrl(String raw) {
+    if (raw.trim().toLowerCase(Locale.ROOT).startsWith("data:")) {
+      throw ApiException.invalidParam(
+          "sender_avatar 只收 http(s) URL：data: 内联头像超过列宽 1024，请先传到图床再填地址");
+    }
+    requireHttpUrl(raw, "sender_avatar");
   }
 
   private static String newTaskId() {
@@ -466,6 +487,8 @@ public class ScheduledTaskService {
     // 任务看着是 warn、消息却是 info，排查起来没有任何报错可循。
     row.set("level", Level.fromWire(input.level()).wire());
     row.set("sender_name", clamp(input.senderName(), 64));
+    row.set("sender_id", normalizeSenderId(input.senderId()));
+    row.set("sender_avatar", blankToNull(input.senderAvatar()));
     row.set("images_json", input.images() == null || input.images().isEmpty() ? null
         : Json.write(input.images()));
     row.set("cron_expr", cron);
@@ -513,6 +536,8 @@ public class ScheduledTaskService {
     }
     out.put("level", nullToEmpty(task.getString("level")));
     out.put("sender_name", nullToEmpty(task.getString("sender_name")));
+    out.put("sender_id", nullToEmpty(task.getString("sender_id")));
+    out.put("sender_avatar", nullToEmpty(task.getString("sender_avatar")));
     out.put("cron_expr", task.getString("cron_expr"));
     out.put("timezone", zoneOrFallback(task.getString("timezone")).getId());
     out.put("enabled", intValue(task, "enabled", 1));
@@ -565,6 +590,29 @@ public class ScheduledTaskService {
     return t.length() <= 32 ? t : t.substring(0, 32);
   }
 
+  /**
+   * 发送者标识决定客户端把它归到哪个会话，列又是 NOT NULL：留空不能折成 null，
+   * 沿用升级前写死的 {@code scheduled}。超长按外部摄入同一把尺子截到 64。
+   */
+  private static String normalizeSenderId(String s) {
+    String value = clamp(s, MAX_SENDER_ID_CHARS);
+    return value == null ? SENDER_ID : value;
+  }
+
+  /** 头像列可空：空串落 null，别再让 MySQL 严格模式把 '' 和"没填"混成一档。 */
+  private static String blankToNull(String s) {
+    return s == null || s.isBlank() ? null : s.trim();
+  }
+
+  /**
+   * V12 之后老任务已有默认值；这里再兜一次，免得扫描行缺列时把 null 当成发送者身份
+   * （那会让 upsertSender 在 NOT NULL 的 senders.sender_id 上炸掉整条投递）。
+   */
+  private static String senderIdOf(Row task) {
+    String value = task.getString("sender_id");
+    return value == null || value.isBlank() ? SENDER_ID : value;
+  }
+
   private static String stringValue(Row row, String column) {
     Object v = row.get(column);
     return v == null ? null : String.valueOf(v);
@@ -596,9 +644,9 @@ public class ScheduledTaskService {
    * 管理台请求体。命名沿用管理台既有接口的驼峰风格（响应才是下划线）。
    * {@code category} 与 {@code timezone} 排在最后而不是紧跟 {@code cronExpr}：
    * 这个 record 在本仓有按位置构造的调用点，插到中间会让后面每个参数集体错位，
-   * 而它们大多同为 String，编译器拦不住。
+   * 而它们大多同为 String，编译器拦不住。{@code senderId}/{@code senderAvatar} 同理追加在末尾。
    */
   public record TaskInput(String channelNo, String name, String title, String content, String level,
       String senderName, List<String> images, String cronExpr, Integer enabled, String category,
-      String timezone) {}
+      String timezone, String senderId, String senderAvatar) {}
 }

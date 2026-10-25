@@ -33,7 +33,7 @@
 ### 测试
 
 - `ScheduledTaskLogicTest` 新增 7 条：③d 取所有行里最近的一次（工作日 9:00 + 周末 12:00，跨过周五/周六边界）、③e CRLF 与空行忽略、③f 多行错误带行号、③g 9 条 400 且不落库、③h 两条同秒规则只发一条、③i 落库前归一、⑩f 预览逐条回 `next_fires` 且顺序与填写一致。
-- web-admin `npm run build` 通过（`vue-tsc` 无错）；Maven 全量 **359 条（core 50 + server 309），0 失败 0 错误**，本机 326 执行 + 33 跳过（DB/S3 门控，与基线逐条一致）。
+- web-admin `npm run build` 通过（`vue-tsc` 无错）；Maven 全量 **359 条（core 与 server 两档合计），0 失败 0 错误**，本机 326 执行 + 33 跳过（DB/S3 门控，与基线逐条一致）。
 
 ---
 

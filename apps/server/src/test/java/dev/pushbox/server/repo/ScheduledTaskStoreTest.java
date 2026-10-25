@@ -14,12 +14,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * 定时任务的落库侧，只在真库上跑（因此它同时是 Flyway V9 的往返证明）。
+ * 定时任务的落库侧，只在真库上跑（因此它同时是 Flyway V9–V12 的往返证明）。
  *
  * <p>{@link dev.pushbox.server.service.ScheduledTaskLogicTest} 里 PbStore 是 mock，
  * 而 {@code insertScheduledTask} 的列清单与 {@code ?} 占位符是靠人手工对齐的两份列表：
  * 加一列忘了改另一处，Mockito 一路绿灯，线上才是 {@code Incorrect number of column values}。
- * 这里不读源码、不数占位符，直接插一行再读回来——列数、顺序、{@code category} 的落值一次性判掉。
+ * 这里不读源码、不数占位符，直接插一行再读回来——列数、顺序、category/timezone/sender_id
+ * 的落值一次性判掉。
  */
 @EnabledIf("dev.pushbox.server.test.TestConfig#databaseReady")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -91,6 +92,34 @@ class ScheduledTaskStoreTest {
     assertThat(back.get("category")).isNotNull();
   }
 
+  @Test
+  @DisplayName("①c 发送者身份也走一次 INSERT/SELECT 往返：扫描行带着两列，编辑能改也能清空")
+  void senderSurvivesInsertAndReadBack() {
+    Row row = task("运维巡检");
+    row.set("sender_id", "OnceHuman");
+    row.set("sender_avatar", "https://cdn.test/a.png");
+    store.insertScheduledTask(row);
+
+    // 触发时这两个值原样进 IngestRequest，所以扫描那条 SELECT * 必须带着它们
+    Row scanned = taskIn(store.dueScheduledTasks(SLOT, 200));
+    assertThat(scanned.getString("sender_id")).isEqualTo("OnceHuman");
+    assertThat(scanned.getString("sender_avatar")).isEqualTo("https://cdn.test/a.png");
+
+    Row edited = task("运维巡检");
+    edited.set("sender_id", "scheduled");
+    edited.set("sender_avatar", null);
+    assertThat(store.updateScheduledTask(edited)).isEqualTo(1);
+    Row back = store.findScheduledTask(TASK_ID);
+    assertThat(back.getString("sender_id")).isEqualTo("scheduled");
+    assertThat(back.get("sender_avatar")).isNull();
+  }
+
+  private Row taskIn(List<Row> rows) {
+    return rows.stream().filter(r -> TASK_ID.equals(r.getString("task_id")))
+        .findFirst()
+        .orElse(null);
+  }
+
   private String categoryIn(List<Row> rows) {
     return rows.stream().filter(r -> TASK_ID.equals(r.getString("task_id")))
         .map(r -> r.getString("category"))
@@ -117,6 +146,8 @@ class ScheduledTaskStoreTest {
     row.set("content", "正文");
     row.set("level", "info");
     row.set("sender_name", "定时推送");
+    row.set("sender_id", "scheduled");
+    row.set("sender_avatar", null);
     row.set("images_json", null);
     row.set("cron_expr", "0 0 9 * * *");
     row.set("timezone", "Asia/Shanghai");
