@@ -46,7 +46,10 @@ public static class BubbleView
         };
         outerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });   // 头像列
         outerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });   // 间距列
-        outerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });   // 气泡列
+        // 气泡列必须是星号列：Auto 列在 WPF 里先按"内容无限宽"量一次子元素，
+        // TextBlock 因此拿到无限宽、一行都不折，排出来是一条一万多像素的长条，
+        // 超出 ItemsControl 的那截被 ScrollViewer 直接裁掉——症状就是"消息内容显示不全"
+        outerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
         // 头像：40px 圆形（与 Android 的 Avatar sizeDp=40 一致），显示首字占位或加载后的图片
         var avatar = new Controls.AvatarBox
@@ -111,7 +114,8 @@ public static class BubbleView
 
         var row = new Grid();
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(AccentBarWidth) });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        // 同上：气泡那一列也得是星号列，Auto 列会把正文量成一条不折行的长条
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.VerticalAlignment = VerticalAlignment.Top; // 与头像顶部对齐（单行消息时关键）
 
         // info 没有色条：AccentKey 为 null 时这一列不给内容，气泡左边缘跟着贴齐
@@ -135,6 +139,7 @@ public static class BubbleView
             body.Children.Add(MarkdownView.BuildAll(Markdown.Parse(item.Text), style));
 
         // 气泡本体：背景 + 1px 边框 + 阴影效果（通过 BorderThickness 模拟）
+        // 星号列会把剩余宽度全给这一列，所以气泡自己靠左收在内容宽度上，短消息才不会拉成一整条空白
         row.Children.Add(new Border
         {
             Background = style.BlockBackground,
@@ -142,6 +147,7 @@ public static class BubbleView
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(BubbleRadius),
             Padding = new Thickness(BubblePadX, BubblePadY, BubblePadX, BubblePadY),
+            HorizontalAlignment = HorizontalAlignment.Left,
             Child = body
         });
         Grid.SetColumn(row.Children[^1], 1);

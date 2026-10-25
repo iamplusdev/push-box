@@ -499,6 +499,74 @@ public class BubbleViewTest
         }
         return result;
     }
+
+    /// <summary>
+    /// 按主窗那一层把一条消息真摆一遍：ScrollViewer（横向滚动关掉）→ Grid → ItemsControl
+    /// （<see cref="MainModel.BubbleMaxWidth"/> 是它的上限，与 <c>ApplyPaneWidth</c> 同一个数）。
+    /// 只量"能不能装下"这类事，所以不需要窗口，一条 732 宽的视口就够。
+    /// </summary>
+    private static ItemsControl LayOutInTimeline(FrameworkElement node, double viewport = 732)
+    {
+        var items = new ItemsControl
+        {
+            MaxWidth = MainModel.BubbleMaxWidth(viewport - 24, false),
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        items.Items.Add(node);
+        var host = new Grid();
+        host.Children.Add(items);
+        var scroll = new ScrollViewer
+        {
+            Width = viewport,
+            Height = 600,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Padding = new Thickness(12),
+            Content = host
+        };
+        scroll.Measure(new Size(viewport, 600));
+        scroll.Arrange(new Rect(0, 0, viewport, 600));
+        scroll.UpdateLayout();
+        return items;
+    }
+
+    [Fact]
+    public void LongBodyWrapsInsideTheTimelineInsteadOfRunningOffTheRightEdge()
+    {
+        Sta.Run(() =>
+        {
+            // 回归：气泡列曾经是 Auto，WPF 用无限宽量 Auto 列里的子元素，正文一行都不折，
+            // 排成一条一万多像素的长条，超出视口的那截被直接裁掉（"消息内容显示不全"）
+            var longText = string.Concat(Enumerable.Repeat("这是一段很长的正文，它必须折行。", 30));
+            var node = BubbleView.Build(Item(text: longText), Style);
+
+            var items = LayOutInTimeline(node);
+            var body = Tree.First<TextBlock>(Body(node));
+
+            Assert.True(node.ActualWidth <= items.ActualWidth + 0.5,
+                $"消息行 {node.ActualWidth:0.#} 比列表 {items.ActualWidth:0.#} 还宽，右侧会被裁掉");
+            Assert.True(body.ActualWidth <= items.ActualWidth,
+                $"正文 {body.ActualWidth:0.#} 比列表 {items.ActualWidth:0.#} 还宽");
+            Assert.True(body.ActualHeight > MarkdownStyle.BodyLine * 3,
+                $"正文只有 {body.ActualHeight:0.#} 高，说明压根没折行");
+        });
+    }
+
+    [Fact]
+    public void ShortBodyKeepsTheBubbleHuggingTheText()
+    {
+        Sta.Run(() =>
+        {
+            // 折行那一半是"星号列 + 气泡靠左"换来的，这条钉住另一半：短消息不能被拉成整条白框
+            var node = BubbleView.Build(Item(text: "收到"), Style);
+            var items = LayOutInTimeline(node);
+
+            Assert.True(items.ActualWidth < 200, $"短消息占了 {items.ActualWidth:0.#} 宽，气泡被拉宽了");
+            var stamp = Wrapper(node).Children.OfType<TextBlock>().Last();
+            Assert.True(stamp.ActualWidth + 48 >= stamp.DesiredSize.Width - 0.5,
+                $"时间戳被窄气泡挤压：{stamp.ActualWidth:0.#} < {stamp.DesiredSize.Width - 48:0.#}");
+        });
+    }
 }
 
 /// <summary>
