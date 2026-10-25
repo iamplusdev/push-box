@@ -129,6 +129,22 @@ class App : android.app.Application() {
         scope.launch { identity.putChannelSecret(channelNo, secret) }
     }
 
+    /** §7.3 锁屏显示发送者与摘要：默认开；关掉后锁屏只留"收到 1 条新消息"。 */
+    val lockScreenContent = MutableStateFlow(true)
+
+    fun setLockScreenContent(enabled: Boolean) {
+        lockScreenContent.value = enabled
+        scope.launch { identity.setLockScreenContent(enabled) }
+    }
+
+    /** §7.3 新建频道渠道的默认重要度：high / default / low。已有渠道建好后不能上调，只影响之后新建的。 */
+    val defaultImportance = MutableStateFlow("high")
+
+    fun setDefaultImportance(level: String) {
+        defaultImportance.value = level
+        scope.launch { identity.setDefaultImportance(level) }
+    }
+
     /** §7.4 通知静默时段：默认关；起止为"距 0 点分钟数"，跨零点时 start>end。 */
     val quietEnabled = MutableStateFlow(false)
     val quietStart = MutableStateFlow(22 * 60)
@@ -267,6 +283,8 @@ class App : android.app.Application() {
         scope.launch { pollingMode.value = identity.pollingMode() }
         scope.launch { autoCheckUpdate.value = identity.autoCheckUpdate() }
         scope.launch { channelSecrets.value = identity.channelSecrets() }
+        scope.launch { lockScreenContent.value = identity.lockScreenContent() }
+        scope.launch { defaultImportance.value = identity.defaultImportance() }
         scope.launch {
             quietEnabled.value = identity.quietEnabled()
             quietStart.value = identity.quietStartMin()

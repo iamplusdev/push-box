@@ -126,6 +126,17 @@ class IdentityStore(context: Context) {
     suspend fun setNotificationsEnabled(enabled: Boolean) =
         store.edit { it[NOTIF_ENABLED] = enabled }
 
+    /** §7.3 锁屏显示发送者与摘要：默认开；关掉后锁屏只留"收到 1 条新消息"。 */
+    suspend fun lockScreenContent(): Boolean = store.data.first()[LOCK_SCREEN_CONTENT] ?: true
+
+    suspend fun setLockScreenContent(enabled: Boolean) =
+        store.edit { it[LOCK_SCREEN_CONTENT] = enabled }
+
+    /** §7.3 新建频道渠道的默认重要度：high / default / low；已有渠道不受影响。 */
+    suspend fun defaultImportance(): String = store.data.first()[DEFAULT_IMPORTANCE] ?: "high"
+
+    suspend fun setDefaultImportance(level: String) = store.edit { it[DEFAULT_IMPORTANCE] = level }
+
     /** §7.4 静默时段：默认关；起止是"距 0 点分钟数"，跨零点时 start>end。 */
     suspend fun quietEnabled(): Boolean = store.data.first()[QUIET_ENABLED] ?: false
     suspend fun quietStartMin(): Int = store.data.first()[QUIET_START] ?: (22 * 60)
@@ -240,6 +251,8 @@ class IdentityStore(context: Context) {
         private val QUIET_ENABLED = booleanPreferencesKey("quiet_enabled")
         private val QUIET_START = intPreferencesKey("quiet_start")
         private val QUIET_END = intPreferencesKey("quiet_end")
+        private val LOCK_SCREEN_CONTENT = booleanPreferencesKey("lock_screen_content")
+        private val DEFAULT_IMPORTANCE = stringPreferencesKey("default_importance")
         private val POLLING_MODE = booleanPreferencesKey("polling_mode")
         private val AUTO_CHECK_UPDATE = booleanPreferencesKey("auto_check_update")
         private val FONT_SCALE = stringPreferencesKey("font_scale")

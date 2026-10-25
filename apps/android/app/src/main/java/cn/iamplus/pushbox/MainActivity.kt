@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -134,6 +135,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Hub
@@ -2705,6 +2707,8 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
     val quietOn by app.quietEnabled.collectAsState()
     val quietStart by app.quietStart.collectAsState()
     val quietEnd by app.quietEnd.collectAsState()
+    val lockContent by app.lockScreenContent.collectAsState()
+    val importance by app.defaultImportance.collectAsState()
     var devices by remember { mutableStateOf<List<PushBoxApi.DeviceInfo>?>(null) }
     var devicesTick by remember { mutableStateOf(0) }
     var devicesError by remember { mutableStateOf<String?>(null) }
@@ -2797,6 +2801,42 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
             // 应用内这个开关只管"要不要发"，Android 13+ 上面还压着一道系统级权限：
             // 权限被拒（尤其是勾了"不再询问"）时消息照样入库但永不出通知，所以长期入口挂在这儿。
             NotifyPermissionRow()
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.notif_lock_screen_title),
+                        style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.notif_lock_screen_desc),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(checked = lockContent, onCheckedChange = { app.setLockScreenContent(it) })
+            }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                Text(stringResource(R.string.notif_importance_title),
+                    style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.notif_importance_desc),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        "high" to R.string.notif_importance_high,
+                        "default" to R.string.notif_importance_default,
+                        "low" to R.string.notif_importance_low,
+                    ).forEach { (level, label) ->
+                        val selected = importance == level
+                        FilterChip(selected = selected,
+                            onClick = { app.setDefaultImportance(level) },
+                            label = { Text(stringResource(label)) },
+                            leadingIcon = if (selected) {
+                                { Icon(Icons.Filled.Check, null, Modifier.size(18.dp)) }
+                            } else null)
+                    }
+                }
+            }
             // §7.4 静默时段：窗口内非 error 消息只静默入通知栏，不响铃不横幅
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),

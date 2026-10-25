@@ -25,7 +25,7 @@ import kotlinx.coroutines.runBlocking
 /**
  * §7.3 通知：默认一个频道一个 NotificationChannel，同频道的所有发送者共用一份提醒设置；
  * 只有用户给某个发送者单独设过例外（pb_sender_*）时才走那条独立渠道。
- * 锁屏只显示"收到 1 条新消息"（VISIBILITY_PRIVATE + publicVersion，对应 D11）。
+ * 锁屏默认显示发送者 + 摘要；用户可关成"收到 1 条新消息"，会话级私密则连标题都不上锁屏（D11）。
  */
 class Notifier(private val context: Context) {
 
@@ -36,6 +36,7 @@ class Notifier(private val context: Context) {
         system?.createNotificationChannelGroup(
             NotificationChannelGroup(CHANNEL_GROUP, context.getText(R.string.notif_group_name)))
         ensureServiceChannel()
+        ensureQuietChannel()
         retireLegacyChannels(system)
     }
 
@@ -56,9 +57,10 @@ class Notifier(private val context: Context) {
         if (!message.notify) return
         // "我的"页的通知总开关：关掉后消息照常入库，只是不弹通知
         if (!App.get(context).notificationsEnabled.value) return
-        // §7.4 静默时段：error 级别仍可打扰，其余降为静默（不响铃、不横幅，仅在通知栏留痕）。
+        // §7.4 静默时段：error 级别仍可打扰，其余走 pb_quiet——渠道重要度高于一切，
+        // 在 HIGH 渠道上挂 PRIORITY_MIN 依然会响会横幅，只有换一条 LOW 渠道才真的静下来。
         val quiet = App.get(context).inQuietHours() && message.level != "error"
-        val channel = channelFor(message)
+        val channel = if (quiet) ensureQuietChannel() else channelFor(message)
         val groupId = groupIdOf(message.channelNo, message.senderId)
         val summaryId = groupId.hashCode()
 
@@ -84,22 +86,25 @@ class Notifier(private val context: Context) {
             .setContentIntent(openConversationIntent(message))
             .setGroup(groupId)
             .setAutoCancel(true)
-        // §7.3 会话级锁屏可见：SECRET 是整条通知连标题都不上锁屏，比 PRIVATE+publicVersion 更彻底；
-        // 默认仍走 PRIVATE + "收到 1 条新消息"的降级副本（D11）。
+        // §7.3 锁屏可见：
+        //  - 会话级「私密」永远 SECRET，连标题都不上锁屏；
+        //  - 全局「锁屏显示发送者与摘要」开着时给一份只含发送者+摘要的 publicVersion，
+        //    不用 PUBLIC 是因为后者会把大图等正文原样搬到锁屏；
+        //  - 关掉时退回 D11 的"收到 1 条新消息"。
+        val lockScreenContent = App.get(context).lockScreenContent.value
         if (lockPrivate) {
             builder.setVisibility(Notification.VISIBILITY_SECRET)
         } else {
             builder.setVisibility(Notification.VISIBILITY_PRIVATE)
-                .setPublicVersion(lockScreenPlaceholder())
-        }
-        if (quiet) {
-            builder.setPriority(Notification.PRIORITY_MIN).setOnlyAlertOnce(true)
+                .setPublicVersion(
+                    if (lockScreenContent) lockScreenContentOf(channel.id, message)
+                    else lockScreenPlaceholder(channel.id))
         }
         val notification = builder.build()
         try {
             manager.notify(message.msgId.hashCode(), notification)
             // 更新会话摘要通知（堆叠效果）
-            updateSummaryNotification(channel.id, groupId, summaryId, message)
+            updateSummaryNotification(channel.id, groupId, summaryId, message, lockPrivate)
         } catch (_: SecurityException) {
             // Android 13+ 未授予 POST_NOTIFICATIONS：消息照样入库，只是不出通知
         }
@@ -110,7 +115,7 @@ class Notifier(private val context: Context) {
      * 带"全部已读"快捷操作，点击仍进入该会话。
      */
     private fun updateSummaryNotification(channelId: String, groupId: String,
-        summaryId: Int, latest: MessageFrame) {
+        summaryId: Int, latest: MessageFrame, lockPrivate: Boolean) {
         val existing = manager.activeNotifications.find { it.tag == null && it.id == summaryId }
         val count = (existing?.notification?.number ?: 0) + 1
         val inboxStyle = NotificationCompat.InboxStyle()
@@ -134,9 +139,18 @@ class Notifier(private val context: Context) {
                 context.getText(R.string.notif_action_mark_all_read), readAllIntent)
             .setContentIntent(openConversationIntent(latest))
             .apply {
-                // §7.3 D11：摘要通知也要走锁屏降级，否则安全锁屏+隐藏敏感内容时仍会泄露正文
-                setVisibility(Notification.VISIBILITY_PRIVATE)
-                    .setPublicVersion(lockScreenPlaceholder())
+                // §7.3 摘要通知跟随同一条锁屏策略，否则安全锁屏+隐藏敏感内容时仍会泄露正文
+                if (lockPrivate) {
+                    setVisibility(Notification.VISIBILITY_SECRET)
+                } else {
+                    setVisibility(Notification.VISIBILITY_PRIVATE)
+                    setPublicVersion(
+                        if (App.get(context).lockScreenContent.value) {
+                            lockScreenContentOf(channelId, latest)
+                        } else {
+                            lockScreenPlaceholder(channelId)
+                        })
+                }
             }
             .build()
         manager.notify(summaryId, summary)
@@ -197,9 +211,37 @@ class Notifier(private val context: Context) {
         system?.getNotificationChannel(id)?.let { return it }
         val channel = NotificationChannel(id,
             context.getString(R.string.notif_channel_fallback_name, channelNo),
-            NotificationManager.IMPORTANCE_HIGH).apply {
+            defaultImportanceOf()).apply {
             group = CHANNEL_GROUP
             description = context.getString(R.string.notif_channel_channel_desc, channelNo)
+        }
+        system?.createNotificationChannel(channel)
+        return channel
+    }
+
+    /** §7.3 全局默认提醒档：只在新频道第一次出通知时生效；建好之后由用户去系统设置里改。 */
+    private fun defaultImportanceOf(): Int =
+        when (App.get(context).defaultImportance.value) {
+            "low" -> NotificationManager.IMPORTANCE_LOW
+            "default" -> NotificationManager.IMPORTANCE_DEFAULT
+            else -> NotificationManager.IMPORTANCE_HIGH
+        }
+
+    /**
+     * §7.4 静默时段专用渠道：IMPORTANCE_LOW 才意味着不响铃、不悬浮。
+     * 在正常渠道上改 priority 没用——通知渠道的重要度会盖过它。
+     */
+    private fun ensureQuietChannel(): NotificationChannel {
+        val system = context.getSystemService(NotificationManager::class.java)
+        system?.getNotificationChannel(QUIET_CHANNEL)?.let { return it }
+        val channel = NotificationChannel(QUIET_CHANNEL,
+            context.getText(R.string.notif_channel_quiet_name),
+            NotificationManager.IMPORTANCE_LOW).apply {
+            group = CHANNEL_GROUP
+            description = context.getText(R.string.notif_channel_quiet_desc).toString()
+            setSound(null, null)
+            enableVibration(false)
+            enableLights(false)
         }
         system?.createNotificationChannel(channel)
         return channel
@@ -218,12 +260,25 @@ class Notifier(private val context: Context) {
     }
 
     /** 锁屏降级内容：只有"收到 1 条新消息"，不含任何正文（D11）。 */
-    private fun lockScreenPlaceholder(): Notification =
-        NotificationCompat.Builder(context, SERVICE_CHANNEL)
+    private fun lockScreenPlaceholder(channelId: String): Notification =
+        NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_stat_pushbox)
             .setContentTitle(context.getText(R.string.notif_hidden_title))
             .setContentText(context.getText(R.string.notif_hidden_text))
             .setVisibility(Notification.VISIBILITY_SECRET)
+            .build()
+
+    /**
+     * 锁屏显示发送者 + 摘要：单独拼一份纯文字副本，而不是直接把主通知设成 PUBLIC——
+     * PUBLIC 会把 BigPicture 的原图一起送到锁屏上，而用户要的只是"谁说了什么"。
+     * 渠道沿用消息自己的那条：publicVersion 挂在 pb_service（IMPORTANCE_NONE）上根本不会显示。
+     */
+    private fun lockScreenContentOf(channelId: String, message: MessageFrame): Notification =
+        NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(R.drawable.ic_stat_pushbox)
+            .setContentTitle(message.displayName)
+            .setContentText(summaryOf(message))
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
             .build()
 
     private fun summaryOf(message: MessageFrame): String =
@@ -295,6 +350,8 @@ class Notifier(private val context: Context) {
 
     companion object {
         const val SERVICE_CHANNEL = "pb_service"
+        /** 静默时段专用渠道：IMPORTANCE_LOW，不响不横幅。 */
+        const val QUIET_CHANNEL = "pb_quiet"
         const val EXTRA_CHANNEL = "channel_no"
         /** 会话的另一半键：通知点进来与"全部已读"都要用它定位会话，不能用显示名（会被改名）。 */
         const val EXTRA_SENDER_ID = "sender_id"
