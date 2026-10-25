@@ -361,7 +361,7 @@ output/       各端编译产物（jar / apk / exe），不入库，由 release 
 | `node infra/probe/p0-e2e.mjs` | 端到端协议（**0 失败**；条数以脚本末行的 `N/N` 为准） |
 | `cd apps/android && ./gradlew :app:assembleDebug` | Android 编译通过 |
 | `cd apps/web-admin && npm ci && npm run build` | 管理台 `vue-tsc` 类型检查与 `dist/` 产物 |
-| `dotnet test apps/windows/PushBox.sln` | C# 协议向量 + 客户端逻辑（**554/554**，去掉会话筛选用例后） |
+| `dotnet test apps/windows/PushBox.sln` | C# 协议向量 + 客户端逻辑（**558/558**） |
 | `dotnet run --project apps/windows/PushBox.LiveCheck` | PC 端真服务端判据（**12/12**） |
 
 ---

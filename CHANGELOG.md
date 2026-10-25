@@ -9,6 +9,30 @@
 
 ---
 
+## 未发布 —— Windows：开机自启只在托盘起，长消息不再被裁成一行
+
+> 起因两条：① 开机自启那一笔注册表只写了 exe 路径，每次登录都把主窗摆到脸上，"自启"应当等于"帮我收消息"而不是"开机先开一扇窗"；② 时间线里长正文被排成一条一万多像素的长条，超出一屏的那截被直接裁掉，看起来就是"消息内容显示不全"。
+
+### Windows
+
+- **自启那一次不 Show 主窗**：`HKCU\...\Run` 里写的是 `"<exe 全路径>" --tray`（`AutoStart.CommandFor`）。带 `--tray` 启动时托盘、同步循环、补拉与通知照常起来，只有主窗不 Show；用户从托盘点开才是第一屏。
+- **接线挪进窗口构造函数**（`MainWindow` 的 `Wire()`）：托盘要读的未读数、连接状态和"引擎每落一条就重画"原来挂在 `OnContentRendered` 上，而那个回调只有 Show 过才会来——后台启动会静默地什么都收不到。`OnContentRendered` 现在只负责 Show 之后的那一次首屏 `Refresh()`。
+- **升级自动改写**：老版本写的是不带开关的光路径，`ReconcileAutoStart` 判成 `MovedInstall` 后按新值重写，不需要用户重新开关一次；用户自己在任务管理器的"启动"页里删掉条目的老口径不变（判成 `UserCleared` 后顺着他把设置改成关）。
+- **后台启动不查更新**，免得"查到新版"这一步又弹一扇窗。
+- **第一次启动就不该有窗的边界**：自启但本机没有身份（退出过空间）时直接退出，不弹首启注册窗。
+- `OpenSettings`/`OpenUpdatePrompt` 的 `Owner` 只认真正露着的主窗：后台启动时主窗对象在、但从未 Show，挂一个看不见的 owner 会把子窗一起压住。
+- **长正文按列宽折行**：会话行第三列（气泡列）和"竖条 + 气泡"那一行的气泡列都改成星号列（`GridLength(1, Star)`），气泡本体 `HorizontalAlignment=Left` 收在内容宽度上。原先是 `Auto` 列——WPF 会先按"内容无限宽"量一次子元素，`TextWrapping=Wrap` 的正文因此一行都不折。
+
+### 测试
+
+- `dotnet test apps/windows/PushBox.sln`：**558/558 通过**（本轮新增 3 条，`BubbleViewTest` 10 条）。
+- `RenderTest` 新增两条度量用例：`LongBodyWrapsInsideTheTimelineInsteadOfRunningOffTheRightEdge`（长正文的实际宽度不超过列表宽度、行数确实折了）与 `ShortBodyKeepsTheBubbleHuggingTheText`（短消息不拉成一整条，时间戳不被挤掉）。长正文那条**反向验证过**：把星号列改回 `Auto`，它当场红（`消息行 7125.8 比列表 510 还宽，右侧会被裁掉`）。
+- `SystemIntegrationTest`：`CommandFor`/`DesiredValue` 断言带上 `--tray`；新增"老版本的光路径算 `MovedInstall`（升级要重写）"与 `App.StartInBackground` 的大小写不敏感、不误判 `--notify-smoke`。
+- `MainWindowTest` 新增 `AWindowForABackgroundStartIsWiredOnConstructionAndNeverShown`：带上引擎构造、不 Show，未读数算得出来、状态点已亮（订阅生效的证据）。把构造里那行 `Wire()` 注释掉，这条当场红。
+- **没跑的**：真实 `--tray` 冷启动（免打扰地验"只见托盘不见窗"）。开发机上 1.1.0 客户端从 14:30 起一直在跑，且它自己的 `settings.json` 里 `auto_start=true`——拿开发构建去启动会顶掉它的实例锁、还会把 `Run` 改指到 `bin\Debug`，所以留给发布检查清单里的那条手工项。
+
+---
+
 ## 未发布 —— Android 头像：正缓存 24h 复核，换掉的头像不再永远显示旧图
 
 > 起因：头像 token 恒定为 `sha256(sender_id)`，服务端换头像时按 (频道, 发送者) 覆盖写同一个对象，客户端缓存的文件名与内容对不上号——正缓存又永不失效，所以发送者换了头像后，本机（含通知栏）会一直显示第一张，除非清除应用数据。
