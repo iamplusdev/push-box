@@ -9,6 +9,8 @@
     <!-- 会话通知（§7.3） -->
     <string name="notif_group_name">PushBox 消息</string>
     <string name="notif_self_name">我</string>
+    <string name="notif_channel_fallback_name">频道 %1$s</string>
+    <string name="notif_channel_channel_desc">来自频道 %1$s 的消息；同一频道的所有发送者共用这份提醒设置。</string>
     <string name="notif_conversation_desc">来自 %1$s 的消息</string>
     <string name="notif_hidden_title">PushBox</string>
     <string name="notif_hidden_text">收到 1 条新消息</string>

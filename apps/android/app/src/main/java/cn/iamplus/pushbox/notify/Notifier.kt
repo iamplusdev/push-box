@@ -23,7 +23,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 /**
- * §7.3 通知：一个 (channel_no, sender) 一个 NotificationChannel，提醒强度按 level 分档；
+ * §7.3 通知：默认一个频道一个 NotificationChannel，同频道的所有发送者共用一份提醒设置；
+ * 只有用户给某个发送者单独设过例外（pb_sender_*）时才走那条独立渠道。
  * 锁屏只显示"收到 1 条新消息"（VISIBILITY_PRIVATE + publicVersion，对应 D11）。
  */
 class Notifier(private val context: Context) {
@@ -35,6 +36,19 @@ class Notifier(private val context: Context) {
         system?.createNotificationChannelGroup(
             NotificationChannelGroup(CHANNEL_GROUP, context.getText(R.string.notif_group_name)))
         ensureServiceChannel()
+        retireLegacyChannels(system)
+    }
+
+    /**
+     * 旧模型按 (channel_no, sender_id) 建渠道（pb_conv_*）。渠道重要度建好后不能上调，
+     * 留着只会让同频道的一堆发送者继续各占一条系统设置；启动时清掉，幂等。
+     * 消息本身在库里不受影响，但通知栏里属于旧渠道的条目会随渠道一起消失。
+     */
+    private fun retireLegacyChannels(system: NotificationManager?) {
+        if (system == null) return
+        system.notificationChannels
+            .filter { it.id.startsWith(LEGACY_SENDER_PREFIX) }
+            .forEach { runCatching { system.deleteNotificationChannel(it.id) } }
     }
 
     fun post(message: MessageFrame, lockPrivate: Boolean = false) {
@@ -44,9 +58,8 @@ class Notifier(private val context: Context) {
         if (!App.get(context).notificationsEnabled.value) return
         // §7.4 静默时段：error 级别仍可打扰，其余降为静默（不响铃、不横幅，仅在通知栏留痕）。
         val quiet = App.get(context).inQuietHours() && message.level != "error"
-        val channel = ensureChannel(message.channelNo, message.senderId, message.displayName,
-            message.level)
-        val groupId = CONVERSATION_GROUP + channel.id
+        val channel = channelFor(message)
+        val groupId = groupIdOf(message.channelNo, message.senderId)
         val summaryId = groupId.hashCode()
 
         // §7.3 D11：带图消息用 BigPictureStyle；否则 MessagingStyle 堆叠同会话多条。
@@ -164,23 +177,29 @@ class Notifier(private val context: Context) {
     }
 
     /**
-     * 会话级渠道的 importance 只在创建时生效，之后由用户在系统设置里调整（§7.3）。
-     * id 用 sender_id 而不是显示名作键：显示名会被"重命名会话"改掉，
-     * 而 id 一旦漂移，"全部已读"就再也按不到当初那组通知，旧渠道成了撤不掉的孤儿。
+     * 渠道选择：默认跟随频道；只有这个发送者建过例外渠道时才单独走。
+     * 例外渠道由用户在会话菜单里显式创建，「恢复跟随频道」会把它删掉。
      */
-    private fun ensureChannel(channelNo: String, senderId: String, senderName: String,
-        level: String): NotificationChannel {
+    private fun channelFor(message: MessageFrame): NotificationChannel {
         val system = context.getSystemService(NotificationManager::class.java)
-        val id = channelIdOf(channelNo, senderId)
+        system?.getNotificationChannel(senderChannelIdOf(message.channelNo, message.senderId))
+            ?.let { return it }
+        return ensureChannelChannel(message.channelNo)
+    }
+
+    /**
+     * 频道级渠道：同一频道下所有发送者共用。重要度只在创建时生效，之后由用户在系统设置里调整（§7.3）。
+     * 频道名要等「我的频道」加载后才有，先拿频道号占位；加载后由频道页统一改名。
+     */
+    private fun ensureChannelChannel(channelNo: String): NotificationChannel {
+        val system = context.getSystemService(NotificationManager::class.java)
+        val id = channelIdOf(channelNo)
         system?.getNotificationChannel(id)?.let { return it }
-        val importance = when (level) {
-            "error" -> NotificationManager.IMPORTANCE_HIGH
-            "warning" -> NotificationManager.IMPORTANCE_DEFAULT
-            else -> NotificationManager.IMPORTANCE_LOW
-        }
-        val channel = NotificationChannel(id, senderName, importance).apply {
+        val channel = NotificationChannel(id,
+            context.getString(R.string.notif_channel_fallback_name, channelNo),
+            NotificationManager.IMPORTANCE_HIGH).apply {
             group = CHANNEL_GROUP
-            description = context.getString(R.string.notif_conversation_desc, senderName)
+            description = context.getString(R.string.notif_channel_channel_desc, channelNo)
         }
         system?.createNotificationChannel(channel)
         return channel
@@ -230,7 +249,7 @@ class Notifier(private val context: Context) {
      * 用户直接从列表点进会话时通知原样躺着。
      */
     fun cancelConversation(channelNo: String, senderId: String) {
-        val groupName = CONVERSATION_GROUP + channelIdOf(channelNo, senderId)
+        val groupName = groupIdOf(channelNo, senderId)
         manager.activeNotifications
             .filter { it.notification.group == groupName }
             .forEach { manager.cancel(it.id) }
@@ -280,10 +299,20 @@ class Notifier(private val context: Context) {
         /** 会话的另一半键：通知点进来与"全部已读"都要用它定位会话，不能用显示名（会被改名）。 */
         const val EXTRA_SENDER_ID = "sender_id"
         private const val CHANNEL_GROUP = "pb_group"
+        private const val LEGACY_SENDER_PREFIX = "pb_conv_"
+        private const val CHANNEL_PREFIX = "pb_ch_"
+        private const val SENDER_PREFIX = "pb_sender_"
         private const val CONVERSATION_GROUP = "pb_conv_group_"
 
-        /** 会话 → 系统通知渠道 id：post 侧建渠道与"全部已读"侧撤通知必须算出同一个值。 */
-        fun channelIdOf(channelNo: String, senderId: String): String =
-            "pb_conv_${channelNo}_${senderId.hashCode()}"
+        /** 频道级系统渠道 id：同频道的所有发送者默认共用这一条。 */
+        fun channelIdOf(channelNo: String): String = "$CHANNEL_PREFIX$channelNo"
+
+        /** 发送者例外渠道 id：只有用户主动给某个发送者单独设置时才创建。 */
+        fun senderChannelIdOf(channelNo: String, senderId: String): String =
+            "$SENDER_PREFIX${channelNo}_${senderId.hashCode()}"
+
+        /** 通知分组按会话而不是渠道：同频道不同发送者不能共用组，否则"全部已读"会串。 */
+        private fun groupIdOf(channelNo: String, senderId: String): String =
+            "$CONVERSATION_GROUP${channelNo}_${senderId.hashCode()}"
     }
 }
