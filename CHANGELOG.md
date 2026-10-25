@@ -9,6 +9,24 @@
 
 ---
 
+## 未发布 —— Android 头像：事后补的头像不再被 24h 负缓存挡住
+
+> 起因：服务端转存头像是异步的，首帧通常 `sender_avatar = null`，Android 会因此落一个 `{token}.absent` 负标记（24h 内不再重试）。发送者之后才补了头像、后续帧开始自带 `sender_avatar` 时，标记还在，会话列表与对话页就一直画首字占位——要等 24h 过期才可能恢复。
+
+### Android
+
+- **帧里带 `sender_avatar` 就作废负标记**：`SyncEngine.ingestNow` 见到非空 `sender_avatar` 立刻调 `AvatarCache.invalidate(sender_id)` 删掉 `{token}.absent`。实时下发、`resume_gap`/WorkManager 补拉、重装后的历史回放共用这一个落帧入口，三条路径都覆盖。
+- **UI 侧要能被叫醒**：`AvatarCache` 新增 `revision: StateFlow<Int>`，只有真删掉标记时才 +1，`Avatar()` 的 `produceState` 多了这个键——磁盘上少了枚标记不会让已经画成占位的头像自己重组。绝大多数消息都带 `sender_avatar`，所以"没删到标记就不推"是刻意的：否则每条消息都会让整屏头像重跑一遍解析。
+- **代价**：每个负标记被作废会多一次取图请求。
+
+### 测试
+
+- `AvatarCacheTest` 2 条：删标记并推 revision；没有标记时是空操作、revision 不动。
+- `SyncEngineAvatarTest` 2 条：带 `sender_avatar` 的帧擦掉标记、不带的保留（in-memory Room，不联网；`ingestNow` 为此放开成 `internal`）。
+- `assembleDebug` 通过；instrumentation **16 条全绿**（`Pixel_5` API 34）。
+
+---
+
 ## 未发布 —— Android 通知改为按频道分组（第四十轮）
 
 > 起因是老模型的失控：每个发送者一条系统通知渠道，一个空间里几十个告警机器人就把系统通知设置塞成几十条互不相干的条目，想静音某个软件得逐条找；而渠道重要度按第一条消息的 `level` 定死，之后系统不允许应用上调。这一轮把粒度改成「一个频道一条渠道 + 用户显式指定的发送者例外」，锁屏默认值也翻转为显示发送者与摘要。

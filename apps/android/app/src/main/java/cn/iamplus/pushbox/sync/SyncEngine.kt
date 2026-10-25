@@ -14,6 +14,7 @@ import cn.iamplus.pushbox.net.ReadFrame
 import cn.iamplus.pushbox.net.ResumeGap
 import cn.iamplus.pushbox.net.TombstoneFrame
 import cn.iamplus.pushbox.notify.Notifier
+import cn.iamplus.pushbox.ui.AvatarCache
 import cn.iamplus.pushbox.ui.ImageCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -184,7 +185,10 @@ class SyncEngine(
         state.value = State.Online(cursor)
     }
 
-    private suspend fun ingestNow(message: MessageFrame, allowNotify: Boolean = true) {
+    internal suspend fun ingestNow(message: MessageFrame, allowNotify: Boolean = true) {
+        // 帧里带了 sender_avatar＝服务端已转存好这人的头像，本机那条 24h 的 404 结论
+        // 当场作废；不这么做的代价是"事后补的头像"要等标记过期才可能出现
+        if (message.senderAvatar != null) AvatarCache.invalidate(message.senderId)
         // 通知只看"这条是不是首次入库"：补拉与实时下发是同一消息的两个副本，
         // msg_id 去重失败就不通知，这正是验收②要的"补齐且无重复"
         if (dao.apply(message.toRow(), message.displayName)) {

@@ -9,6 +9,9 @@ import cn.iamplus.pushbox.net.AvatarResult
 import cn.iamplus.pushbox.net.PushBoxApi
 import dev.pushbox.core.crypto.Hashes
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -26,6 +29,13 @@ object AvatarCache {
     private val mem = object : LruCache<String, Bitmap>(MEM_KB) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
     }
+
+    /**
+     * 负标记被作废的次数，只增不减。UI 拿它当头像解析的键：
+     * 已经画成占位的头像不会因为磁盘上少了枚标记就自己重组。
+     */
+    private val _revision = MutableStateFlow(0)
+    val revision: StateFlow<Int> = _revision.asStateFlow()
 
     /** 头像的缓存键：sha256hex(sender_id)，与服务端 /api/v1/avatars/{token} 的路径参数同一算法。 */
     fun tokenOf(senderId: String): String =
@@ -93,6 +103,22 @@ object AvatarCache {
         }
     }
 
+    /**
+     * 帧里的 `sender_avatar` 非空即"服务端已经有这人的头像"——比 24h 负缓存更新鲜，
+     * 因此把那条 404 结论作废，下一次 [resolve] 才会真的去打网络。
+     *
+     * 只有真的删掉了一枚标记才推 [revision]：绝大多数消息都带 sender_avatar，
+     * 每条都让整屏头像重跑一遍解析，等于把一次刷新变成常态。
+     * 返回是否真删掉了标记，用例靠它判"这次有没有产生副作用"。
+     */
+    fun invalidate(senderId: String): Boolean {
+        val removed = runCatching {
+            absentFile(App.current.applicationContext, tokenOf(senderId)).delete()
+        }.getOrDefault(false)
+        if (removed) _revision.value += 1
+        return removed
+    }
+
     private fun markedAbsent(token: String): Boolean {
         val file = absentFile(App.current.applicationContext, token)
         if (!file.exists()) return false
@@ -102,7 +128,7 @@ object AvatarCache {
     private fun avatarFile(context: Context, token: String): File =
         File(avatarsDir(context), token)
 
-    private fun absentFile(context: Context, token: String): File =
+    internal fun absentFile(context: Context, token: String): File =
         File(avatarsDir(context), "$token.absent")
 
     private fun avatarsDir(context: Context): File =

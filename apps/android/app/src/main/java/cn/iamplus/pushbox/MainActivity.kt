@@ -3868,7 +3868,10 @@ private fun ConversationRowView(row: ConversationRow, onOpen: () -> Unit, onLong
  */
 @Composable
 private fun Avatar(name: String, avatarPath: String? = null, senderId: String? = null, sizeDp: Int = 40) {
-    val bitmap: Bitmap? by produceState<Bitmap?>(initialValue = null, avatarPath, senderId) {
+    // 正画着占位的头像不会因为负标记被删就自己重组，所以把"作废过几次"也当键：
+    // 帧里补来 sender_avatar 时推一格，下一次解析才真的会去打网络（[AvatarCache.invalidate]）
+    val revision by AvatarCache.revision.collectAsState()
+    val bitmap: Bitmap? by produceState<Bitmap?>(initialValue = null, avatarPath, senderId, revision) {
         value = withContext(Dispatchers.IO) {
             // 本地那张优先：那是用户在自己手机上挑的，服务端转存的副本不该盖掉它
             avatarPath?.let { AvatarCache.decodeFile(it) }
