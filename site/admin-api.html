@@ -344,7 +344,7 @@ curl -sS -X DELETE "$BASE/api/v1/admin/devices/01J8ZK3Q7M2XW4V9HTNBSFY6PD" \
   </ul>
 
   <h2 id="scheduled">定时推送</h2>
-  <p>在服务端建任务：选频道、写正文、给 cron，服务端按时把消息灌进去。它走的是和外部 <code>POST /message</code> 完全同一条链路，发送者固定记作 <code>sender_id="scheduled"</code>。</p>
+  <p>在服务端建任务：选频道、写正文、给 cron，服务端按时把消息灌进去。它走的是和外部 <code>POST /message</code> 完全同一条链路，<b>发送者身份也是任务自己的</b>：<code>sender_id</code> 省略或留空时按 <code>"scheduled"</code> 落库，填了就用填的那个，客户端据此把消息归到对应发送者的会话里；<code>senderAvatar</code> 是头像来源地址，触发时由服务端转存。</p>
 
   <ol class="steps">
     <li>
@@ -356,7 +356,9 @@ curl -sS -X DELETE "$BASE/api/v1/admin/devices/01J8ZK3Q7M2XW4V9HTNBSFY6PD" \
   "title": "该跑 nightly-check 了",
   "content": "### 巡检\n1. 磁盘\n2. 证书",
   "level": "info",
+  "senderId": "nightly-bot",
   "senderName": "值守机器人",
+  "senderAvatar": "https://example.com/bot.png",
   "images": ["https://example.com/chart.png"],
   "cronExpr": "0 0 9 * * 1-5\n0 0 12 * * 0,6",
   "timezone": "Asia/Shanghai",
@@ -406,6 +408,8 @@ curl -sS -X DELETE "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;" \
       <tr><td><code>timezone</code></td><td><span class="tag opt">可选</span></td><td>IANA 时区名（<code>Asia/Shanghai</code>、<code>UTC</code>…），省略按 <code>Asia/Shanghai</code> 落库；cron 与正文里的时间变量都按它算，非法值 400</td></tr>
       <tr><td><code>level</code></td><td><span class="tag opt">可选</span></td><td><code>info</code> / <code>warning</code> / <code>error</code>；写错会安静变成 <code>info</code>，不报错</td></tr>
       <tr><td><code>name</code> / <code>title</code> / <code>senderName</code></td><td><span class="tag opt">可选</span></td><td>去空白后分别最长 64 / 512 / 64 字符</td></tr>
+      <tr><td><code>senderId</code></td><td><span class="tag opt">可选</span></td><td>发送者标识，最长 64 字符；省略、留空或全空白按 <code>scheduled</code> 落库，超长截断。它决定客户端把消息归到哪个发送者会话，与外部 <code>POST /message</code> 的 <code>sender_id</code> 是同一个字段</td></tr>
+      <tr><td><code>senderAvatar</code></td><td><span class="tag opt">可选</span></td><td>头像来源 URL，最长 1024 字符、只允许 http / https；<code>data:</code> 内联头像超长，会被 400 拒绝（先传到图床）。触发时由服务端转存，客户端再通过 <code>/api/v1/avatars/{token}</code> 取</td></tr>
       <tr><td><code>category</code></td><td><span class="tag opt">可选</span></td><td>列表用的自由标签，最长 32 字符，不校验取值</td></tr>
       <tr><td><code>images</code></td><td><span class="tag opt">可选</span></td><td>外链数组，最多 4 条、单条不超过 1024 字符，只允许 http / https</td></tr>
       <tr><td><code>enabled</code></td><td><span class="tag opt">可选</span></td><td>省略即 1（启用）</td></tr>
@@ -416,7 +420,7 @@ curl -sS -X DELETE "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;" \
   <table>
     <thead><tr><th>字段</th><th>出现在</th><th>说明</th></tr></thead>
     <tbody>
-      <tr><td><code>task_id</code>、<code>group_id</code>、<code>channel_no</code>、<code>name</code>、<code>category</code>、<code>title</code>、<code>level</code>、<code>sender_name</code>、<code>cron_expr</code>、<code>enabled</code>、<code>created_at</code>、<code>updated_at</code></td><td>列表、详情、写操作都有</td><td><code>enabled</code> 是 0/1 数字；没填的字符串字段回 <code>""</code>，不会缺键</td></tr>
+      <tr><td><code>task_id</code>、<code>group_id</code>、<code>channel_no</code>、<code>name</code>、<code>category</code>、<code>title</code>、<code>level</code>、<code>sender_id</code>、<code>sender_name</code>、<code>sender_avatar</code>、<code>cron_expr</code>、<code>enabled</code>、<code>created_at</code>、<code>updated_at</code></td><td>列表、详情、写操作都有</td><td><code>enabled</code> 是 0/1 数字；没填的字符串字段回 <code>""</code>，不会缺键。<code>sender_id</code> 恒有值（老任务是 <code>"scheduled"</code>），<code>sender_avatar</code> 没设时回 <code>""</code>，两者都决定触发时那条消息的发送者身份</td></tr>
       <tr><td><code>channel_name</code></td><td>只有列表</td><td>详情和三个写操作的响应里都没有这个键</td></tr>
       <tr><td><code>content_head</code></td><td>列表和写操作</td><td>正文前 80 个字符，这两种形状故意不回全文</td></tr>
       <tr><td><code>content</code>、<code>images</code></td><td>只有详情</td><td>要完整载荷就读详情；详情里没有 <code>content_head</code></td></tr>
@@ -434,7 +438,7 @@ curl -sS -X DELETE "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;" \
   <h3>改一条任务</h3>
   <div class="callout danger">
     <p><b><code>PUT</code> 是整体覆盖，不是补丁</b></p>
-    <p>没在请求体里出现的字段会被清成默认值：<code>name</code>、<code>title</code>、<code>sender_name</code> 变 <code>""</code>，<code>images</code> 变空数组，<code>level</code> 回落到 <code>info</code>。<b>漏一个就静默清空一个</b>。</p>
+    <p>没在请求体里出现的字段会被清成默认值：<code>name</code>、<code>title</code>、<code>senderName</code> 变 <code>""</code>，<code>senderId</code> 回落到 <code>"scheduled"</code>，<code>senderAvatar</code> 变 <code>""</code>，<code>images</code> 变空数组，<code>level</code> 回落到 <code>info</code>。<b>漏一个就静默清空一个</b>。</p>
   </div>
   <ol class="steps">
     <li>
@@ -445,7 +449,8 @@ curl -sS -X DELETE "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;" \
     <li>
       <b>把下划线键改成驼峰，只动你要改的值</b>
       <pre class="code" data-code="bash"><code>jq '{channelNo:.channel_no, name, category, title, content, level,
-      senderName:.sender_name, images, cronExpr:.cron_expr, enabled}' task.json &gt; put.json</code></pre>
+      senderId:.sender_id, senderName:.sender_name, senderAvatar:.sender_avatar,
+      images, cronExpr:.cron_expr, enabled}' task.json &gt; put.json</code></pre>
       <span class="sub">详情读回来的键是下划线，PUT 要的键是驼峰，中间这一步不能省。</span>
     </li>
     <li>
@@ -466,6 +471,7 @@ curl -sS -X DELETE "$BASE/api/v1/admin/scheduled-tasks/&lt;task_id&gt;" \
     <li>投递失败会记下 <code>last_result:"failed"</code> 和 <code>last_error</code>，<b>但不会停任务</b>，下个时隙还会再失败一次。</li>
     <li><b>唯一的例外</b>：目标频道中途被归档，下一轮会把任务 <code>enabled</code> 直接置成 0，<code>last_error</code> 是「频道已归档或不存在，任务已自动停用」。</li>
     <li>任务的归属 Space 是<b>从目标频道反查</b>的，不用调用方给。</li>
+    <li>发出去的消息用<b>任务自己的发送者身份</b>：<code>sender_id</code> 决定客户端把消息归到哪个会话，<code>sender_avatar</code> 在触发时由服务端转存（同一发送者只保留最新一张）；这是消息里的一份展示身份，不占设备的自报名。</li>
     <li><code>DELETE</code> 是真删任务，已经发出去的消息不受影响。</li>
   </ul>
 

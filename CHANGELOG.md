@@ -9,6 +9,35 @@
 
 ---
 
+## 未发布 —— 定时任务的发送者身份与管理台粘贴 JSON（第三十九轮）
+
+> 起因是照着外部系统已有的 `POST /message` 请求体建任务：此前定时任务发出去的消息一律记作 `sender_id="scheduled"`，客户端只能把它们堆在一个叫 scheduled 的会话里；发送者名、头像、级别还得手抄一遍，而手里明明已经有一段现成的 JSON。这一轮让任务自带发送者身份，并给管理台加一个只做回显的粘贴入口。
+
+### 服务端
+
+- **`scheduled_tasks` 加两列**（`V12__scheduled_task_sender.sql`）：`sender_id VARCHAR(64) NOT NULL DEFAULT 'scheduled'` 与 `sender_avatar VARCHAR(1024) NULL`。老任务升级后原样可读，行为不变。
+- **触发时用任务自己的身份**：`fire()` 把这两列交给 `ingestInternal`，不再写死 `scheduled`；ID 去空白后为空回落 `scheduled`、超 64 字符截断。
+- **头像走同一条转存链路**：只收 http(s)、最长 1024 字符，`data:` 内联头像 400 并提示先传到图床；触发时由服务端抓取转存，客户端经 `/api/v1/avatars/{token}` 取。
+- **接口字段**：请求体 `senderId`/`senderAvatar`（驼峰），响应 `sender_id`/`sender_avatar`（下划线，列表、详情与三个写操作恒在，头像没设回 `""`）。`PUT` 仍是整体覆盖——请求体里不出现就回落默认值。
+
+### 管理台
+
+- 表单新增「发送者 ID」「发送者头像」，编辑时从详情回显，预览弹窗显示最终生效的 `sender_id`。
+- 新增「粘贴 API JSON」面板：认 `channel` / `sender_id` / `sender_avatar` / `sender_name` / `title` / `level` / `content` / `images`，其余键（含 `secret`）不读；cron 与时区永远不动；未知频道、非法头像、未知级别分别给提示并保持原值。这段 JSON 只留在组件内存里回显，不提交、不落 localStorage、关窗即清，最终载荷以表单为准。
+
+### 文档
+
+- `site/admin-api.html`：定时推送一节去掉「发送者固定 scheduled」，补 `senderId`/`senderAvatar` 请求字段、响应字段、`PUT` 覆盖清单与执行口径（客户端按 `sender_id` 归会话）。
+- `docs/用户使用手册.md` 4.1：补发送者身份与粘贴 JSON 的用法（认哪些键、忽略哪些键、以表单为准）。
+- `docs/软件设计方案.md`：追加 `V12` 与表单回填口径。
+
+### 测试
+
+- `ScheduledTaskLogicTest` 新增 5 条：触发时把 `sender_id` 与头像传给摄入、缺 `sender_id` 回落 `scheduled`、空白 ID 回退与 64 字截断、头像只收 http(s)（`data:` / 相对路径 / 超 1024 都 400）、列表与详情回显两列；`ScheduledTaskStoreTest` 新增 1 条 `V12` 往返（INSERT 列清单、`SELECT *` 扫描、UPDATE 都带得到这两列）。
+- web-admin `npm run build` 通过（`vue-tsc` 无错），并在自起实例（8081）上验证粘贴回填、预览、保存、编辑回显与三类异常提示；Maven 全量 **365 条（core 50 + server 315），0 失败 0 错误**，本机 332 执行 + 33 跳过（DB/S3 门控，与基线逐条一致）。
+
+---
+
 ## 未发布 —— 定时推送支持多条 cron（第三十八轮）
 
 > 起因是一个很具体的需求：「工作日 09:00 发一次、周末 12:00 发一次」。此前只能建两个只差 cron 的任务——正文、时区、启停各维护一份，改文案要改两处、还容易只改一处。这一轮让一个任务的 `cron_expr` 装多行表达式（每行一条 6 段 cron，最多 8 条），触发取所有行里最近的那一次。
