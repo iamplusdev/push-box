@@ -101,6 +101,9 @@ class NotifierChannelTest {
         val notifier = Notifier(context)
         notifier.post(message("m-a3", senderA, 5))
         notifier.post(message("m-b3", senderB, 6))
+        // cancelConversation 按 activeNotifications 里的 group 撤，刚 notify 的那条可能还没被系统登记
+        assertNotNull(await("m-a3".hashCode()))
+        assertNotNull(await("m-b3".hashCode()))
         notifier.cancelConversation(channelNo, senderA)
 
         assertNull(await("m-a3".hashCode(), timeoutMs = 300))
