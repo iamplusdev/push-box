@@ -55,6 +55,9 @@ object AvatarCache {
         return bmp
     }
 
+    /** [cached] 的 senderId 入口：UI 在回源复核之前先把（可能已过期的）旧图顶上去。 */
+    fun cachedFor(senderId: String): Bitmap? = cached(tokenOf(senderId))
+
     /**
      * 本地"设头像"额外写进这里一份（会话行里的 avatar_path 仍是显示首选）。
      * 目的是让通知栏拿得到它：出通知的那条路径上不该为了一张头像回查会话行，
@@ -72,34 +75,43 @@ object AvatarCache {
     }
 
     /**
-     * 完整解析：缓存 → 网络。404 会落一个负标记，[ABSENT_TTL_MILLIS] 内不再重试；
-     * 之所以是"一段时间"而不是"永久"：token 只由 sender_id 算出、永远不变，
-     * 发送者后来才上传头像时，永久负标记会让这个会话再也看不到新头像。
+     * 完整解析：缓存 → 网络。缓存超过 [FRESH_TTL_MILLIS] 就回源复核一次——
+     * token 只由 sender_id 算出、服务端按 (频道, 发送者) 覆盖写，所以"这人换了头像"
+     * 在本机看来和"没换"完全一样，只能靠时间重新问一遍。
+     * 404 会落一个负标记，[ABSENT_TTL_MILLIS] 内不再重试。
      */
     suspend fun resolve(senderId: String): Bitmap? = withContext(Dispatchers.IO) {
         val token = tokenOf(senderId)
+        val context = App.current.applicationContext
         // 整段都在 IO 线程：会话列表一次组合能起十几个头像协程，
         // 磁盘解码留在主线程就是滚动卡顿
-        cached(token)?.let { return@withContext it }
-        if (markedAbsent(token)) return@withContext null
+        val hit = cached(token)
+        if (hit != null && isFresh(avatarFile(context, token))) return@withContext hit
+        // 24h 内确认过"这人没头像"就不再问；手上要是有张旧图，照旧给旧图，不能把它变成占位
+        if (markedAbsent(token)) return@withContext hit
         val app = App.current
-        val identity = app.identity.load() ?: return@withContext null
+        val identity = app.identity.load() ?: return@withContext hit
         when (val result = PushBoxApi(identity.baseUrl, app.http).fetchAvatar(identity, token)) {
             is AvatarResult.Found -> {
                 runCatching {
-                    avatarFile(app.applicationContext, token).writeBytes(result.bytes)
-                    absentFile(app.applicationContext, token).delete()
+                    avatarFile(context, token).writeBytes(result.bytes)
+                    absentFile(context, token).delete()
                 }
                 decode(result.bytes)?.also { mem.put(token, it) }
             }
 
-            // 404 是个结论，记下来；Unknown 只是这次没取到，什么都不记
+            // 404 是个结论：记下来，并把可能残留的旧图一起丢掉（服务端都没了，界面上不该还挂着）
             AvatarResult.None -> {
-                runCatching { absentFile(app.applicationContext, token).writeText(token) }
+                runCatching {
+                    absentFile(context, token).writeText(token)
+                    avatarFile(context, token).delete()
+                    mem.remove(token)
+                }
                 null
             }
 
-            AvatarResult.Unknown -> null
+            // 没问到（超时/5xx/401）就继续用旧图，什么都不记
+            AvatarResult.Unknown -> hit
         }
     }
 
@@ -125,7 +137,16 @@ object AvatarCache {
         return System.currentTimeMillis() - file.lastModified() <= ABSENT_TTL_MILLIS
     }
 
-    private fun avatarFile(context: Context, token: String): File =
+    /**
+     * 缓存文件的取回时刻就是它的 mtime（[resolve] 每次回源都重写一遍）。
+     * 过期不等于不能用——[resolve] 复核失败时会把它当回落，UI 也先拿它顶占位。
+     */
+    internal fun isFresh(file: File, now: Long = System.currentTimeMillis()): Boolean {
+        val fetchedAt = file.lastModified()
+        return fetchedAt > 0L && now - fetchedAt <= FRESH_TTL_MILLIS
+    }
+
+    internal fun avatarFile(context: Context, token: String): File =
         File(avatarsDir(context), token)
 
     internal fun absentFile(context: Context, token: String): File =
@@ -153,4 +174,10 @@ object AvatarCache {
     private const val MAX_SIDE = 256
     private const val MEM_KB = 6 * 1024
     private const val ABSENT_TTL_MILLIS = 24L * 60 * 60 * 1000
+
+    /**
+     * 正缓存的有效期。token 恒定、服务端覆盖写，所以换头像只能靠时间发现；
+     * 与 [ABSENT_TTL_MILLIS] 同档，一边负责"补上的头像"，一边负责"换掉的头像"。
+     */
+    private const val FRESH_TTL_MILLIS = 24L * 60 * 60 * 1000
 }

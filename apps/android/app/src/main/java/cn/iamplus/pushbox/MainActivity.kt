@@ -3872,11 +3872,16 @@ private fun Avatar(name: String, avatarPath: String? = null, senderId: String? =
     // 帧里补来 sender_avatar 时推一格，下一次解析才真的会去打网络（[AvatarCache.invalidate]）
     val revision by AvatarCache.revision.collectAsState()
     val bitmap: Bitmap? by produceState<Bitmap?>(initialValue = null, avatarPath, senderId, revision) {
-        value = withContext(Dispatchers.IO) {
-            // 本地那张优先：那是用户在自己手机上挑的，服务端转存的副本不该盖掉它
-            avatarPath?.let { AvatarCache.decodeFile(it) }
-                ?: senderId?.takeIf { it.isNotBlank() }?.let { AvatarCache.resolve(it) }
+        val localPath = avatarPath
+        val id = senderId?.takeIf { it.isNotBlank() }
+        // 本地那张优先：那是用户在自己手机上挑的，服务端转存的副本不该盖掉它
+        if (localPath != null || id == null) {
+            value = withContext(Dispatchers.IO) { localPath?.let { AvatarCache.decodeFile(it) } }
+            return@produceState
         }
+        // 缓存过了 24h 要回源复核一次；先把旧图顶上去，别让头像为了一次复核闪成占位
+        value = withContext(Dispatchers.IO) { AvatarCache.cachedFor(id) }
+        value = withContext(Dispatchers.IO) { AvatarCache.resolve(id) }
     }
     val bmp = bitmap
     // §9.2 微信式方圆形头像：圆角随边长等比走（44dp 那一档正好 6dp），与 PC 的 AvatarBox 同一比例。
