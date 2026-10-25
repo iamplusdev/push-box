@@ -196,6 +196,15 @@
     <string name="notif_importance_high">高：悬浮 + 响铃</string>
     <string name="notif_importance_default">中：响铃不悬浮</string>
     <string name="notif_importance_low">低：仅通知栏</string>
+    <string name="notif_manage_title">按频道管理</string>
+    <string name="notif_manage_entry_desc">查看每个频道的当前提醒档位，点进去调整。</string>
+    <string name="notif_manage_desc">每个频道在系统里对应一条通知渠道。点一行进入系统设置单独调整；单独设置过的发送者也会作为独立渠道出现在系统通知设置里。</string>
+    <string name="notif_manage_loading">正在读取频道…</string>
+    <string name="notif_manage_empty">这个空间还没有频道。</string>
+    <string name="notif_manage_error">读取频道失败：%1$s</string>
+    <string name="notif_manage_no_channel">还没收到过消息</string>
+    <string name="notif_manage_importance_none">已关闭</string>
+    <string name="notif_manage_channel_no">频道 %1$s</string>
     <string name="about_api_doc_title">第三方接入 API 摘要</string>
     <string name="about_api_doc_body">唯一入口：POST {当前服务器}/message（HTTP JSON）。必填 channel/secret/type/content；可选 sender_id/sender_name/sender_avatar/title/level/url/images[]/msg_key/ts。第三方不需要注册设备、不参与帧加密；一次 POST 即完成投递，凭据只写在 body、绝不进 URL 或 header。</string>
     <string name="about_log_desensitized">日志（脱敏）：本机不落消息正文与凭据；异常堆栈只保留 tag 与主机名。</string>
@@ -227,8 +236,8 @@
     <string name="keepalive_request">去设置</string>
     <string name="keepalive_status_on">已允许后台运行</string>
     <string name="keepalive_status_off">仍可能被系统休眠冻结</string>
-    <string name="keepalive_notification">通知渠道设置</string>
-    <string name="keepalive_notification_desc">在系统设置里确认各会话渠道的提醒强度。</string>
+    <string name="keepalive_notification">后台监听渠道设置</string>
+    <string name="keepalive_notification_desc">常驻通知是否显示由系统的「后台监听」渠道控制；消息提醒请用上方的「按频道管理」。</string>
     <string name="keepalive_autostart">自启动与后台锁定</string>
     <string name="keepalive_autostart_desc">国产 ROM 需在应用信息里允许自启动，常驻才不会被清理。</string>
     <string name="keepalive_polling">极致省电轮询模式</string>
@@ -253,6 +262,10 @@
     <string name="conv_action_clear">清空聊天记录</string>
     <string name="conv_action_lock_private">锁屏隐藏内容</string>
     <string name="conv_action_unlock_private">取消锁屏隐藏</string>
+    <string name="conv_action_sender_notify">单独设置这个发送者</string>
+    <string name="conv_action_sender_notify_adjust">调整这个发送者的通知</string>
+    <string name="conv_action_sender_notify_restore">恢复跟随频道</string>
+    <string name="conv_sender_notify_restored">已恢复跟随频道</string>
     <string name="conv_pinned_flag">置顶</string>
     <string name="conv_muted_flag">静音</string>
     <string name="conv_private_flag">锁屏隐藏</string>

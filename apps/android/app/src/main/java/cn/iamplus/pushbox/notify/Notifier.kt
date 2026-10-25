@@ -310,6 +310,54 @@ class Notifier(private val context: Context) {
             .forEach { manager.cancel(it.id) }
     }
 
+    /** 「按频道管理」读取当前档位：null 表示这个频道还没发过通知，系统里还没有它的渠道。 */
+    fun channelImportanceOf(channelNo: String): Int? =
+        context.getSystemService(NotificationManager::class.java)
+            ?.getNotificationChannel(channelIdOf(channelNo))?.importance
+
+    /**
+     * 频道页拿到名字后回写系统渠道名。只改已存在的渠道——频道还没发过通知时不该凭空建一条，
+     * 否则「新频道默认提醒」会在打开频道页的那一刻定型，而不是第一次收到消息时。
+     * 改的是 getNotificationChannel 拿到的实例再 create，系统会保留用户已经调过的档位。
+     */
+    fun syncChannelNames(names: Map<String, String>) {
+        val system = context.getSystemService(NotificationManager::class.java) ?: return
+        names.forEach { (channelNo, name) ->
+            if (name.isBlank()) return@forEach
+            val existing = system.getNotificationChannel(channelIdOf(channelNo)) ?: return@forEach
+            if (existing.name.toString() == name) return@forEach
+            existing.name = name
+            system.createNotificationChannel(existing)
+        }
+    }
+
+    /** 会话菜单：这个发送者是否已经建过例外渠道。 */
+    fun hasSenderException(channelNo: String, senderId: String): Boolean =
+        context.getSystemService(NotificationManager::class.java)
+            ?.getNotificationChannel(senderChannelIdOf(channelNo, senderId)) != null
+
+    /**
+     * 会话菜单「单独设置这个发送者」：建一条独立渠道，界面随后深链到系统设置让用户调档位。
+     * 已存在就不动——重新 create 会把用户调过的重要度按当前对象值再提交一次，没有必要。
+     */
+    fun createSenderException(channelNo: String, senderId: String, displayName: String) {
+        val system = context.getSystemService(NotificationManager::class.java) ?: return
+        val id = senderChannelIdOf(channelNo, senderId)
+        if (system.getNotificationChannel(id) != null) return
+        val name = displayName.ifBlank { channelNo }
+        system.createNotificationChannel(NotificationChannel(id, name,
+            defaultImportanceOf()).apply {
+            group = CHANNEL_GROUP
+            description = context.getString(R.string.notif_conversation_desc, name)
+        })
+    }
+
+    /** 会话菜单「恢复跟随频道」：删掉例外渠道；挂在这条渠道上的通知会随渠道一起消失。 */
+    fun removeSenderException(channelNo: String, senderId: String) {
+        context.getSystemService(NotificationManager::class.java)
+            ?.deleteNotificationChannel(senderChannelIdOf(channelNo, senderId))
+    }
+
     /** 常驻服务通知（§7.2）：IMPORTANCE_MIN、无声、onlyAlertOnce，尽量压低存在感。
      *  unreadCount 借 Notification.number 传给支持"读通知数字"的 launcher（三星 One UI 等）作角标。 */
     fun serviceNotification(connected: Boolean, unreadCount: Int = 0): Notification =

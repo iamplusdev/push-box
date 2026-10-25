@@ -2,6 +2,7 @@ package cn.iamplus.pushbox
 
 import android.Manifest
 import android.app.Activity
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -1064,6 +1065,12 @@ private fun ConversationMenu(row: ConversationRow, onDismiss: () -> Unit,
     onRename: () -> Unit,
     onSetAvatar: () -> Unit, onClear: () -> Unit) {
     var confirmClear by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val notifier = cn.iamplus.pushbox.notify.Notifier(context)
+    // 例外渠道由用户显式建，建完就能在系统设置里单独调；这里只判断有没有，用来决定菜单给哪一组动作
+    val hasSenderException = remember(row) {
+        notifier.hasSenderException(row.channelNo, row.senderId)
+    }
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
@@ -1095,6 +1102,29 @@ private fun ConversationMenu(row: ConversationRow, onDismiss: () -> Unit,
                 MenuOption(stringResource(
                     if (row.lockPrivate) R.string.conv_action_unlock_private
                     else R.string.conv_action_lock_private), onToggleLockPrivate)
+                // §7.3 发送者例外：不影响同频道其他发送者；恢复后立刻回到频道渠道
+                if (hasSenderException) {
+                    MenuOption(stringResource(R.string.conv_action_sender_notify_adjust), {
+                        openSystemChannelSettings(context,
+                            cn.iamplus.pushbox.notify.Notifier.senderChannelIdOf(
+                                row.channelNo, row.senderId))
+                        onDismiss()
+                    })
+                    MenuOption(stringResource(R.string.conv_action_sender_notify_restore), {
+                        notifier.removeSenderException(row.channelNo, row.senderId)
+                        Toast.makeText(context, R.string.conv_sender_notify_restored,
+                            Toast.LENGTH_SHORT).show()
+                        onDismiss()
+                    })
+                } else {
+                    MenuOption(stringResource(R.string.conv_action_sender_notify), {
+                        notifier.createSenderException(row.channelNo, row.senderId, row.displayName)
+                        openSystemChannelSettings(context,
+                            cn.iamplus.pushbox.notify.Notifier.senderChannelIdOf(
+                                row.channelNo, row.senderId))
+                        onDismiss()
+                    })
+                }
                 MenuOption(stringResource(R.string.conv_action_rename), onRename)
                 MenuOption(stringResource(R.string.conv_action_set_avatar), onSetAvatar)
                 MenuOption(stringResource(R.string.conv_action_clear), { confirmClear = true })
@@ -1812,6 +1842,9 @@ private fun ChannelsTab(identity: Identity, modifier: Modifier) {
                 channels = it.channels
                 // 开关只认服务端回显：本机自己记一份，早晚变成"屏幕上开着、服务端关着"
                 subscribedOnly = it.subscribedOnly
+                // 通知渠道建得比频道页早（第一次收消息时只有号码），拿到名字后回写，系统设置里才不是光秃秃的「频道 号码」
+                cn.iamplus.pushbox.notify.Notifier(app)
+                    .syncChannelNames(it.channels.associate { ch -> ch.channelNo to ch.name })
             }
             .onFailure { error = it.message ?: it::class.java.simpleName }
     }
@@ -2709,6 +2742,7 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
     val quietEnd by app.quietEnd.collectAsState()
     val lockContent by app.lockScreenContent.collectAsState()
     val importance by app.defaultImportance.collectAsState()
+    var showChannelNotify by remember { mutableStateOf(false) }
     var devices by remember { mutableStateOf<List<PushBoxApi.DeviceInfo>?>(null) }
     var devicesTick by remember { mutableStateOf(0) }
     var devicesError by remember { mutableStateOf<String?>(null) }
@@ -2837,6 +2871,9 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
                     }
                 }
             }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            GuideRow(stringResource(R.string.notif_manage_title),
+                stringResource(R.string.notif_manage_entry_desc)) { showChannelNotify = true }
             // §7.4 静默时段：窗口内非 error 消息只静默入通知栏，不响铃不横幅
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -3037,6 +3074,9 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+    if (showChannelNotify) {
+        ChannelNotifyDialog(identity, onDismiss = { showChannelNotify = false })
     }
     if (showClear) {
         AlertDialog(
@@ -3365,6 +3405,112 @@ private fun KeepAliveBatteryRow() {
 /** 尝试打开深链 intent；失败返回 false，调用方可降级。 */
 private fun openDeepLink(context: Context, intent: Intent): Boolean =
     runCatching { context.startActivity(intent); true }.getOrElse { false }
+
+/** 直达单条通知渠道的系统设置页；失败时退回 App 级通知设置。 */
+private fun openSystemChannelSettings(context: Context, channelId: String) {
+    val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
+    }
+    if (!openDeepLink(context, intent)) {
+        openDeepLink(context, Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+    }
+}
+
+/** 「按频道管理」一行：importance 为 null 表示这个频道还没发过通知、系统里还没有渠道。 */
+private data class ChannelNotifyRow(val channelNo: String, val name: String, val importance: Int?)
+
+/**
+ * §7.3 按频道管理：列出本空间每个频道的当前提醒档位，点一行直达系统渠道设置。
+ * 渠道重要度建好后只能由系统设置改，App 里只做导航与状态展示。
+ */
+@Composable
+private fun ChannelNotifyDialog(identity: Identity, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val app = App.get(context)
+    var rows by remember { mutableStateOf<List<ChannelNotifyRow>?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var tick by remember { mutableStateOf(0) }
+    LaunchedEffect(tick) {
+        rows = null; error = null
+        runCatching { PushBoxApi(identity.baseUrl, app.http).channelListPage(identity).channels }
+            .onSuccess { list ->
+                val notifier = cn.iamplus.pushbox.notify.Notifier(context)
+                // 顺手对齐系统渠道名：用户从这一行点进系统设置时看到的应该是频道名而不是号码
+                notifier.syncChannelNames(list.associate { it.channelNo to it.name })
+                rows = list.map {
+                    ChannelNotifyRow(it.channelNo, it.name, notifier.channelImportanceOf(it.channelNo))
+                }
+            }
+            .onFailure { error = it.message ?: it::class.java.simpleName }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.notif_manage_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(stringResource(R.string.notif_manage_desc),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                val list = rows
+                when {
+                    error != null -> {
+                        Text(stringResource(R.string.notif_manage_error, error!!),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { tick++ }) {
+                            Text(stringResource(R.string.channels_refresh))
+                        }
+                    }
+                    list == null -> Text(stringResource(R.string.notif_manage_loading),
+                        style = MaterialTheme.typography.bodyMedium)
+                    list.isEmpty() -> Text(stringResource(R.string.notif_manage_empty),
+                        style = MaterialTheme.typography.bodyMedium)
+                    else -> list.forEach { row ->
+                        Row(Modifier.fillMaxWidth()
+                            .clickable(enabled = row.importance != null) {
+                                openSystemChannelSettings(context,
+                                    cn.iamplus.pushbox.notify.Notifier.channelIdOf(row.channelNo))
+                            }
+                            .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(row.name.ifBlank {
+                                    context.getString(R.string.notif_channel_fallback_name, row.channelNo)
+                                }, style = MaterialTheme.typography.titleSmall)
+                                Text(stringResource(R.string.notif_manage_channel_no, row.channelNo),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text(if (row.importance == null) {
+                                stringResource(R.string.notif_manage_no_channel)
+                            } else {
+                                importanceLabel(row.importance)
+                            }, style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        HorizontalDivider()
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.confirm_ok)) }
+        })
+}
+
+@Composable
+private fun importanceLabel(importance: Int): String = when {
+    importance == NotificationManager.IMPORTANCE_NONE ->
+        stringResource(R.string.notif_manage_importance_none)
+    importance >= NotificationManager.IMPORTANCE_HIGH ->
+        stringResource(R.string.notif_importance_high)
+    importance == NotificationManager.IMPORTANCE_DEFAULT ->
+        stringResource(R.string.notif_importance_default)
+    else -> stringResource(R.string.notif_importance_low)
+}
 
 /** §7.2 D18：按品牌给出保活相关入口（锁定后台/关闭省电）；无通用标准，只能试各家深链。 */
 private fun openBrandSpecific(context: Context, action: String) {

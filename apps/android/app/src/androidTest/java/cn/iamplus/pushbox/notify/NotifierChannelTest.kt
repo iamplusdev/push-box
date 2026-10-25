@@ -14,6 +14,7 @@ import cn.iamplus.pushbox.App
 import cn.iamplus.pushbox.net.MessageFrame
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -48,6 +49,8 @@ class NotifierChannelTest {
         val app = App.get(context)
         app.notificationsEnabled.value = true
         app.quietEnabled.value = false
+        app.lockScreenContent.value = true
+        app.defaultImportance.value = "high"
         cleanup()
     }
 
@@ -112,6 +115,47 @@ class NotifierChannelTest {
         assertNotNull(manager.getNotificationChannel(legacyId))
         Notifier(context)
         assertNull(manager.getNotificationChannel(legacyId))
+    }
+
+    @Test
+    fun senderExceptionCreatedFromMenuTakesOverUntilRestored() {
+        val exceptionId = Notifier.senderChannelIdOf(channelNo, senderA)
+        val notifier = Notifier(context)
+        notifier.createSenderException(channelNo, senderA, "发送者 A")
+        assertTrue(notifier.hasSenderException(channelNo, senderA))
+        assertEquals("发送者 A", manager.getNotificationChannel(exceptionId)!!.name.toString())
+
+        notifier.post(message("m-e1", senderA, 7))
+        assertEquals(exceptionId, await("m-e1".hashCode())!!.notification.channelId)
+
+        notifier.removeSenderException(channelNo, senderA)
+        assertFalse(notifier.hasSenderException(channelNo, senderA))
+        notifier.post(message("m-e2", senderA, 8))
+        assertEquals(Notifier.channelIdOf(channelNo),
+            await("m-e2".hashCode())!!.notification.channelId)
+    }
+
+    @Test
+    fun channelNamesSyncOnlyTouchesExistingChannels() {
+        val notifier = Notifier(context)
+        notifier.post(message("m-n1", senderA, 9))
+        assertNotNull(manager.getNotificationChannel(Notifier.channelIdOf(channelNo)))
+
+        notifier.syncChannelNames(mapOf(channelNo to "磁盘告警", "99999997" to "不该出现"))
+        assertEquals("磁盘告警",
+            manager.getNotificationChannel(Notifier.channelIdOf(channelNo))!!.name.toString())
+        // 频道还没发过通知时不该凭空建渠道，否则默认提醒档会在打开频道页那一刻就定型
+        assertNull(manager.getNotificationChannel(Notifier.channelIdOf("99999997")))
+    }
+
+    @Test
+    fun channelImportanceReflectsExistingChannelOnly() {
+        val notifier = Notifier(context)
+        assertNull(notifier.channelImportanceOf(channelNo))
+        notifier.post(message("m-i1", senderA, 10))
+        val importance = notifier.channelImportanceOf(channelNo)
+        assertNotNull(importance)
+        assertEquals(NotificationManager.IMPORTANCE_HIGH, importance!!)
     }
 
     private fun message(msgId: String, senderId: String, seq: Long): MessageFrame =
