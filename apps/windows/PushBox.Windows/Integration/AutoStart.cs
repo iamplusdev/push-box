@@ -29,9 +29,16 @@ public static class AutoStart
     public static string? DesiredValue(bool enabled, string exePath) =>
         enabled ? CommandFor(exePath) : null;
 
+    /// <summary>
+    /// 开机那次带上的开关：进程、托盘、同步循环照常起来，但主窗不打开——自启是"帮我收消息"，
+    /// 不是"开机就把一扇窗摆到脸上"。字符串与 <c>App.StartInBackground</c> 认的是同一个。
+    /// </summary>
+    public const string BackgroundArgument = "--tray";
+
     /// <summary>整条路径加引号：开发机上 exe 常在 <c>Program Files</c> 或带空格的中文路径里，
-    /// 不加引号 Run 会把路径按空格拆成"可执行文件 + 参数"，开机时静默启动失败。</summary>
-    public static string CommandFor(string exePath) => "\"" + exePath + "\"";
+    /// 不加引号 Run 会把路径按空格拆成"可执行文件 + 参数"，开机时静默启动失败。
+    /// 引号后面那只 <see cref="BackgroundArgument"/> 是给本程序看的，不是给用户看的。</summary>
+    public static string CommandFor(string exePath) => "\"" + exePath + "\" " + BackgroundArgument;
 
     /// <summary>已经在跑的那个路径与期望一致吗？一致就不动注册表（值相同也写会让"启动"页里的
     /// "程序已更新"提示莫名亮一次）。</summary>
@@ -44,8 +51,9 @@ public static class AutoStart
     /// 设置里写着"开"，注册表那一笔却可能已经不是这个意思了。三种走法分开看：
     /// <list type="bullet">
     /// <item><description><c>AlreadyRight</c>：什么都不做，"值相同也要重写"会让启动页里的"程序已更新"莫名亮一次。</description></item>
-    /// <item><description><c>MovedInstall</c>：有条目但指着别处——是我们自己换了目录（<c>bin\Debug</c>  ↔  Program Files），
-    /// 该跟着搬到新路径，否则开机时启动页里留的是一条永远起不来的旧条目。</description></item>
+    /// <item><description><c>MovedInstall</c>：有条目但值对不上——是我们自己换了目录（<c>bin\Debug</c>  ↔  Program Files），
+    /// 该跟着搬到新值，否则开机时启动页里留的是一条永远起不来的旧条目。<b>升级也走这一支</b>：老版本写的是
+    /// 不带 <see cref="BackgroundArgument"/> 的光路径，值对不上就是"该重写"，于是下一次启动自动补上开关。</description></item>
     /// <item><description><c>UserCleared</c>：条目不见了。§8.1 说的"用户自己就能在任务管理器里关掉"走的就是这条路，
     /// 顺着他把设置改成关，而不是下次开机偷偷再塞回去。</description></item>
     /// </list>

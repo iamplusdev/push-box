@@ -69,6 +69,10 @@ public partial class MainWindow : Window
             if (Body.ColumnDefinitions[1].Width.IsAbsolute)
                 _listWidth = Body.ColumnDefinitions[1].Width.Value;
         };
+        // 订阅在**构造时**接上，而不是等 OnContentRendered：开机自启那一轮主窗一次都不 Show，
+        // 而托盘要读的未读数、连接状态，以及"引擎每落一条就重画"都挂在这里。
+        // 放在渲染回调里等于把"后台启动能不能收消息"寄托在"装配层别忘了补一次"上
+        Wire();
     }
 
     /// <summary>
@@ -313,7 +317,21 @@ public partial class MainWindow : Window
     protected override void OnContentRendered(EventArgs e)
     {
         base.OnContentRendered(e);
+        // 后台启动（自启）那条路在 Show 之前就跑过一次 Refresh，但它被 IsLoaded 挡在绘制之前：
+        // Show 之后这一下才是第一屏
+        Refresh();
+    }
 
+    private bool _wired;
+
+    /// <summary>
+    /// 把窗口上的订阅接起来。构造函数会调，所以后台启动（自启）那种"对象在、但一次都不 Show"
+    /// 的形态也照样能收消息、刷托盘。方法自身幂等。
+    /// </summary>
+    private void Wire()
+    {
+        if (_wired) return;
+        _wired = true;
         ConversationList.SelectionChanged += OnConversationSelected;
         BackButton.Click += (_, _) => _model.CloseConversation();
         TimelineScroll.ScrollChanged += OnTimelineScrollChanged;
@@ -328,8 +346,6 @@ public partial class MainWindow : Window
             _engine.StateChanged += OnEngineState;
             ApplyEngineState(_engine.State);
         }
-
-        Refresh();
     }
 
     protected override void OnClosed(EventArgs e)

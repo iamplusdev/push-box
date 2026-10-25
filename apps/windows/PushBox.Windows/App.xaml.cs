@@ -93,6 +93,9 @@ public partial class App : Application
             Dispatcher.BeginInvoke(() => HandleTarget(ToastProtocol.Parse(arg)));
         });
 
+        // 开机自启那一笔注册表会带上 --tray：托盘与同步照常起来，主窗先不 Show
+        var background = StartInBackground(e.Args);
+
         // §9.1 的深浅色：在任何一个窗口被 Show 之前换上 token 字典，否则首帧会闪一下另一个主题
         ThemeManager.FollowSystem();
         // 裸 WinRT 不给未打包应用注册入口，这两处 HKCU 就是那个入口（AUMID + 协议处理器）
@@ -104,15 +107,38 @@ public partial class App : Application
         var enrolled = model.IsEnrolled();
         // 这一行是"这台机器从什么时候开始算装了 PushBox"的锚，也是查任何一条留痕时的第一处上下文
         AppLog.Started(VersionOf(), enrolled);
-        if (enrolled) OpenMainWindow();
-        else new FirstLaunchWindow(model).Show();
+        if (enrolled) OpenMainWindow(show: !background);
+        else if (!background) new FirstLaunchWindow(model).Show();
+        else
+        {
+            // 自启但本机没有身份（退出过空间、身份文件又丢了）：没有可收的消息，也没有可画的界面。
+            // 开机那一次到此为止，绝不因为一个过期的注册表条目把首启窗摆到用户脸上
+            Shutdown();
+            return;
+        }
 
         // 冷启动是"应用没在跑时点通知"那条路：窗口刚建好就该落在那条会话上
         if (target != null) HandleTarget(target);
 
         // §8.4 之后：注册过的机器冷启动静默查一次 GitHub 更新；没注册的先把空间建好再说。
-        // 这条只在进程第一次走（见 _updateCheckedThisProcess），绝不在 15 分钟轮询里重复——未认证限额会烧光
-        if (enrolled) CheckUpdateOnStartup();
+        // 这条只在进程第一次走（见 _updateCheckedThisProcess），绝不在 15 分钟轮询里重复——未认证限额会烧光。
+        // 后台启动（自启）不查：查到新版也只能弹一扇窗，那一下正好等于"开机就把界面打开"。
+        if (enrolled && !background) CheckUpdateOnStartup();
+    }
+
+    /// <summary>
+    /// argv 里有没有自启开关。与 <see cref="AutoStart.BackgroundArgument"/> 是同一个字面量，
+    /// 判大小写不敏感是因为注册表里的那一笔可能有手写/旧版本留下的变体。
+    /// </summary>
+    public static bool StartInBackground(string[]? args)
+    {
+        if (args == null) return false;
+        foreach (var arg in args)
+        {
+            if (string.Equals(arg, AutoStart.BackgroundArgument, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+
+        return false;
     }
 
     /// <summary>本进程只静默查一次更新：窗口可能被"点通知时还没开"重开，但那不该再发一次 GitHub 请求。</summary>
@@ -157,7 +183,7 @@ public partial class App : Application
         }
         var window = new UpdatePromptWindow(update, latest, ExitApp)
         {
-            Owner = MainWindow as Window
+            Owner = VisibleMainWindow
         };
         _updatePrompt = window;
         window.Closed += (_, _) => _updatePrompt = null;
@@ -218,7 +244,12 @@ public partial class App : Application
         }
     }
 
-    public void OpenMainWindow()
+    /// <summary>
+    /// 装配主窗与它要的服务。<paramref name="show"/> 为假是开机自启那条路：窗口对象照建一扇，
+    /// 但一次都不 Show——托盘要读的未读数、连接状态，以及引擎状态驱动的重画都挂在窗口上，
+    /// 而它们在窗口构造时就接好了（见 <see cref="MainWindow"/> 构造里的 Wire）。
+    /// </summary>
+    public void OpenMainWindow(bool show = true)
     {
         var db = _db ??= DeviceStore.OpenDefault();
         var identities = _identities ??= new IdentityStore();
@@ -238,7 +269,8 @@ public partial class App : Application
         window.TrayRefresh += () => RefreshTray(window);
         window.SettingsRequested += OpenSettings;
         MainWindow = window;
-        window.Show();
+        // 后台启动这里就是全部差别：托盘与同步照常，主窗留给用户从托盘点开
+        if (show) window.Show();
 
         RefreshTray(window);
         reporter.SetOnline(engine.State is SyncState.Online);
@@ -316,6 +348,13 @@ public partial class App : Application
         SetCloseToTray: on => Update(_settings with { CloseToTray = on }));
 
     /// <summary>
+    /// 子窗挂 owner 只认"真的露着的主窗"。后台启动（自启）时主窗对象在、但一次都没 Show，
+    /// 挂一个看不见的 owner 会把设置窗一起压住；这时候让它独立出现更合理。
+    /// </summary>
+    private Window? VisibleMainWindow =>
+        MainWindow is MainWindow { IsVisible: true } view ? view : null;
+
+    /// <summary>
     /// W16 的设置窗。它由装配层开而不是主窗自己 new：主窗不认识频道、设备这些服务，
     /// 正如同它不认识托盘。同一份 <see cref="ClientSettings"/> 从这儿交回去，两个入口不会各存一份状态。
     /// </summary>
@@ -331,7 +370,7 @@ public partial class App : Application
         var window = new SettingsWindow(new SettingsModel(_client, identities), _settings, ApplySettings,
             new UpdateModel(), ExitApp)
         {
-            Owner = MainWindow as Window
+            Owner = VisibleMainWindow
         };
         // 频道换发号码、归档这些改动会让服务端广播 config 帧，也可能在帧到之前就想看一眼结果；
         // 关窗时补一次重画，主界面就不会停留在设置之前的那一份会话名与角标上

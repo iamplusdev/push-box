@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using PushBox.Windows;
 using PushBox.Windows.Data;
 using PushBox.Windows.Integration;
 using PushBox.Windows.Notify;
@@ -42,10 +43,29 @@ public sealed class SystemIntegrationTest : IDisposable
         var exe = @"C:\Program Files\PushBox\PushBox.Windows.exe";
 
         // 不加引号，Run 会把带空格的路径拆成"可执行文件 + 参数"，开机时静默启动失败
-        Assert.Equal("\"" + exe + "\"", AutoStart.CommandFor(exe));
-        Assert.Equal("\"" + exe + "\"", AutoStart.DesiredValue(true, exe));
+        Assert.Equal("\"" + exe + "\" --tray", AutoStart.CommandFor(exe));
+        Assert.Equal("\"" + exe + "\" --tray", AutoStart.DesiredValue(true, exe));
         // 关掉是"这一项不该存在"，而不是"写一个空值"：任务管理器启动页里会留着一条空条目
         Assert.Null(AutoStart.DesiredValue(false, exe));
+    }
+
+    [Fact]
+    public void AutoStartStartsInTheTrayInsteadOfOpeningTheWindow()
+    {
+        var exe = @"D:\Apps\PushBox\PushBox.Windows.exe";
+
+        // 自启是"帮我收消息"，不是"开机把一扇窗摆到脸上"：那一笔注册表必须带开关
+        Assert.EndsWith(" " + AutoStart.BackgroundArgument, AutoStart.CommandFor(exe));
+        Assert.True(App.StartInBackground(new[] { exe, AutoStart.BackgroundArgument }));
+        // 值对不上就是"该重写"：老版本写的是不带开关的光路径，用户从 1.1.0 升上来不能继续开会话窗
+        Assert.Equal(AutoStartDrift.MovedInstall,
+            AutoStart.DriftOf("\"D:\\Apps\\PushBox\\PushBox.Windows.exe\"", AutoStart.CommandFor(exe)));
+        // 大小写不敏感是因为那一笔可能是手写的
+        Assert.True(App.StartInBackground(new[] { AutoStart.BackgroundArgument.ToUpperInvariant() }));
+        // 用户自己双击 exe、点通知、体检开关都不该被这个开关误判
+        Assert.False(App.StartInBackground(new[] { exe }));
+        Assert.False(App.StartInBackground(new[] { App.SmokeSwitch, "out.txt" }));
+        Assert.False(App.StartInBackground(null));
     }
 
     [Fact]

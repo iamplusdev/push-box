@@ -162,6 +162,61 @@ public sealed class MainWindowTest : IDisposable
     private const string Channel = "83271504";
     private const string Grafana = "grafana";
 
+    /// <summary>
+    /// 开机自启那一轮主窗一次都不 Show（见 App.OpenMainWindow(show:false)）。托盘要读的未读数、
+    /// 连接状态，以及"引擎落一条就重画"全靠窗口自己的订阅，所以它们必须在**构造时**就接上——
+    /// 退回到"等 OnContentRendered 再挂"的话，自启那一路会安静地什么都收不到。
+    /// </summary>
+    [Fact]
+    public void AWindowForABackgroundStartIsWiredOnConstructionAndNeverShown()
+    {
+        _db.ApplyMessage(Msg(1, "m1", Grafana));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var engine = new SyncEngine(_identities, _db, Offline(), new Silent());
+                var window = new MainWindow(_db, _identities,
+                    new ReadReporter(_db, _identities, Offline()),
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader(), engine);
+
+                // 自启的形态：对象在、一次都没 Show
+                Assert.False(window.IsVisible);
+                Assert.False(window.IsLoaded);
+                // 未读数是纯模型的账：没画过的窗口也得算得出来（托盘 tooltip 读的就是它）
+                Assert.Equal(1, window.TrayUnread);
+                // 状态点默认收起（"没状态时不留一个孤零零的点"），它亮着说明引擎初始状态已经应用过——
+                // 那一步只发生在订阅接上时，也就是构造里
+                Assert.Equal(Visibility.Visible, window.StatusDotProbe);
+
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "后台启动那种窗口形态没有按时走完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    private sealed class Silent : INotifier
+    {
+        public void Notify(MessageFrame message)
+        {
+        }
+    }
+
     // ---- W14：确认、提示条与"取消就一条都不动" --------------------------------------------------------
 
     [Fact]
