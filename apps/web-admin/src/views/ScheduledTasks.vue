@@ -110,7 +110,28 @@
       :title="editingId ? '编辑定时任务' : '新建定时任务'"
       width="620px"
       :close-on-click-modal="false"
+      @closed="resetJsonDraft"
     >
+      <div class="paste-json">
+        <div class="paste-head">
+          <span class="paste-title">粘贴 API JSON</span>
+          <span class="paste-sub">只回显到下面的表单，不会提交；凭据字段一律忽略</span>
+        </div>
+        <el-input
+          v-model="jsonDraft"
+          type="textarea"
+          :rows="4"
+          placeholder='{"channel":"32941977","sender_id":"…","title":"…","content":"…"}'
+        />
+        <div class="paste-actions">
+          <el-button size="small" type="primary" plain @click="applyJson">识别并填入</el-button>
+          <el-button size="small" @click="jsonDraft = ''">清空</el-button>
+          <span class="paste-hint">
+            认得的键：channel / sender_id / sender_avatar / sender_name / title / level / content / images；
+            secret、type、msg_key、ts、nonce、sign、url 与其它键都忽略，cron 与时区不受影响
+          </span>
+        </div>
+      </div>
       <el-form :model="form" label-width="90px">
         <el-form-item label="任务名">
           <el-input v-model="form.name" maxlength="64" placeholder="例如：每日晨报" />
@@ -189,6 +210,18 @@
         </el-form-item>
         <el-form-item label="发送者">
           <el-input v-model="form.senderName" maxlength="64" placeholder="显示名，可留空" />
+        </el-form-item>
+        <el-form-item label="发送者 ID">
+          <el-input v-model="form.senderId" maxlength="64" placeholder="留空按 scheduled 发送" />
+          <div class="field-hint">
+            客户端按它把消息归到同一个发送者会话；与外部系统调 <code>POST /message</code> 的 sender_id 是同一个字段
+          </div>
+        </el-form-item>
+        <el-form-item label="发送者头像">
+          <el-input v-model="form.senderAvatar" maxlength="1024" :placeholder="AVATAR_URL_HINT" />
+          <div class="field-hint">
+            只收 http(s) 图片地址，触发时由服务端转存；<code>data:</code> 内联头像超过列宽 1024，先传到图床再填
+          </div>
         </el-form-item>
         <el-form-item label="图片外链">
           <div class="images">
@@ -313,6 +346,7 @@
               {{ form.level || 'info' }}
             </el-tag>
             <span>{{ form.senderName || '（未填发送者）' }}</span>
+            <span class="preview-sender-id">sender_id：{{ form.senderId || 'scheduled' }}</span>
           </div>
           <div v-if="form.title" class="preview-title">{{ form.title }}</div>
           <div class="preview-content">{{ preview.content || '（正文为空）' }}</div>
@@ -374,6 +408,8 @@ const emptyForm = (): ScheduledTaskInput => ({
   content: '',
   level: 'info',
   senderName: '',
+  senderId: '',
+  senderAvatar: '',
   images: [],
   cronExpr: DEFAULT_CRON,
   enabled: 1,
@@ -381,6 +417,12 @@ const emptyForm = (): ScheduledTaskInput => ({
   timezone: 'Asia/Shanghai'
 })
 const form = ref<ScheduledTaskInput>(emptyForm())
+
+/**
+ * 粘贴进来的 API JSON 只做回显：留在组件内存里，不提交、不落 localStorage、不写日志
+ * （那段 JSON 里有 secret）。对话框一关就清掉。
+ */
+const jsonDraft = ref('')
 
 /** 与服务端 MAX_CRONS 一致：多到这程度已经是在写调度表，不是在配一条消息了。 */
 const MAX_CRONS = 8
@@ -494,6 +536,104 @@ function insertVariable(token: string) {
 // 从脚本里绑定而不是写成模板静态属性：vue-tsc 3.3 下，v-for 作用域内的静态属性值一旦含
 // "//"（比如这个 https://），该 v-for 的别名就会解析成 "Cannot find name"。
 const IMAGE_URL_HINT = 'https://… 的图片地址'
+const AVATAR_URL_HINT = 'https://… 的头像图片地址'
+
+/** 只是回显用的白名单：JSON 里其余键（含 secret 这类凭据）一概不读。 */
+function asText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number') return String(value)
+  return ''
+}
+
+function resetJsonDraft() {
+  jsonDraft.value = ''
+}
+
+/**
+ * 把粘贴的 JSON 回填到表单：只覆盖 JSON 里真有的键，cron 与时区永远不动。
+ * 频道按 channel_no 精确匹配（JSON 里的 channel 就是外部系统用的那个频道号）。
+ */
+async function applyJson() {
+  const raw = jsonDraft.value.trim()
+  if (!raw) {
+    ElMessage.warning('先粘贴一段 JSON')
+    return
+  }
+  let data: any
+  try {
+    data = JSON.parse(raw)
+  } catch (e) {
+    ElMessage.error('这不是合法的 JSON，检查一下引号与逗号')
+    return
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    ElMessage.error('需要粘贴一个 JSON 对象，而不是数组或裸值')
+    return
+  }
+  const filled: string[] = []
+  if (data.channel !== undefined && data.channel !== null) {
+    if (channels.value.length === 0) {
+      await fetchChannels()
+    }
+    const channelNo = asText(data.channel).trim()
+    if (channelNo && channels.value.some(c => c.channel_no === channelNo)) {
+      form.value.channelNo = channelNo
+      filled.push('channel')
+    } else {
+      ElMessage.warning(`JSON 里的频道 ${channelNo || '（空）'} 不在当前列表里，目标频道保持原值`)
+    }
+  }
+  if (data.sender_id !== undefined) {
+    form.value.senderId = asText(data.sender_id).trim()
+    filled.push('sender_id')
+  }
+  if (data.sender_avatar !== undefined) {
+    const avatar = asText(data.sender_avatar).trim()
+    if (!avatar) {
+      form.value.senderAvatar = ''
+      filled.push('sender_avatar')
+    } else if (avatar.length <= 1024 && /^https?:\/\/\S+$/i.test(avatar)) {
+      form.value.senderAvatar = avatar
+      filled.push('sender_avatar')
+    } else {
+      ElMessage.warning('sender_avatar 只收 1024 字符内的 http(s) 地址，这一项已跳过')
+    }
+  }
+  if (data.sender_name !== undefined) {
+    form.value.senderName = asText(data.sender_name).trim()
+    filled.push('sender_name')
+  }
+  if (data.title !== undefined) {
+    form.value.title = asText(data.title)
+    filled.push('title')
+  }
+  if (data.level !== undefined) {
+    const level = asText(data.level).trim().toLowerCase()
+    if (level === 'info' || level === 'warning' || level === 'error') {
+      form.value.level = level
+      filled.push('level')
+    } else {
+      ElMessage.warning(`级别 ${asText(data.level) || '（空）'} 不认识（只有 info/warning/error），这一项已跳过`)
+    }
+  }
+  if (data.content !== undefined) {
+    form.value.content = asText(data.content)
+    filled.push('content')
+  }
+  if (data.images !== undefined) {
+    if (Array.isArray(data.images)) {
+      form.value.images = (data.images as unknown[]).map(asText).map((url: string) => url.trim()).filter(Boolean)
+      filled.push('images')
+    } else {
+      ElMessage.warning('images 不是数组，这一项已跳过')
+    }
+  }
+  if (filled.length === 0) {
+    ElMessage.warning('没认出任何可填的键；cron 与时区也不会被这段 JSON 改动')
+    return
+  }
+  ElMessage.success(`已填入 ${filled.join('、')}；cron 与时区未动`)
+}
 
 /** 6 段 cron（秒 分 时 日 月 周）——Spring CronExpression 不认 5 段 unix 写法。 */
 const cronPresets = [
@@ -568,6 +708,7 @@ function openCreate() {
   editingId.value = ''
   form.value = emptyForm()
   cronRows.value = [DEFAULT_CRON]
+  resetJsonDraft()
   dialogVisible.value = true
   // 频道可能在别处被删掉；打开表单时重拉一次，免得下拉里留着一条点了就 404 的旧值
   fetchChannels()
@@ -586,6 +727,8 @@ async function openEdit(row: ScheduledTask) {
       content: task.content || '',
       level: task.level || 'info',
       senderName: task.sender_name,
+      senderId: task.sender_id || '',
+      senderAvatar: task.sender_avatar || '',
       images: task.images || [],
       cronExpr: task.cron_expr,
       enabled: task.enabled,
@@ -593,6 +736,7 @@ async function openEdit(row: ScheduledTask) {
     }
     const lines = String(task.cron_expr || '').split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean)
     cronRows.value = lines.length > 0 ? lines : [DEFAULT_CRON]
+    resetJsonDraft()
     dialogVisible.value = true
     fetchChannels()
   } catch (e) {
@@ -808,6 +952,48 @@ onMounted(() => {
   width: 100%;
 }
 
+.paste-json {
+  margin-bottom: 18px;
+  padding: 10px 12px 12px;
+  background: #fafbfc;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+}
+
+.paste-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.paste-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #606266;
+}
+
+.paste-sub {
+  font-size: 12px;
+  color: #a8abb2;
+}
+
+.paste-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.paste-hint {
+  flex: 1;
+  min-width: 240px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #a8abb2;
+}
+
 .image-row {
   display: flex;
   gap: 8px;
@@ -1006,6 +1192,11 @@ onMounted(() => {
   margin-bottom: 6px;
   font-size: 12px;
   color: #909399;
+}
+
+.preview-sender-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #a8abb2;
 }
 
 .preview-title {

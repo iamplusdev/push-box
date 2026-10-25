@@ -40,6 +40,10 @@ export interface ScheduledTask {
   images?: string[]
   level: string
   sender_name: string
+  /** 决定客户端把它归到哪个发送者会话；老任务升级后是 scheduled。 */
+  sender_id: string
+  /** 头像来源 URL；空串表示这条任务不带头像，触发时由服务端转存。 */
+  sender_avatar: string
   cron_expr: string
   /** IANA 时区名；cron 与正文时间变量都按它解释，老任务升级后是 Asia/Shanghai。 */
   timezone: string

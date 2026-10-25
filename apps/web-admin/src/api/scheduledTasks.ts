@@ -78,6 +78,10 @@ export interface ScheduledTaskInput {
   content: string
   level?: string
   senderName?: string
+  /** 留空服务端按 scheduled 落库；超 64 字截断。 */
+  senderId?: string
+  /** 只收 http(s)、最多 1024 字符；空串表示不带头像。 */
+  senderAvatar?: string
   images: string[]
   cronExpr: string
   enabled?: number
