@@ -9,6 +9,42 @@
 
 ---
 
+## 未发布 —— 排版规范落成断言：管理台补上第三份闸，间距文档两节假代码订正
+
+> 起因一条：同一张字号表在三端里只有两端有闸——Android 的 `TypographyTest.kt`、Windows 的 `TypographyTest.cs` 都把六档钉死，管理台这一端只有"类型检查 + 构建"，规范全靠人手在浏览器里量。文档里写着的数值半年后就会各写成 13、14、15 混排，所以这一轮不改任何视觉，只把已经写下的数值变成断言。
+
+### 管理台排版断言
+
+- **新增 `apps/web-admin/tests/typography.test.mjs`（11 条，`npm test` 就是 `node --test`，零依赖、只读源码、不构建不起服务）**：六档字号与行高逐值对表；Element 的六档必须全部指回 `--pb-font-*` 且目标集合恰好是那六档；`.vue` 里不许出现裸字号与裸行高（含内联 `style`）；等宽字体族只在 `typography.css` 写一次；`.pb-clamp2` 是两行；表格节奏（13px 正文 + 600 表头 + 11px 上下内边距 + 表格内按钮跟着 13px）；页头那四个数只有 `PageHeader.vue` 一个来源；六个内页都走 `PageHeader` 且各带一句说明；定时任务对话框只有两处滚动；`typography.css` 必须排在 `element-plus` 之后。
+- 断的是"没有第二个数偷偷冒出来"，不是"某个数字等于某个数字"，与两端 `TypographyTest` 同一个形状。**反向验证过两次**：把 `--pb-font-body` 改成表外的 14px、往视图注入一条 `.probe { font-size: 14px; line-height: 1.4 }`，两次都判红并给出文件 + 选择器 + 值。
+- **补闸当天就量出两处漂移并修掉**：`ScheduledTasks.vue` 的 `.variable-group-label` 钉着 `line-height: 20px` + `padding-top: 2px`（20 不在行高表里），改成 `var(--pb-line-small)`；`.preview-next-row` 的 `line-height: 1.9` 直接删（那一行是 flex，行高由内容撑）。对齐实测：新写法文字中心比 20px 高的 `el-tag` 高 1px，旧写法低 1px，观感相当，但 18 在表里、20 不在。
+
+### CI 与门禁
+
+- `ci.yml` 的 web-admin job 拆成 `npm ci` → `npm test` → `npm run build`，job 名改为「管理台断言、类型检查与构建」。断言排在 build 之前：看排版退化不必先等一遍 `vue-tsc`。
+- **带条数下限 `WEB_BASELINE=11`**：`node --test` 在一条用例都没发现时同样退 0（本机在空目录实测 `tests 0 / pass 0 / fail 0`），光看退出码分不出"全绿"和"整份文件没被跑到"——与 Java（365）、C#（582）那两个计数闸防的是同一件事。
+- `scripts/release-verify.sh` 补四条判据：断言文件存在且已入库、`package.json` 的 `test` 就是 `node --test`、`ci.yml` 真的跑它并带下限、文档里写的条数与 `WEB_BASELINE` 是同一个数（含"没有任何文档写着基线值就判红"的反向判据，带日期的行整行跳过）。本脚本仍只做静态检查、不跑测试，真跑一遍是 CI 的职责。计数 **90 → 94 通过 / 0 失败 / 1 警告**（警告照旧是本机没有 docker CLI 判不了镜像体积）。
+
+### 文档订正
+
+- `docs/间距规范.md` 的「Android 实现」与「Windows 实现」两节**原来贴的是不存在的代码**（`MainActivity.kt` 里的 `private object Spacing`、`Tokens.xaml` 里的 `Spacing.*` 七个 key）。复核结果：全仓没有 `Spacing` 这个符号，Android 是 172 处 `.dp` 字面量、Windows 是 175 处 `Margin`/`Padding` 字面量；两端的**字号** token 是真的（`PushBoxTypography` / `MarkdownStyle` + `Text.*`），间距不是。两节改成写清现状与取值口径。
+- `docs/字体规范.md` §机器把关的 Web 行从「无单测（CSS 不在断言范围）」换成这份断言的清单，并写明它断的是源码里的数、渲染像素仍要真浏览器量（mock 8081 + dev 7403 的起法保留）。
+- `docs/测试指南.md` 新增「7. Web 管理台」与测试分层表一行；`docs/开发指南.md` 测试矩阵补一行；`docs/软件设计方案.md` §9.2 补一条「这张表在三端都有闸」，并写明间距还没有闸。
+
+### 本步没做（另排）
+
+- **管理台裸色值 token 化**：视图里还有 8 处直接写死的十六进制（含登录页那道紫色渐变 `#667eea → #764ba2`），本步不动。
+- **两端间距 token 化**：Android 的 `.dp` 与 Windows 的 `Margin`/`Padding` 仍是内联字面量，本步只订正文档；间距三端都没有闸。
+
+### 验证
+
+- `cd apps/web-admin && npm test`：**11/11 绿**（本机 Node v24.9.0；CI 用 Node 22）。
+- `npm run build`（`vue-tsc -b` + `vite build`）：通过（`dist/` 那条 >500kB 的分包警告是既有的，与本轮无关）。
+- `bash scripts/release-verify.sh`：**94 通过 / 0 失败 / 1 警告**。
+- **没跑的**：CI 上那条 `npm test` 步骤本身没跑过（要推 `main` 才知道 runner 上的解析与条数下限对不对，本机只验了同一句 `sed` 能从真实输出里解析出 11）。Java 365 与 C# 582 两个基线本轮没动——这一轮只碰管理台与文档。
+
+---
+
 ## 未发布 —— 管理台页头与表格：标题升到 20px 并各配一句说明，标识列一律等宽
 
 > 起因一条：管理台六个内页的页头是同一个 `<h2>` 抄六遍，标题只有 18px、和表格正文只差 5px，页面上没有"这是哪一页"的落点；频道号、设备 ID、cron 这些要逐字符核对的串用的是比例字体，`32941977` 与 `58201344` 在表格里对不齐列；长正文列挂 Element 的 `show-overflow-tooltip`，一行截断之后能看到的只剩开头十来个字。这一轮同样不改任何行为，只换排布与字体。
