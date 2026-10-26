@@ -247,6 +247,15 @@ class MainActivity : FragmentActivity() {
         consumeDeepLink(intent)
     }
 
+    /**
+     * 每次回到前台都把头像复核线推一格：服务端换头像不换 token，缓存自己发现不了变化。
+     * 60s 闸门在 [AvatarCache.onForeground] 里，来回切应用不会反复打网络。
+     */
+    override fun onStart() {
+        super.onStart()
+        AvatarCache.onForeground()
+    }
+
     private fun consumeDeepLink(intent: Intent?) {
         val channelNo = intent?.getStringExtra(Notifier.EXTRA_CHANNEL)
         val senderId = intent?.getStringExtra(Notifier.EXTRA_SENDER_ID)
@@ -3953,8 +3962,8 @@ private fun ConversationRowView(row: ConversationRow, onOpen: () -> Unit, onLong
  */
 @Composable
 private fun Avatar(name: String, avatarPath: String? = null, senderId: String? = null, sizeDp: Int = 40) {
-    // 正画着占位的头像不会因为负标记被删就自己重组，所以把"作废过几次"也当键：
-    // 帧里补来 sender_avatar 时推一格，下一次解析才真的会去打网络（[AvatarCache.invalidate]）
+    // 正画着占位的头像不会因为磁盘变了就自己重组，所以把"需要重查几次"也当键：
+    // 帧里补来 sender_avatar 或 App 回到前台时推一格，下一次解析才真的会去打网络
     val revision by AvatarCache.revision.collectAsState()
     val bitmap: Bitmap? by produceState<Bitmap?>(initialValue = null, avatarPath, senderId, revision) {
         val localPath = avatarPath
@@ -3964,7 +3973,7 @@ private fun Avatar(name: String, avatarPath: String? = null, senderId: String? =
             value = withContext(Dispatchers.IO) { localPath?.let { AvatarCache.decodeFile(it) } }
             return@produceState
         }
-        // 缓存过了 24h 要回源复核一次；先把旧图顶上去，别让头像为了一次复核闪成占位
+        // 换了头像不换 token，只能在回前台或 TTL 到期时问一次；先把旧图顶上去，别让头像为了一次复核闪成占位
         value = withContext(Dispatchers.IO) { AvatarCache.cachedFor(id) }
         value = withContext(Dispatchers.IO) { AvatarCache.resolve(id) }
     }

@@ -31,11 +31,18 @@ object AvatarCache {
     }
 
     /**
-     * 负标记被作废的次数，只增不减。UI 拿它当头像解析的键：
-     * 已经画成占位的头像不会因为磁盘上少了枚标记就自己重组。
+     * 缓存需要重查的次数（负标记被作废、或 App 回到前台），只增不减。
+     * UI 拿它当头像解析的键：已经画出来的头像不会因为磁盘变了就自己重组。
      */
     private val _revision = MutableStateFlow(0)
     val revision: StateFlow<Int> = _revision.asStateFlow()
+
+    /**
+     * 上一次回前台（进而发起复核）的时刻。取回时间早于它的缓存图都当成"这一次前台还没问过"，
+     * [isFresh] 因此会把它判成过期、让 [resolve] 打一次网络。
+     */
+    @Volatile
+    private var lastForegroundAt = 0L
 
     /** 头像的缓存键：sha256hex(sender_id)，与服务端 /api/v1/avatars/{token} 的路径参数同一算法。 */
     fun tokenOf(senderId: String): String =
@@ -75,9 +82,9 @@ object AvatarCache {
     }
 
     /**
-     * 完整解析：缓存 → 网络。缓存超过 [FRESH_TTL_MILLIS] 就回源复核一次——
+     * 完整解析：缓存 → 网络。这一次前台还没复核过的旧图要先回源问一次——
      * token 只由 sender_id 算出、服务端按 (频道, 发送者) 覆盖写，所以"这人换了头像"
-     * 在本机看来和"没换"完全一样，只能靠时间重新问一遍。
+     * 在本机看来和"没换"完全一样，只能靠 [onForeground] 与 [FRESH_TTL_MILLIS] 重新问一遍。
      * 404 会落一个负标记，[ABSENT_TTL_MILLIS] 内不再重试。
      */
     suspend fun resolve(senderId: String): Bitmap? = withContext(Dispatchers.IO) {
@@ -131,6 +138,19 @@ object AvatarCache {
         return removed
     }
 
+    /**
+     * App 回到前台时调用：把这一刻记成复核线，并推一格 [revision] 让界面上画着的头像重跑解析。
+     *
+     * 没有它就只能等 [FRESH_TTL_MILLIS] 自然到期：用户换完头像切回 App，看到的是旧图，
+     * 而且这一整个前台周期都不会变——[resolve] 只在组合键变化时才被再调一次。
+     * 闸门 60s 是给"切出去瞄一眼通知又回来"这类抖动用的，闸门内不动任何状态。
+     */
+    fun onForeground(now: Long = System.currentTimeMillis()) {
+        if (now - lastForegroundAt < FOREGROUND_GATE_MILLIS) return
+        lastForegroundAt = now
+        _revision.value += 1
+    }
+
     private fun markedAbsent(token: String): Boolean {
         val file = absentFile(App.current.applicationContext, token)
         if (!file.exists()) return false
@@ -140,10 +160,17 @@ object AvatarCache {
     /**
      * 缓存文件的取回时刻就是它的 mtime（[resolve] 每次回源都重写一遍）。
      * 过期不等于不能用——[resolve] 复核失败时会把它当回落，UI 也先拿它顶占位。
+     * 取回时间早于 [foregroundAt] 的一律算过期：那一轮前台还没问过服务端。
      */
-    internal fun isFresh(file: File, now: Long = System.currentTimeMillis()): Boolean {
+    internal fun isFresh(
+        file: File,
+        now: Long = System.currentTimeMillis(),
+        foregroundAt: Long = lastForegroundAt,
+    ): Boolean {
         val fetchedAt = file.lastModified()
-        return fetchedAt > 0L && now - fetchedAt <= FRESH_TTL_MILLIS
+        if (fetchedAt <= 0L) return false
+        if (fetchedAt < foregroundAt) return false
+        return now - fetchedAt <= FRESH_TTL_MILLIS
     }
 
     internal fun avatarFile(context: Context, token: String): File =
@@ -177,7 +204,11 @@ object AvatarCache {
 
     /**
      * 正缓存的有效期。token 恒定、服务端覆盖写，所以换头像只能靠时间发现；
-     * 与 [ABSENT_TTL_MILLIS] 同档，一边负责"补上的头像"，一边负责"换掉的头像"。
+     * 10 分钟是为了"在另一台设备上换了头像，这台最多十分钟内看到"，
+     * 同时 [onForeground] 让切回前台的那一刻就复核，不必真等满一个周期。
      */
-    private const val FRESH_TTL_MILLIS = 24L * 60 * 60 * 1000
+    private const val FRESH_TTL_MILLIS = 10L * 60 * 1000
+
+    /** 两次前台复核之间的最小间隔：切出去瞄一眼通知不算一次新的前台周期。 */
+    private const val FOREGROUND_GATE_MILLIS = 60L * 1000
 }

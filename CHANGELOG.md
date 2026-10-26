@@ -9,6 +9,25 @@
 
 ---
 
+## 未发布 —— Android：换了头像不再停在旧图
+
+> 起因一条：服务端换头像不换 token（`sha256(sender_id)`），头像接口回的又是 `Cache-Control: no-store`、没有 ETag 或版本号，客户端唯一的发现手段就是"再问一次"。而正缓存的有效期是 24 小时，头像解析也只在组合键变化时才重跑——换完头像切回 App 看到的还是那张旧图，最长要等一天，甚至要清数据重装才变。
+
+### Android
+
+- **正缓存 24h → 10min**：`FRESH_TTL_MILLIS` 收到 10 分钟，另一台设备上换的头像最多十分钟内会自己更新。
+- **回到前台先复核一次**：`MainActivity.onStart` 调新增的 `AvatarCache.onForeground()`，它把 `lastForegroundAt` 推到当下并推一格 `revision`，`isFresh()` 对取回时间早于这条线的文件一律判过期——切回 App 的那一刻就会重问，不用真等满一个 TTL。60s 闸门内的重复回前台不动任何状态，切出去瞄一眼通知再回来不会让整屏头像重跑。
+- **复核失败照旧给旧图**：超时/5xx/401 继续用缓存里那张，只有 404 才把缓存一起丢掉；这条口径没变。
+- **负标记仍是 24h**：那是"这人确实没头像"的结论，跟着回前台重问等于每次切应用就给所有无头像的发送者刷一遍 404。换头像的场景由帧里的 `sender_avatar` 作废标记（上一轮已接）。
+
+### 验证
+
+- `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest`：通过（`app-debug.apk` 与测试 APK 均正常产出）。
+- `AvatarCacheTest` 跟着改口径：`cachedAvatarIsFreshForTenMinutes` 钉 9 分钟内新鲜、11 分钟过期；新增 `avatarFetchedBeforeForegroundNeedsRevalidation`（取回早于复核线判过期、晚于则按 TTL）与 `onForegroundBumpsRevisionAtMostOncePerMinute`（首调推一格、30s 内不推、61s 再推一格）。`isFresh()` 的复核线改成显式参数，用例不再受其它用例留下的全局状态影响。
+- **没跑的**：真机上的"换头像 → 切回 App → 头像更新"整链路，以及 60s 闸门的实际手感。instrumented 用例只编译未执行（当前没连设备）；装机复验时重点看两件事：换头像后切一次前台是否立刻变、来回切两次是否只打一轮请求。
+
+---
+
 ## 未发布 —— 管理台：关键标识可复制，三张表前端分页
 
 > 起因两条：① 频道号码与设备 ID 是要抄进客户端或命令行的标识，页面上却只能在表格里拖选，设备 ID 还会被列宽截成半截；② 频道、设备、定时任务三张表一次把全部行渲进 DOM，条目一多就得靠整页滚动找，计数行里也看不出还有没有下一页。
