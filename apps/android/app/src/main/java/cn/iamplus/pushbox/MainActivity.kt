@@ -86,6 +86,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -2858,14 +2859,19 @@ private enum class SettingsPage(@param:StringRes val title: Int) {
 @Composable
 private fun SettingsTab(identity: Identity, page: SettingsPage?, onPage: (SettingsPage?) -> Unit,
     modifier: Modifier, onLogout: () -> Unit) {
-    when (page) {
-        null -> SettingsRoot(identity, modifier, onPage)
-        SettingsPage.Connect -> SettingsConnectPage(identity, modifier, onLogout)
-        SettingsPage.Notify -> SettingsNotifyPage(identity, modifier)
-        SettingsPage.Security -> SettingsSecurityPage(modifier)
-        SettingsPage.KeepAlive -> SettingsKeepAlivePage(modifier)
-        SettingsPage.Data -> SettingsDataPage(modifier)
-        SettingsPage.About -> SettingsAboutPage(modifier)
+    // 进二级页时首屏会离开组合，滚动位置也跟着丢；按页名留一份 saveable 状态，
+    // 返回时还停在原来那一屏，而不是被弹回顶部。
+    val states = rememberSaveableStateHolder()
+    states.SaveableStateProvider(page?.name ?: "root") {
+        when (page) {
+            null -> SettingsRoot(identity, modifier, onPage)
+            SettingsPage.Connect -> SettingsConnectPage(identity, modifier, onLogout)
+            SettingsPage.Notify -> SettingsNotifyPage(identity, modifier)
+            SettingsPage.Security -> SettingsSecurityPage(modifier)
+            SettingsPage.KeepAlive -> SettingsKeepAlivePage(modifier)
+            SettingsPage.Data -> SettingsDataPage(modifier)
+            SettingsPage.About -> SettingsAboutPage(modifier)
+        }
     }
 }
 
@@ -2883,7 +2889,6 @@ private fun SettingsRoot(identity: Identity, modifier: Modifier, onPage: (Settin
     val context = LocalContext.current
     val app = App.get(context)
     val scope = rememberCoroutineScope()
-    val conn by app.connection.collectAsState()
     val notif by app.notificationsEnabled.collectAsState()
     val themeMode by app.themeMode.collectAsState()
     val fontScale by app.fontScale.collectAsState()
@@ -2892,7 +2897,6 @@ private fun SettingsRoot(identity: Identity, modifier: Modifier, onPage: (Settin
     val quietStart by app.quietStart.collectAsState()
     val quietEnd by app.quietEnd.collectAsState()
     val lockContent by app.lockScreenContent.collectAsState()
-    val (connLabel, connColor) = connectionLabel(conn)
     // 每次回到首屏重算一次：二级页里清完缓存返回，这两行会重新量。
     val localCount by produceState(initialValue = -1) {
         value = withContext(Dispatchers.IO) { app.dao.messageCount() }
@@ -2903,7 +2907,7 @@ private fun SettingsRoot(identity: Identity, modifier: Modifier, onPage: (Settin
 
     SettingsPageColumn(modifier) {
         SettingsSection(stringResource(R.string.section_connection), heading = true) {
-            InfoRow(stringResource(R.string.section_connection), connLabel, connColor)
+            // 连接状态本身顶栏一直挂着，这里只放它在设置页里才有意义的两项
             InfoRow(stringResource(R.string.current_server), identity.baseUrl.ifBlank { "-" })
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             GuideRow(stringResource(R.string.settings_page_connect),
@@ -3188,16 +3192,21 @@ private fun SettingsNotifyPage(identity: Identity, modifier: Modifier) {
             }
         }
 
-        SettingsSection(stringResource(R.string.notif_manage_title), heading = true) {
+        // 这一组只有一行，组标题就是行标题，再写一遍等于同一句话说两次
+        SettingsSection {
             GuideRow(stringResource(R.string.notif_manage_title),
                 stringResource(R.string.notif_manage_entry_desc)) { showChannelNotify = true }
         }
 
         SettingsSection(stringResource(R.string.notif_detail_title), heading = true) {
+            Text(stringResource(R.string.notif_lock_screen_title),
+                style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.notif_lock_screen_detail),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Text(stringResource(R.string.notif_quiet_title),
+                style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.notif_quiet_detail),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -3222,7 +3231,7 @@ private fun SettingsSecurityPage(modifier: Modifier) {
         .canAuthenticate(BIOMETRIC_STRONG or BIOMETRIC_WEAK) == BiometricManager.BIOMETRIC_SUCCESS
 
     SettingsPageColumn(modifier) {
-        SettingsSection(stringResource(R.string.section_app_lock), heading = true) {
+        SettingsSection {
             SwitchRow(stringResource(R.string.app_lock_enable),
                 stringResource(R.string.app_lock_desc), appLock) {
                 lockDialog = if (it) "enable" else "disable"
@@ -3250,7 +3259,7 @@ private fun SettingsKeepAlivePage(modifier: Modifier) {
     val polling by app.pollingMode.collectAsState()
 
     SettingsPageColumn(modifier) {
-        SettingsSection(stringResource(R.string.section_keepalive), heading = true) {
+        SettingsSection {
             KeepAliveBatteryRow()
             // §7.2 极致省电轮询模式：关掉常驻长连接，改 WorkManager 周期补拉，省电但消息会延迟
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
@@ -3258,8 +3267,10 @@ private fun SettingsKeepAlivePage(modifier: Modifier) {
                 stringResource(R.string.keepalive_polling_desc), polling) {
                 app.setPollingMode(it)
             }
-            GuideRow(stringResource(R.string.keepalive_notification),
-                stringResource(R.string.keepalive_notification_desc)) {
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            ActionRow(stringResource(R.string.keepalive_notification),
+                stringResource(R.string.keepalive_notification_desc),
+                stringResource(R.string.keepalive_request)) {
                 runCatching {
                     // §7.2：直达"后台监听"通知渠道，而非整个 App 的通知设置页。
                     val channelId = cn.iamplus.pushbox.notify.Notifier.SERVICE_CHANNEL
@@ -3275,8 +3286,9 @@ private fun SettingsKeepAlivePage(modifier: Modifier) {
                 }
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            GuideRow(stringResource(R.string.keepalive_autostart),
-                stringResource(R.string.keepalive_autostart_desc)) {
+            ActionRow(stringResource(R.string.keepalive_autostart),
+                stringResource(R.string.keepalive_autostart_desc),
+                stringResource(R.string.keepalive_request)) {
                 runCatching {
                     context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
                         .setData(Uri.parse("package:${context.packageName}")))
@@ -3300,31 +3312,25 @@ private fun SettingsDataPage(modifier: Modifier) {
     }
 
     SettingsPageColumn(modifier) {
-        SettingsSection(stringResource(R.string.section_data), heading = true) {
-            TextButton(onClick = { showClear = true }) {
-                Text(stringResource(R.string.data_clear), color = MaterialTheme.colorScheme.error)
-            }
-            Text(stringResource(R.string.data_clear_desc),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SettingsSection(stringResource(R.string.data_section_clear), heading = true) {
+            ActionRow(stringResource(R.string.data_clear),
+                stringResource(R.string.data_clear_desc),
+                stringResource(R.string.data_clear_action), danger = true) { showClear = true }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             // §7.4 只清已读消息关联的图片磁盘缓存，不动未读消息图片、不动消息本体与身份
-            TextButton(onClick = { showClearMedia = true }) {
-                Text(stringResource(R.string.data_clear_media),
-                    color = MaterialTheme.colorScheme.error)
-            }
-            Text(stringResource(R.string.data_clear_media_desc),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            ActionRow(stringResource(R.string.data_clear_media),
+                stringResource(R.string.data_clear_media_desc),
+                stringResource(R.string.data_clear_action), danger = true) { showClearMedia = true }
+        }
+
+        SettingsSection(stringResource(R.string.data_section_export), heading = true) {
             // §7.3 导出为 JSON：SAF 新建文档，用户挑位置，避免"存储权限"这套老模型。
             // 结果回调在 MainActivity 层注册（见 exportLauncher），relock 也不会丢结果，故这里只触发。
-            TextButton(onClick = {
+            ActionRow(stringResource(R.string.data_export),
+                stringResource(R.string.data_export_desc),
+                stringResource(R.string.data_export_action)) {
                 (context as? MainActivity)?.startExport("pushbox-export-$stamp.json")
-            }) { Text(stringResource(R.string.data_export)) }
-            Text(stringResource(R.string.data_export_desc),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 
@@ -3601,7 +3607,11 @@ private fun KeepAliveBatteryRow() {
         context.getSystemService(PowerManager::class.java)
             ?.isIgnoringBatteryOptimizations(context.packageName) == true
     }
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().clickable(enabled = !ignoring, onClick = {
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+            .setData(Uri.parse("package:${context.packageName}"))
+        runCatching { relaunch.launch(intent) }
+    }).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(stringResource(R.string.keepalive_battery), style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.keepalive_battery_desc),
@@ -3612,12 +3622,12 @@ private fun KeepAliveBatteryRow() {
                 color = if (ignoring) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        // 已允许时不再给动作，状态行本身就是结论
         if (!ignoring) {
-            OutlinedButton(onClick = {
-                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                    .setData(Uri.parse("package:${context.packageName}"))
-                runCatching { relaunch.launch(intent) }
-            }) { Text(stringResource(R.string.keepalive_request)) }
+            Spacer(Modifier.width(12.dp))
+            Text(stringResource(R.string.keepalive_request),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary)
         }
     }
 }
@@ -3929,6 +3939,28 @@ private fun GuideRow(title: String, desc: String, onClick: () -> Unit) {
     }
 }
 
+/**
+ * 动作行：标题 + 说明 + 尾行动词（"去设置"/"清理"）。动词只说明这一行会做什么，
+ * 整行都是点击区，不再额外摆一个按钮——设置页里按钮一多就跟开关行长得很像。
+ * 危险动作只染动词：标题保持正文色，扫读时不至于整段泛红。
+ */
+@Composable
+private fun ActionRow(title: String, desc: String, action: String,
+    danger: Boolean = false, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(desc, style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(action, style = MaterialTheme.typography.titleMedium,
+            color = if (danger) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.primary)
+    }
+}
+
 /** 主题选择行：标题 + 选中态勾选。整行可点，高度按 48dp 最小触控目标兜住。 */
 @Composable
 private fun ThemeOption(label: String, selected: Boolean, onClick: () -> Unit) {
@@ -3968,10 +4000,10 @@ private fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit) {
 
 /** 设置页的一个分组：标题 + 一张卡片，卡片内竖排若干行。heading 用 H2（设置页），其余页仍是小号灰字。 */
 @Composable
-private fun SettingsSection(title: String, heading: Boolean = false,
+private fun SettingsSection(title: String? = null, heading: Boolean = false,
     content: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(title,
+        if (title != null) Text(title,
             style = if (heading) MaterialTheme.typography.headlineMedium
             else MaterialTheme.typography.labelSmall,
             color = if (heading) MaterialTheme.colorScheme.onSurface

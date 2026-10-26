@@ -109,12 +109,16 @@
     <string name="data_local_count_label">本地消息数</string>
     <string name="data_local_size_label">本地占用</string>
     <string name="data_clear">清空本地缓存</string>
+    <string name="data_clear_action">清理</string>
+    <string name="data_section_clear">清理</string>
+    <string name="data_section_export">导出</string>
     <string name="data_clear_desc">只删除本机已缓存的消息记录，不影响服务器数据，也不影响设备身份。</string>
     <string name="data_clear_confirm">将清空本机所有会话与消息缓存，身份与服务器地址保持不变。确定继续？</string>
     <string name="data_clear_media">清理已读图片缓存</string>
     <string name="data_clear_media_desc">只清本机已读消息关联的图片文件：未读消息图片、消息正文、会话列表与设备身份都不动。下次进对话页需要图片时会自动重取。</string>
     <string name="data_clear_media_confirm">将清掉本机所有已读消息关联的图片磁盘缓存，消息正文与身份保持不变。确定继续？</string>
     <string name="data_export">导出为 JSON</string>
+    <string name="data_export_action">导出</string>
     <string name="data_export_desc">把本机缓存的全部消息导出成一份 JSON 文件，用于离线归档或迁移；不含图片本体。</string>
     <string name="data_export_ok">导出完成</string>
     <string name="data_export_failed">导出失败</string>
@@ -144,7 +148,7 @@
     <string name="section_more">更多</string>
     <string name="settings_page_connect">接入与设备</string>
     <string name="settings_page_notify">提醒与频道</string>
-    <string name="settings_page_security">应用锁</string>
+    <string name="settings_page_security">App 锁</string>
     <string name="settings_page_keepalive">后台常驻</string>
     <string name="settings_page_data">清理与导出</string>
     <string name="settings_page_about">关于与帮助</string>
@@ -257,9 +261,9 @@
     <string name="keepalive_battery_desc">加入电池优化白名单，待机时系统才不会冻结消息通道。</string>
     <string name="keepalive_request">去设置</string>
     <string name="keepalive_status_on">已允许后台运行</string>
-    <string name="keepalive_status_off">仍可能被系统休眠冻结</string>
+    <string name="keepalive_status_off">当前未加入白名单</string>
     <string name="keepalive_notification">后台监听渠道设置</string>
-    <string name="keepalive_notification_desc">常驻通知是否显示由系统的「后台监听」渠道控制；消息提醒请用上方的「按频道管理」。</string>
+    <string name="keepalive_notification_desc">常驻通知是否显示由系统的「后台监听」渠道控制；消息提醒请到「提醒与频道」里调。</string>
     <string name="keepalive_autostart">自启动与后台锁定</string>
     <string name="keepalive_autostart_desc">国产 ROM 需在应用信息里允许自启动，常驻才不会被清理。</string>
     <string name="keepalive_polling">极致省电轮询模式</string>
