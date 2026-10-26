@@ -5,7 +5,7 @@
         xmlns:views="clr-namespace:PushBox.Windows.Views"
         Title="PushBox" Width="1080" Height="680" MinWidth="440" MinHeight="420"
         Background="{DynamicResource Bg.Page}"
-        FontFamily="Segoe UI, Microsoft YaHei UI"
+        FontFamily="{DynamicResource Font.UI}"
         TextOptions.TextFormattingMode="Display"
         UseLayoutRounding="True">
     <!-- §8.1 的窗口结构：微信风格三栏布局 —— 最左侧菜单栏（设置+连接状态）、中间消息列表、右侧对话信息。
@@ -167,7 +167,8 @@
                     <!-- 底部：设置按钮 -->
                     <Border DockPanel.Dock="Bottom" Height="48" Padding="0,8"
                             BorderBrush="{DynamicResource Divider}" BorderThickness="0,1,0,0">
-                        <Button x:Name="SettingsButton" Content="⚙" FontSize="18"
+                        <Button x:Name="SettingsButton" Content="⚙"
+                                FontSize="{x:Static controls:MarkdownStyle.H2Size}"
                                 Background="Transparent" BorderThickness="0"
                                 Foreground="{DynamicResource Fg.Secondary}"
                                 ToolTip="设置（Alt+S）" Click="OnOpenSettings" />
@@ -257,7 +258,8 @@
                     </Grid.ColumnDefinitions>
                     <Button x:Name="BackButton" Grid.Column="0" Content="←" Width="28" Height="28"
                             Padding="0" Visibility="Collapsed" Background="Transparent"
-                            BorderThickness="0" FontSize="16" ToolTip="返回（Alt+←）"
+                            BorderThickness="0" FontSize="{x:Static controls:MarkdownStyle.H3Size}"
+                            ToolTip="返回（Alt+←）"
                             Foreground="{DynamicResource Fg.Primary}" />
                     <TextBlock x:Name="ConversationTitle" Grid.Column="1" Margin="10,0,0,0"
                                Style="{DynamicResource Text.H3}" VerticalAlignment="Center"

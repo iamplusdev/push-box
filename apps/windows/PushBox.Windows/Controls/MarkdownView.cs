@@ -23,11 +23,22 @@ public sealed record MarkdownStyle(Brush Text, Brush Muted, Brush BlockBackgroun
 {
     // §9.2 的字号与行高，数值直接沿用 Android 的 Typography（15/23、13/18、12/16、16/22）：
     // WPF 的 1/96 英寸与 dp 不同基准，同数值在 PC 上略大，验收按"观感一致"而不是"像素一致"（§8.2）
+    //
+    // 这组常量是 Windows 侧唯一的字号来源：Tokens.xaml 与各窗口的 XAML 都写
+    // `{x:Static controls:MarkdownStyle.BodySize}`，不在 XAML 里留数字（TypographyTest 会扫）。
     public const double BodySize = 15;
     public const double BodyLine = 23;
     public const double SmallSize = 13;
     public const double SmallLine = 18;
     public const double LabelSize = 12;
+    public const double LabelLine = 16;
+    // 标题四档。行高按 §9.2 的表格取整（20→28、18→25、16→22）；H4 及以上共用正文档
+    public const double H1Size = 20;
+    public const double H1Line = 28;
+    public const double H2Size = 18;
+    public const double H2Line = 25;
+    public const double H3Size = 16;
+    public const double H3Line = 22;
     public const double BlockGap = 4;
     public const double ListGap = 2;
     public const double CodePadding = 8;
@@ -40,10 +51,14 @@ public sealed record MarkdownStyle(Brush Text, Brush Muted, Brush BlockBackgroun
         Brush("Fg.Primary"), Brush("Fg.Secondary"), Brush("Bg.Bubble.In"), Brush("Bg.Code"), Brush("Divider"),
         Brush("Accent"), Brush("Level.Highlight"), Brush("Bg.AccentTint"), Brush("Accent"),
         Brush("Level.Error"), Brush("Level.Warning"),
-        new FontFamily("Segoe UI, Microsoft YaHei UI"), new FontFamily("Consolas, Microsoft YaHei UI"));
+        Font("Font.UI"), Font("Font.Code"));
 
     private static Brush Brush(string key) =>
         Application.Current?.TryFindResource(key) as Brush ?? Brushes.Gray;
+
+    // 字体族也走 token：窗口级那一份与这里的正文/等宽本来是同一个值写了两遍，改一处就会分叉
+    private static FontFamily Font(string key) =>
+        Application.Current?.TryFindResource(key) as FontFamily ?? new FontFamily("Segoe UI, Microsoft YaHei UI");
 }
 
 /// <summary>
@@ -76,7 +91,7 @@ public static class MarkdownView
         MarkdownParagraph p => Text(p.Text, style, MarkdownStyle.BodySize, MarkdownStyle.BodyLine,
             style.Text, false),
         // 标题级别 1..6 只分四档字号（20/18/16/15），全部加粗、顶部留 4：与 Android 的 when(level) 同一张表
-        MarkdownHeading h => Text(h.Text, style, HeadingSize(h.Level), MarkdownStyle.BodyLine,
+        MarkdownHeading h => Text(h.Text, style, HeadingSize(h.Level), HeadingLine(h.Level),
             style.Text, true, new Thickness(0, MarkdownStyle.BlockGap, 0, 0)),
         MarkdownQuote q => Quote(q.Text, style),
         MarkdownCode c => Code(c.Text, style),
@@ -88,10 +103,20 @@ public static class MarkdownView
     /// <summary>标题字号分档。4/5/6 级共用正文大小，只靠加粗区分——Android 就是这么省的。</summary>
     public static double HeadingSize(int level) => level switch
     {
-        1 => 20,
-        2 => 18,
-        3 => 16,
-        _ => 15
+        1 => MarkdownStyle.H1Size,
+        2 => MarkdownStyle.H2Size,
+        3 => MarkdownStyle.H3Size,
+        _ => MarkdownStyle.BodySize
+    };
+
+    /// <summary>标题行高。原来全部拿 <see cref="MarkdownStyle.BodyLine"/>（23），
+    /// 20px 的 H1 只剩 1.15×，比正文的 1.53× 还挤——现在按 §9.2 那张表逐档给。</summary>
+    public static double HeadingLine(int level) => level switch
+    {
+        1 => MarkdownStyle.H1Line,
+        2 => MarkdownStyle.H2Line,
+        3 => MarkdownStyle.H3Line,
+        _ => MarkdownStyle.BodyLine
     };
 
     /// <summary>

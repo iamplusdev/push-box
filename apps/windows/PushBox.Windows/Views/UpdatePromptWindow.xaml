@@ -1,28 +1,36 @@
 <Window x:Class="PushBox.Windows.Views.UpdatePromptWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:PushBox.Windows.Controls"
         Title="PushBox 更新" Width="440" Height="Auto" SizeToContent="Height"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize" ShowInTaskbar="False"
         Topmost="True"
         Background="{DynamicResource Bg.Page}"
-        FontFamily="Segoe UI, Microsoft YaHei UI"
+        FontFamily="{DynamicResource Font.UI}"
         TextOptions.TextFormattingMode="Display" UseLayoutRounding="True">
     <!-- D32 的更新确认框：发现新版先问一句，点"下载并安装"才动手；装完让用户重启。
          自动检查与手动检查共用这一扇，保证两条路的"确认"长同一个样、只有一处下载/安装代码。 -->
     <StackPanel Margin="20,16,20,16">
-        <TextBlock x:Name="Headline" FontSize="15" TextWrapping="Wrap"
+        <TextBlock x:Name="Headline" FontSize="{x:Static controls:MarkdownStyle.BodySize}"
+                   LineHeight="{x:Static controls:MarkdownStyle.BodyLine}" TextWrapping="Wrap"
                    Foreground="{DynamicResource Fg.Primary}" />
-        <TextBlock x:Name="SourceLine" FontSize="12" Margin="0,6,0,0"
+        <TextBlock x:Name="SourceLine" FontSize="{x:Static controls:MarkdownStyle.LabelSize}"
+                   Margin="0,6,0,0"
                    Text="来自 GitHub Releases"
                    Foreground="{DynamicResource Fg.Secondary}" />
         <ScrollViewer MaxHeight="160" Margin="0,10,0,0" VerticalScrollBarVisibility="Auto"
                       x:Name="NotesScroll" Visibility="Collapsed">
-            <TextBlock x:Name="Notes" FontSize="12" TextWrapping="Wrap"
+            <TextBlock x:Name="Notes" FontSize="{x:Static controls:MarkdownStyle.LabelSize}"
+                       LineHeight="{x:Static controls:MarkdownStyle.LabelLine}" TextWrapping="Wrap"
                        Foreground="{DynamicResource Fg.Secondary}" />
         </ScrollViewer>
-        <TextBlock x:Name="Status" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"
+        <TextBlock x:Name="Status" FontSize="{x:Static controls:MarkdownStyle.LabelSize}"
+                   LineHeight="{x:Static controls:MarkdownStyle.LabelLine}" Margin="0,10,0,0"
+                   TextWrapping="Wrap"
                    Visibility="Collapsed" Foreground="{DynamicResource Fg.Primary}" />
-        <TextBlock x:Name="Error" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"
+        <TextBlock x:Name="Error" FontSize="{x:Static controls:MarkdownStyle.LabelSize}"
+                   LineHeight="{x:Static controls:MarkdownStyle.LabelLine}" Margin="0,8,0,0"
+                   TextWrapping="Wrap"
                    Visibility="Collapsed" Foreground="{DynamicResource Level.Error}" />
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <Button x:Name="LaterButton" Content="稍后" MinWidth="76" Click="OnLater" />

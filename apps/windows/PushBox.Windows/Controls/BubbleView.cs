@@ -104,7 +104,7 @@ public static class BubbleView
                 Child = new TextBlock
                 {
                     Text = label,
-                    FontSize = 11,
+                    FontSize = MarkdownStyle.LabelSize,
                     Foreground = style.BadgeText,
                     FontWeight = FontWeights.Medium
                 }
@@ -202,7 +202,7 @@ public static class BubbleView
         var icon = new TextBlock
         {
             Text = "🔗",
-            FontSize = 12,
+            FontSize = MarkdownStyle.LabelSize,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 4, 0)
         };
@@ -210,7 +210,7 @@ public static class BubbleView
         var label = new TextBlock
         {
             Text = text,
-            FontSize = 12,
+            FontSize = MarkdownStyle.LabelSize,
             Foreground = accent,
             VerticalAlignment = VerticalAlignment.Center
         };

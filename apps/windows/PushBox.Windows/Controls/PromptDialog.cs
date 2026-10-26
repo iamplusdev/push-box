@@ -17,7 +17,8 @@ public static class PromptDialog
     {
         var box = new TextBox
         {
-            Text = current, FontSize = 13, MinWidth = 320, Margin = new Thickness(0, 8, 0, 12)
+            Text = current, FontSize = MarkdownStyle.SmallSize, MinWidth = 320,
+            Margin = new Thickness(0, 8, 0, 12)
         };
         var ok = new Button { Content = "确定", Width = 72, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
         var cancel = new Button { Content = "取消", Width = 72, IsCancel = true };

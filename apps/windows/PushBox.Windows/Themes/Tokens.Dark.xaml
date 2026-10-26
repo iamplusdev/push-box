@@ -1,7 +1,8 @@
 <!-- §9.1 的深色 token：整站反色、不碰纯黑（bg.page 用 #1A1A1A 而不是 #000000）。
      键名必须与 Tokens.xaml 完全一致——ThemeManager 只是把这两份的先后顺序换一下。 -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:controls="clr-namespace:PushBox.Windows.Controls">
 
     <!-- 深色模式：避免纯黑，使用深灰层级。抬升的方向与浅色一致——越"浮起来"越亮 -->
     <SolidColorBrush x:Key="Bg.Page" Color="#1A1A1A" />
@@ -38,57 +39,61 @@
     <SolidColorBrush x:Key="ScrollBar.ThumbHover" Color="#888889" />
     <SolidColorBrush x:Key="ScrollBar.ThumbDrag" Color="#A1A1A2" />
 
-    <!-- §9.2 的字体层级系统（深色主题复用浅色定义的样式，字体族与字号不随主题变化） -->
+    <!-- §9.2 的字体层级系统（深色主题复用浅色定义的样式，字体族与字号不随主题变化）。
+         与浅色那份同一批 {x:Static} 引用：两份键名必须一致，数值也只有 Controls/MarkdownView.cs 一份 -->
     <!-- 基础字体族 -->
     <FontFamily x:Key="Font.UI">Segoe UI, Microsoft YaHei UI</FontFamily>
     <FontFamily x:Key="Font.Code">Consolas, Microsoft YaHei UI</FontFamily>
 
-    <!-- H1: 20px / Bold -->
+    <!-- H1: 20px / 行高 28 / Bold -->
     <Style x:Key="Text.H1" TargetType="TextBlock">
-        <Setter Property="FontSize" Value="20" />
+        <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.H1Size}" />
+        <Setter Property="LineHeight" Value="{x:Static controls:MarkdownStyle.H1Line}" />
         <Setter Property="FontWeight" Value="Bold" />
         <Setter Property="FontFamily" Value="{StaticResource Font.UI}" />
     </Style>
 
-    <!-- H2: 18px / Bold -->
+    <!-- H2: 18px / 行高 25 / Bold -->
     <Style x:Key="Text.H2" TargetType="TextBlock">
-        <Setter Property="FontSize" Value="18" />
+        <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.H2Size}" />
+        <Setter Property="LineHeight" Value="{x:Static controls:MarkdownStyle.H2Line}" />
         <Setter Property="FontWeight" Value="Bold" />
         <Setter Property="FontFamily" Value="{StaticResource Font.UI}" />
     </Style>
 
-    <!-- H3: 16px / SemiBold (会话名) -->
+    <!-- H3: 16px / 行高 22 / SemiBold (会话名) -->
     <Style x:Key="Text.H3" TargetType="TextBlock">
-        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.H3Size}" />
+        <Setter Property="LineHeight" Value="{x:Static controls:MarkdownStyle.H3Line}" />
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="FontFamily" Value="{StaticResource Font.UI}" />
     </Style>
 
-    <!-- Body: 15px / Normal (消息正文) -->
+    <!-- Body: 15px / 行高 23 / Normal (消息正文) -->
     <Style x:Key="Text.Body" TargetType="TextBlock">
-        <Setter Property="FontSize" Value="15" />
-        <Setter Property="LineHeight" Value="23" />
+        <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.BodySize}" />
+        <Setter Property="LineHeight" Value="{x:Static controls:MarkdownStyle.BodyLine}" />
         <Setter Property="FontFamily" Value="{StaticResource Font.UI}" />
     </Style>
 
-    <!-- Small: 13px / Normal (摘要、副文本) -->
+    <!-- Small: 13px / 行高 18 / Normal (摘要、副文本) -->
     <Style x:Key="Text.Small" TargetType="TextBlock">
-        <Setter Property="FontSize" Value="13" />
-        <Setter Property="LineHeight" Value="18" />
+        <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
+        <Setter Property="LineHeight" Value="{x:Static controls:MarkdownStyle.SmallLine}" />
         <Setter Property="FontFamily" Value="{StaticResource Font.UI}" />
     </Style>
 
-    <!-- Label: 12px / Normal (时间戳、角标、提示) -->
+    <!-- Label: 12px / 行高 16 / Normal (时间戳、角标、提示) -->
     <Style x:Key="Text.Label" TargetType="TextBlock">
-        <Setter Property="FontSize" Value="12" />
-        <Setter Property="LineHeight" Value="16" />
+        <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.LabelSize}" />
+        <Setter Property="LineHeight" Value="{x:Static controls:MarkdownStyle.LabelLine}" />
         <Setter Property="FontFamily" Value="{StaticResource Font.UI}" />
     </Style>
 
-    <!-- Code: 13px / Monospace (恢复码、设备 ID、curl 命令) -->
+    <!-- Code: 13px / 行高 18 / Monospace (恢复码、设备 ID、curl 命令) -->
     <Style x:Key="Text.Code" TargetType="TextBlock">
-        <Setter Property="FontSize" Value="13" />
-        <Setter Property="LineHeight" Value="18" />
+        <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
+        <Setter Property="LineHeight" Value="{x:Static controls:MarkdownStyle.SmallLine}" />
         <Setter Property="FontFamily" Value="{StaticResource Font.Code}" />
     </Style>
 
