@@ -2919,34 +2919,18 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
         }
 
         SettingsSection(stringResource(R.string.section_notification)) {
-            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.notif_new_message),
-                        style = MaterialTheme.typography.titleMedium)
-                    Text(stringResource(R.string.notif_new_message_desc),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(checked = notif, onCheckedChange = {
-                    app.notificationsEnabled.value = it
-                    scope.launch { app.identity.setNotificationsEnabled(it) }
-                })
+            SwitchRow(stringResource(R.string.notif_new_message),
+                stringResource(R.string.notif_new_message_desc), notif) {
+                app.notificationsEnabled.value = it
+                scope.launch { app.identity.setNotificationsEnabled(it) }
             }
             // 应用内这个开关只管"要不要发"，Android 13+ 上面还压着一道系统级权限：
             // 权限被拒（尤其是勾了"不再询问"）时消息照样入库但永不出通知，所以长期入口挂在这儿。
             NotifyPermissionRow()
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.notif_lock_screen_title),
-                        style = MaterialTheme.typography.titleMedium)
-                    Text(stringResource(R.string.notif_lock_screen_desc),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(checked = lockContent, onCheckedChange = { app.setLockScreenContent(it) })
+            SwitchRow(stringResource(R.string.notif_lock_screen_title),
+                stringResource(R.string.notif_lock_screen_desc), lockContent) {
+                app.setLockScreenContent(it)
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
@@ -2977,18 +2961,9 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
                 stringResource(R.string.notif_manage_entry_desc)) { showChannelNotify = true }
             // §7.4 静默时段：窗口内非 error 消息只静默入通知栏，不响铃不横幅
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.notif_quiet_title),
-                        style = MaterialTheme.typography.titleMedium)
-                    Text(stringResource(R.string.notif_quiet_desc),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(checked = quietOn, onCheckedChange = {
-                    app.setQuiet(it, quietStart, quietEnd)
-                })
+            SwitchRow(stringResource(R.string.notif_quiet_title),
+                stringResource(R.string.notif_quiet_desc), quietOn) {
+                app.setQuiet(it, quietStart, quietEnd)
             }
             if (quietOn) {
                 val startLabel = stringResource(R.string.notif_quiet_start)
@@ -3013,16 +2988,9 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
             // §7.2 极致省电轮询模式：关掉常驻长连接，改 WorkManager 周期补拉，省电但消息会延迟
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             val polling by app.pollingMode.collectAsState()
-            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.keepalive_polling),
-                        style = MaterialTheme.typography.titleMedium)
-                    Text(stringResource(R.string.keepalive_polling_desc),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(checked = polling, onCheckedChange = { app.setPollingMode(it) })
+            SwitchRow(stringResource(R.string.keepalive_polling),
+                stringResource(R.string.keepalive_polling_desc), polling) {
+                app.setPollingMode(it)
             }
             GuideRow(stringResource(R.string.keepalive_notification),
                 stringResource(R.string.keepalive_notification_desc)) {
@@ -3050,18 +3018,9 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
         }
 
         SettingsSection(stringResource(R.string.section_app_lock)) {
-            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.app_lock_enable),
-                        style = MaterialTheme.typography.titleMedium)
-                    Text(stringResource(R.string.app_lock_desc),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(checked = appLock, onCheckedChange = {
-                    lockDialog = if (it) "enable" else "disable"
-                })
+            SwitchRow(stringResource(R.string.app_lock_enable),
+                stringResource(R.string.app_lock_desc), appLock) {
+                lockDialog = if (it) "enable" else "disable"
             }
             // D30 生物识别只在 App 锁开启时可选；无可用硬件时置灰并提示
             if (appLock) {
@@ -3069,21 +3028,10 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
                 val canBiometric = BiometricManager.from(context)
                     .canAuthenticate(BIOMETRIC_STRONG or BIOMETRIC_WEAK) ==
                     BiometricManager.BIOMETRIC_SUCCESS
-                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(stringResource(R.string.app_lock_biometric_enable),
-                            style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            if (canBiometric) stringResource(R.string.app_lock_biometric_desc)
-                            else stringResource(R.string.app_lock_biometric_unavailable),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Switch(checked = biometric, enabled = canBiometric, onCheckedChange = {
-                        app.setBiometric(it)
-                    })
-                }
+                SwitchRow(stringResource(R.string.app_lock_biometric_enable),
+                    if (canBiometric) stringResource(R.string.app_lock_biometric_desc)
+                    else stringResource(R.string.app_lock_biometric_unavailable),
+                    biometric, enabled = canBiometric) { app.setBiometric(it) }
             }
         }
 
@@ -3779,6 +3727,21 @@ private suspend fun exportJson(app: App, context: android.content.Context,
         out.write(root.toString(2).toByteArray())
         out.flush()
     } ?: throw IllegalStateException("无法打开导出文件")
+}
+
+/** 一行「标题 + 说明 + 开关」。设置页里六处开关共用，说明保持一行，放不下就由调用方缩短。 */
+@Composable
+private fun SwitchRow(title: String, desc: String, checked: Boolean,
+    enabled: Boolean = true, onCheckedChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(desc, style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, enabled = enabled, onCheckedChange = onCheckedChange)
+    }
 }
 
 /** 一行"标题 + 说明 + 进入箭头"，点击跳到对应的系统设置页。 */
