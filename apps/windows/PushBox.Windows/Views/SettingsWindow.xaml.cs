@@ -218,8 +218,10 @@ public partial class SettingsWindow : Window
         GovMuted.IsChecked = row.Muted;
         GovWhitelist.IsChecked = row.SenderWhitelistMode;
         GovSubscriptionLine.Text = row.SubscriptionText;
-        // "取消接入"只出现在确实接入过的那一行：给没接入的行摆一个取消按钮，点了什么也不会变
+        // "取消接入"只出现在确实接入过的那一行：给没接入的行摆一个取消按钮，点了什么也不会变。
+        // 副标题跟按钮同进退——按钮藏了说明还留着，那一行就成了没有按钮的孤句
         LeaveButton.Visibility = row.Subscribed ? Visibility.Visible : Visibility.Collapsed;
+        LeaveHint.Visibility = LeaveButton.Visibility;
         SendersCard.Visibility = Visibility.Collapsed;
         SenderList.ItemsSource = Array.Empty<SenderEntry>();
         SendersHint.Text = string.Empty;

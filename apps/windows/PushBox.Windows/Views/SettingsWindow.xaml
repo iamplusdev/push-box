@@ -395,21 +395,72 @@
                                         Style="{DynamicResource Button.Primary}" />
                                 <Button Content="发送者白名单" Margin="10,0,0,0" Click="OnOpenSenders"
                                         Style="{DynamicResource Button.Secondary}" />
-                                <Button Content="重置密钥" Margin="10,0,0,0" Click="OnRotateSecret"
-                                        Style="{DynamicResource Button.Danger}" />
-                                <Button Content="换发新频道号" Margin="10,0,0,0" Click="OnResetChannelNo"
-                                        Style="{DynamicResource Button.Danger}" />
                                 <Button Content="容量报表" Margin="10,0,0,0" Click="OnCapacity"
                                         Style="{DynamicResource Button.Secondary}" />
-                                <Button Content="清空" Margin="10,0,0,0" Click="OnClearChannel"
-                                        Style="{DynamicResource Button.Danger}" />
-                                <!-- 取消接入不需要密钥（这台设备本来就接进来过），所以它留在治理区而不是上面那格表单里 -->
-                                <Button x:Name="LeaveButton" Content="取消接入" Margin="10,0,0,0"
-                                        Visibility="Collapsed" Click="OnLeaveChannel"
-                                        Style="{DynamicResource Button.Danger}" />
-                                <Button Content="归档" Margin="10,0,0,0" Click="OnArchiveChannel"
-                                        Style="{DynamicResource Button.Danger}" />
                             </StackPanel>
+
+                            <!-- 危险操作独立分组：红色描边钮混在一排常规操作里等于没分区。
+                                 每一项带一句 13px 副标题，让"点了会发生什么"在点之前就读得到——
+                                 确认框还在，这只是提前一步的预告，两处文案同源（SettingsModel） -->
+                            <Border Margin="0,16,0,0" Padding="14" CornerRadius="8"
+                                    BorderBrush="{DynamicResource Divider}" BorderThickness="1"
+                                    Background="{DynamicResource Bg.Page}">
+                                <StackPanel>
+                                    <TextBlock Text="危险操作" Style="{DynamicResource Text.H3}"
+                                               Foreground="{DynamicResource Fg.Primary}" />
+                                    <Grid Margin="0,10,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Button Grid.Row="0" Grid.Column="0" Width="140" Margin="0,5"
+                                                Content="重置密钥" Click="OnRotateSecret"
+                                                Style="{DynamicResource Button.Danger}" />
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Style="{DynamicResource Text.Small}"
+                                                   Margin="12,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
+                                                   Text="旧密钥即刻失效，发消息的第三方要改用新密钥。"
+                                                   Foreground="{DynamicResource Fg.Secondary}" />
+                                        <Button Grid.Row="1" Grid.Column="0" Width="140" Margin="0,5"
+                                                Content="换发新频道号" Click="OnResetChannelNo"
+                                                Style="{DynamicResource Button.Danger}" />
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Style="{DynamicResource Text.Small}"
+                                                   Margin="12,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
+                                                   Text="旧号码即刻作废，第三方要改投递地址；历史消息随迁。"
+                                                   Foreground="{DynamicResource Fg.Secondary}" />
+                                        <Button Grid.Row="2" Grid.Column="0" Width="140" Margin="0,5"
+                                                Content="清空" Click="OnClearChannel"
+                                                Style="{DynamicResource Button.Danger}" />
+                                        <TextBlock Grid.Row="2" Grid.Column="1" Style="{DynamicResource Text.Small}"
+                                                   Margin="12,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
+                                                   Text="删除全部历史消息与图片（各端同步）；频道与地址保留。"
+                                                   Foreground="{DynamicResource Fg.Secondary}" />
+                                        <!-- 取消接入不需要密钥（这台设备本来就接进来过），所以它留在治理区而不是上面那格表单里；
+                                             副标题跟按钮同进退：按钮藏起来的行，说明也不能留在原地 -->
+                                        <Button Grid.Row="3" Grid.Column="0" x:Name="LeaveButton" Width="140" Margin="0,5"
+                                                Content="取消接入" Visibility="Collapsed" Click="OnLeaveChannel"
+                                                Style="{DynamicResource Button.Danger}" />
+                                        <TextBlock Grid.Row="3" Grid.Column="1" x:Name="LeaveHint"
+                                                   Style="{DynamicResource Text.Small}" Visibility="Collapsed"
+                                                   Margin="12,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
+                                                   Text="这台电脑不再接收该频道；重新加入即可恢复。"
+                                                   Foreground="{DynamicResource Fg.Secondary}" />
+                                        <Button Grid.Row="4" Grid.Column="0" Width="140" Margin="0,5"
+                                                Content="归档" Click="OnArchiveChannel"
+                                                Style="{DynamicResource Button.Danger}" />
+                                        <TextBlock Grid.Row="4" Grid.Column="1" Style="{DynamicResource Text.Small}"
+                                                   Margin="12,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
+                                                   Text="归档后拒收新消息，历史消息保留；不可恢复。"
+                                                   Foreground="{DynamicResource Fg.Secondary}" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
 
                             <!-- 白名单就地展开：它只管这一条频道，弹一层窗口只会让人找不到刚点了什么 -->
                             <Border x:Name="SendersCard" Visibility="Collapsed" Margin="0,16,0,0" Padding="14"
@@ -484,10 +535,6 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
-                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                        <Button Content="吊销这台" Click="OnRevokeDevice"
-                                Style="{DynamicResource Button.Danger}" />
-                    </StackPanel>
                     <TextBlock x:Name="DeviceEmpty" Style="{DynamicResource Text.Small}" Margin="0,8,0,0"
                                Visibility="Collapsed"
                                Text="没有其他设备" Foreground="{DynamicResource Fg.Secondary}" />
@@ -501,17 +548,56 @@
                                Style="{DynamicResource Text.Label}" Margin="0,4,0,0" TextWrapping="Wrap"
                                Foreground="{DynamicResource Fg.Secondary}" />
                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                        <Button Content="轮换恢复码" Click="OnRotateRecovery"
-                                Style="{DynamicResource Button.Danger}" />
-                        <Button Content="复制" Margin="8,0,0,0" Click="OnCopyRecovery"
+                        <Button Content="复制" Click="OnCopyRecovery"
                                 Style="{DynamicResource Button.Secondary}" />
                     </StackPanel>
                     <TextBlock x:Name="RecoveryHint" Style="{DynamicResource Text.Label}" Margin="0,6,0,0"
                                TextWrapping="Wrap"
                                Visibility="Collapsed" Foreground="{DynamicResource Level.Error}" />
-                    <!-- §7.3 退出空间：清空所有数据回到首启，与 Android "更换服务器"同效 -->
-                    <Button Content="退出空间（清空数据）" Margin="0,16,0,0" Click="OnLogout"
-                            HorizontalAlignment="Left" Style="{DynamicResource Button.Danger}" />
+
+                    <!-- 危险操作独立分组：与频道面板同一套形状（灰底卡 + 每项一句 13px 副标题），
+                         吊销/轮换/退出都从原来的散落位置收进来，确认框文案与副标题同源 -->
+                    <Border Margin="0,22,0,0" Padding="14" CornerRadius="8"
+                            BorderBrush="{DynamicResource Divider}" BorderThickness="1"
+                            Background="{DynamicResource Bg.Page}">
+                        <StackPanel>
+                            <TextBlock Text="危险操作" Style="{DynamicResource Text.H3}"
+                                       Foreground="{DynamicResource Fg.Primary}" />
+                            <Grid Margin="0,10,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Button Grid.Row="0" Grid.Column="0" Width="160" Margin="0,5"
+                                        Content="吊销这台" Click="OnRevokeDevice"
+                                        Style="{DynamicResource Button.Danger}" />
+                                <TextBlock Grid.Row="0" Grid.Column="1" Style="{DynamicResource Text.Small}"
+                                           Margin="12,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
+                                           Text="令牌立即失效并强制下线，需凭恢复码重新加入。"
+                                           Foreground="{DynamicResource Fg.Secondary}" />
+                                <Button Grid.Row="1" Grid.Column="0" Width="160" Margin="0,5"
+                                        Content="轮换恢复码" Click="OnRotateRecovery"
+                                        Style="{DynamicResource Button.Danger}" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Style="{DynamicResource Text.Small}"
+                                           Margin="12,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
+                                           Text="旧码即刻失效，已登录设备不受影响；新码只显示这一次。"
+                                           Foreground="{DynamicResource Fg.Secondary}" />
+                                <!-- §7.3 退出空间：清空所有数据回到首启，与 Android "更换服务器"同效 -->
+                                <Button Grid.Row="2" Grid.Column="0" Width="160" Margin="0,5"
+                                        Content="退出空间（清空数据）" Click="OnLogout"
+                                        Style="{DynamicResource Button.Danger}" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Style="{DynamicResource Text.Small}"
+                                           Margin="12,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
+                                           Text="清空本机全部会话、消息与身份，回到首启注册页。"
+                                           Foreground="{DynamicResource Fg.Secondary}" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
 
