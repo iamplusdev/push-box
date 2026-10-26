@@ -9,7 +9,7 @@ import dev.pushbox.server.setup.RuntimeConfig;
  * 配置搬进 JSON 之后分成两档，因为它们的真实依赖本来就不一样：
  * <ul>
  *   <li>{@link #databaseReady()} —— 只需要一个连得上的库。存储走本地目录就够了，所以开发机上
- *       （安装页里不勾对象存储）这 13 个类照跑，本机测试不是"全绿但什么都没测"。</li>
+ *       （安装页里不勾对象存储）这 14 个类照跑，本机测试不是"全绿但什么都没测"。</li>
  *   <li>{@link #objectStorageReady()} —— 需要真桶。media 那 5 个类验的是 S3 语义本身
  *       （SSE-C 客户钥、封装格式、无钥读 400、删除不需要钥），本地目录照不出这些，只能跳过。</li>
  * </ul>

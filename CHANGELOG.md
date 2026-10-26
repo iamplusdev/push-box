@@ -9,6 +9,46 @@
 
 ---
 
+## 未发布 —— 外链头像按 256 归一化：服务端不再"第三方给多大就存多大"
+
+> 起因一条：`sender_avatar` 的转存链路只做了 SSRF、Content-Type + 魔数双重校验与 512KB 上限，字节本身是一字不动落桶的。第三方给一张 1024×1024 的头像，服务端就存 1024×1024，而客户端只把它画进 40dp（Android）/44px（Windows）的圆角框——最密那档 40dp × 3.5 倍密度 ≈ 140px，存下来的边长是它的七倍多，而且每次回源复核都要重传一遍。
+
+### 做法
+
+- **新增 `AvatarImage.normalize(body, mime, size)`**（`apps/server/src/main/java/dev/pushbox/server/media/AvatarImage.java`）：中心裁剪成正方形再缩到目标边长，与 §4.5 缩略图同一个 Thumbnailator 档（jpeg 质量 0.8）。它是个包内纯函数，不碰 Spring、库与对象存储。
+- **`storeAvatar` 在 `objects.put` 之前过一道归一化**，落桶用返回的 `body()`/`mime()`；"换头像是在同一个对象键上覆盖写、延用库里那把封装客户钥"那条路径没动，所以仍然不会撞上"新字节配旧封装钥"的空窗。日志加 `rawBytes` 与宽高，只有数字不带 URL（§14 脱敏）。
+- **新增配置项 `pb.media.avatar-size`，默认 256**，`<= 0` 表示关掉这一层。256 已经是最密那档（≈140px）的将近两倍；它和 `thumb-long-edge` 一样只写在 `PbProperties` 的字段默认值里，不进安装页表单。
+
+### 四条刻意的边界
+
+- **不放大**：长边不超过目标值就一字节不动。"1×1 内联图存完字节不变"本来就被 `MediaSsePipelineTest` ④⑤ 与 `AvatarFetchTest` ② 钉着，放大等于顺手改掉三条判据的口径。
+- **只重编码 png 与 jpeg**：gif 重编码会丢掉动画，webp 是 JDK 的 ImageIO 根本解不了（与 §4.5 缩略图同一口径），这两类原样存。
+- **输出格式随源格式**：png 的透明原样保住。§4.5 缩略图要铺白底是因为它一律输出 jpg、而 jpg 没有 alpha 通道；头像铺了白就会在客户端的圆角框里露出白方块。
+- **处理失败一律回退原字节**：头像是装饰字段，为一次编解码异常把头像整个丢掉不划算。魔数认得但解不动（截断的 png、伪装成 png 的乱字节）同样原样存，读侧至少还有机会。
+
+中心裁剪不会改变客户端看到的那张脸：两端本来就是"裁剪填满"（Android `ContentScale.Crop`、WPF `UniformToFill`），服务端先裁成正方形只是让字节更少。
+
+### 用例
+
+- **`AvatarNormalizeTest`（7 条，纯函数）**：1024×1024 半透明 png 收成 256×256 且 alpha 与红色都还在、900×300 三色带裁完只剩中段那条绿色、800×600 jpeg 出来仍是 jpeg 且字节更小、200×120 与 1×1 一字节不动、假的 GIF89a 与 RIFF/WEBP 原样透传（`width()` 为 0 证明根本没尝试解码）、png 魔数配乱字节回退原样、`size` 取 0 与 -1 都是关掉。**这一类故意不挂任何门**：media 那 5 个类挂 `objectStorageReady`，本机 33 条跳过里就有它们，挂上去等于这条规则在开发机上没人看着。
+- **`AvatarStoreNormalizeTest`（3 条，挂 `databaseReady`）**：接线那一层——400×300 的内联头像落桶后是 256×256 的 png 且字节变小、`avatar-size=0` 时落桶字节的 sha256 与原图逐字节相同、1×1 仍是一字节不动。进出都走 `MediaObjects` 的抽象口，所以本地目录模式跑得动、不必等真桶，头像一律用内联 data: 图因此整条链路不出网。`databaseReady` 那一档从 13 个类变成 14 个（`TestConfig` 的 javadoc 跟着改）。
+- **反向验证两次都红过**：把 `objects.put` 的参数改回未归一化的 `body`/`mime` → ① 报 `expected: 256`；把 `media.getAvatarSize()` 写死成 256 → ② 报字节不等。两处都当场还原。
+
+### 计数基线
+
+- Java **365 → 375**（core 50 + server 325；`AvatarNormalizeTest` 7 条 + `AvatarStoreNormalizeTest` 3 条），`ci.yml` 的 `if tests < N` 与六道文档计数同步，本机 **342 执行 + 33 跳过**。按约定，历史陈述改成不带 `core a + server b` 求和形状的写法（`发布准备报告` 与 `发布检查清单` 顶部注记里那两处 365、CHANGELOG 里上一轮那句 365），现值只留一处形状——否则 `release-verify.sh` 那条"取值必须唯一"的闸会撞出两个数。
+
+### 本步没做（另排）
+
+- **读侧的缓存口径没动**：`GET /api/v1/avatars/{token}` 仍是 `Cache-Control: no-store` 且不带 ETag，那是"头像缓存优化"那条线，与尺寸归一化是两件事。
+- **已存量的头像不会追溯归一化**：只有下一次"来源变了"触发覆盖写时才会走这道处理。
+
+### 验证
+
+- 全量 Java：**375 条，0 失败 0 错误**（server 325 + core 50；本机 342 执行 + 33 跳过，跳过的是要真桶的 media 5 个类）。
+
+---
+
 ## 未发布 —— 排版规范落成断言：管理台补上第三份闸，间距文档两节假代码订正
 
 > 起因一条：同一张字号表在三端里只有两端有闸——Android 的 `TypographyTest.kt`、Windows 的 `TypographyTest.cs` 都把六档钉死，管理台这一端只有"类型检查 + 构建"，规范全靠人手在浏览器里量。文档里写着的数值半年后就会各写成 13、14、15 混排，所以这一轮不改任何视觉，只把已经写下的数值变成断言。
@@ -22,7 +62,7 @@
 ### CI 与门禁
 
 - `ci.yml` 的 web-admin job 拆成 `npm ci` → `npm test` → `npm run build`，job 名改为「管理台断言、类型检查与构建」。断言排在 build 之前：看排版退化不必先等一遍 `vue-tsc`。
-- **带条数下限 `WEB_BASELINE=11`**：`node --test` 在一条用例都没发现时同样退 0（本机在空目录实测 `tests 0 / pass 0 / fail 0`），光看退出码分不出"全绿"和"整份文件没被跑到"——与 Java（365）、C#（582）那两个计数闸防的是同一件事。
+- **带条数下限 `WEB_BASELINE=11`**：`node --test` 在一条用例都没发现时同样退 0（本机在空目录实测 `tests 0 / pass 0 / fail 0`），光看退出码分不出"全绿"和"整份文件没被跑到"——与 Java、C# 那两个计数闸防的是同一件事。
 - `scripts/release-verify.sh` 补四条判据：断言文件存在且已入库、`package.json` 的 `test` 就是 `node --test`、`ci.yml` 真的跑它并带下限、文档里写的条数与 `WEB_BASELINE` 是同一个数（含"没有任何文档写着基线值就判红"的反向判据，带日期的行整行跳过）。本脚本仍只做静态检查、不跑测试，真跑一遍是 CI 的职责。计数 **90 → 94 通过 / 0 失败 / 1 警告**（警告照旧是本机没有 docker CLI 判不了镜像体积）。
 
 ### 文档订正
@@ -41,7 +81,7 @@
 - `cd apps/web-admin && npm test`：**11/11 绿**（本机 Node v24.9.0；CI 用 Node 22）。
 - `npm run build`（`vue-tsc -b` + `vite build`）：通过（`dist/` 那条 >500kB 的分包警告是既有的，与本轮无关）。
 - `bash scripts/release-verify.sh`：**94 通过 / 0 失败 / 1 警告**。
-- **没跑的**：CI 上那条 `npm test` 步骤本身没跑过（要推 `main` 才知道 runner 上的解析与条数下限对不对，本机只验了同一句 `sed` 能从真实输出里解析出 11）。Java 365 与 C# 582 两个基线本轮没动——这一轮只碰管理台与文档。
+- **没跑的**：CI 上那条 `npm test` 步骤本身没跑过（要推 `main` 才知道 runner 上的解析与条数下限对不对，本机只验了同一句 `sed` 能从真实输出里解析出 11）。Java 与 C# 两个计数基线本轮没动——这一轮只碰管理台与文档。
 
 ---
 
@@ -473,7 +513,7 @@
 ### 测试
 
 - `ScheduledTaskLogicTest` 新增 5 条：触发时把 `sender_id` 与头像传给摄入、缺 `sender_id` 回落 `scheduled`、空白 ID 回退与 64 字截断、头像只收 http(s)（`data:` / 相对路径 / 超 1024 都 400）、列表与详情回显两列；`ScheduledTaskStoreTest` 新增 1 条 `V12` 往返（INSERT 列清单、`SELECT *` 扫描、UPDATE 都带得到这两列）。
-- web-admin `npm run build` 通过（`vue-tsc` 无错），并在自起实例（8081）上验证粘贴回填、预览、保存、编辑回显与三类异常提示；Maven 全量 **365 条（core 50 + server 315），0 失败 0 错误**，本机 332 执行 + 33 跳过（DB/S3 门控，与基线逐条一致）。
+- web-admin `npm run build` 通过（`vue-tsc` 无错），并在自起实例（8081）上验证粘贴回填、预览、保存、编辑回显与三类异常提示；Maven 全量 **365 条（当时的 core 50 与 server 315），0 失败 0 错误**，本机 332 执行 + 33 跳过（DB/S3 门控，与基线逐条一致）。
 
 ---
 

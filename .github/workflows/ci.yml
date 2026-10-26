@@ -209,7 +209,14 @@ jobs:
       # 359 → 365 是定时任务自带的发送者身份：ScheduledTaskLogicTest 新增 5 条（触发时把 sender_id/头像
       # 传给摄入、缺 sender_id 回退 scheduled、ID 空白回退与 64 字截断、头像只收 http(s)、列表与详情回显），
       # ScheduledTaskStoreTest 1 条 V12 往返（INSERT 列清单、扫描那条 SELECT *、UPDATE 都带得到这两列）。
-      # 总基线从此是 server 315 + core 50 = 365。
+      # 365 → 372 是头像尺寸归一化的纯函数（AvatarNormalizeTest 7 条）：收成 256 正方形、中心裁剪、
+      # png 保透明而 jpeg 仍是 jpeg、小图与 1×1 一字节不动（不放大）、gif/webp 原样透传、解不动就回退原字节、
+      # size <= 0 是关掉。这一类故意不挂 objectStorageReady 门——media 那 5 个类在开发机上全跳过，
+      # 挂上去等于这条规则在本机没人看着。
+      # 372 → 375 是接线那一层（AvatarStoreNormalizeTest 3 条）：storeAvatar 真把归一化后的字节落进对象、
+      # pb.media.avatar-size=0 时原样落库、1×1 仍是一字节不动。门是 databaseReady，因为进出都走
+      # MediaObjects 的抽象口，本地目录模式跑得动，不必等真桶。
+      # 总基线从此是 server 325 + core 50 = 375。
       - name: 断言 DB 闸门用例真的执行了
         run: |
           set -euo pipefail
@@ -227,8 +234,8 @@ jobs:
           if skipped != 0:
               print("::error::有 %d 条用例被跳过：DB/S3 凭据没传到位（见本 job 顶部说明），全绿不代表测过" % skipped)
               sys.exit(1)
-          if tests < 365:
-              print("::error::用例总数 %d 低于基线 365，测试被静默裁剪了" % tests); sys.exit(1)
+          if tests < 375:
+              print("::error::用例总数 %d 低于基线 375，测试被静默裁剪了" % tests); sys.exit(1)
           print("✅ 闸门用例全部执行")
           PY
 
