@@ -343,7 +343,9 @@ private fun AppLockScreen(app: App) {
                                 error = false
                                 if (pin.length < 6) pin += key
                             }) {
-                                Text(key, style = MaterialTheme.typography.headlineSmall)
+                                // 键盘数字是这一屏最大的字，但六档里最大只到 H1 20；原来走 headlineSmall
+                                // 拿到的是 Material 基线的 24sp，不在 §9.2 的档位里
+                                Text(key, style = MaterialTheme.typography.headlineLarge)
                             }
                         }
                     }
@@ -1732,13 +1734,20 @@ private fun MarkdownBody(text: String) {
                 is MdBlock.Paragraph -> Text(renderRichText(block.text),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface)
-                is MdBlock.Heading -> Text(renderRichText(block.text),
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = when (block.level) {
-                        1 -> 20.sp; 2 -> 18.sp; 3 -> 16.sp; else -> 15.sp
-                    },
-                    modifier = Modifier.padding(top = 4.dp))
+                // 标题只走 H1–H4 四档，且必须带行高：只写 fontSize 时行高落回字体默认的 ~1.2×，
+                // 同一个气泡里 H1 反而比正文（1.53×）更挤
+                is MdBlock.Heading -> {
+                    val base = when (block.level) {
+                        1 -> MaterialTheme.typography.headlineLarge
+                        2 -> MaterialTheme.typography.headlineMedium
+                        3 -> MaterialTheme.typography.headlineSmall
+                        else -> MaterialTheme.typography.bodyLarge
+                    }
+                    Text(renderRichText(block.text),
+                        style = base.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 4.dp))
+                }
                 is MdBlock.Quote -> Row(Modifier.height(IntrinsicSize.Min)) {
                     Box(Modifier.width(3.dp).fillMaxHeight()
                         .background(MaterialTheme.colorScheme.outline))

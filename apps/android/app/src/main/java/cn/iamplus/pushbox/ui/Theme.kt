@@ -132,11 +132,33 @@ private val DarkScheme = darkColorScheme(
     outlineVariant = Color(0xFF333333),
 )
 
-/** §9.2 的字号规定：正文 15sp / 行高 1.55，会话名 16sp，摘要 13sp，时间 12sp。 */
-private val PushBoxTypography = Typography(
+/**
+ * §9.2 的六档字号 {12, 13, 15, 16, 18, 20} 与按 1.53× 取整的行高（20→28、18→25、16→22、15→23、13→18、12→16）。
+ *
+ * 15 个槽位全部写掉，不是"没处用也占着"：没覆盖的槽位会落到 Material3 基线值，而基线里
+ * `headlineSmall` 是 24sp、`titleSmall` 与 `labelLarge` 是 14sp——24 和 14 都不在六档里。
+ * 真机上这三个槽位各自出过一次事故形状：PIN 键盘的数字比页面标题还大、通知频道名比正文大一号、
+ * 设备状态标签也是 14。编译期不报、预览里也不容易看出来，所以这里一次写完，
+ * 界面里任何一处 `MaterialTheme.typography.*` 都只可能落在合法档位上（`TypographyTest` 钉住）。
+ *
+ * display 三档在 §9.2 里没有对应层级，压到 H1：基线 57sp 的 displayLarge 一出现就会糊满一屏。
+ */
+internal val PushBoxTypography = Typography(
+    displayLarge = TextStyle(fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold),
+    displayMedium = TextStyle(fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold),
+    displaySmall = TextStyle(fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold),
+    headlineLarge = TextStyle(fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold),
+    headlineMedium = TextStyle(fontSize = 18.sp, lineHeight = 25.sp, fontWeight = FontWeight.Bold),
+    headlineSmall = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold),
+    titleLarge = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold),
     titleMedium = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Normal, lineHeight = 22.sp),
+    titleSmall = TextStyle(fontSize = 15.sp, lineHeight = 23.sp, fontWeight = FontWeight.Medium),
     bodyLarge = TextStyle(fontSize = 15.sp, lineHeight = 23.sp),
     bodyMedium = TextStyle(fontSize = 13.sp, lineHeight = 18.sp),
+    bodySmall = TextStyle(fontSize = 13.sp, lineHeight = 18.sp),
+    // 按钮文字走 labelLarge。13 而不是 12：中文按钮在 12sp 下笔画会糊，13 仍属 Small 档。
+    labelLarge = TextStyle(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium),
+    labelMedium = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium),
     // 字号归字号，颜色归调用方：原先在这里焊死 #8A8A8A（在 #F7F7F7 上约 3.4:1），
     // 没显式传色的地方就都继承这一档灰，底栏标签与日期分节首当其冲。
     labelSmall = TextStyle(fontSize = 12.sp, lineHeight = 16.sp),
