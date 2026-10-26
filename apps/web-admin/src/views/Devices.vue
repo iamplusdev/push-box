@@ -17,8 +17,15 @@
       </div>
     </div>
 
-    <el-table v-loading="loading" :data="filtered" stripe border style="width: 100%">
-      <el-table-column prop="device_id" label="设备 ID" min-width="200" show-overflow-tooltip />
+    <el-table v-loading="loading" :data="paged" stripe border style="width: 100%">
+      <el-table-column label="设备 ID" min-width="260">
+        <template #default="{ row }">
+          <div class="id-cell">
+            <span class="id-text" :title="row.device_id">{{ row.device_id }}</span>
+            <CopyButton :text="row.device_id" label="设备 ID" />
+          </div>
+        </template>
+      </el-table-column>
       <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip />
       <el-table-column prop="platform" label="平台" width="100" />
       <el-table-column prop="group_id" label="所属空间" width="180" show-overflow-tooltip />
@@ -52,24 +59,37 @@
     </el-table>
 
     <div class="table-footer" v-if="!loading && devices.length > 0">
-      共 {{ devices.length }} 台设备<template v-if="keyword">，筛选后 {{ filtered.length }} 台</template>
+      <span
+        >共 {{ devices.length }} 台设备<template v-if="keyword">，筛选后 {{ filtered.length }} 台</template></span
+      >
+      <el-pagination
+        v-model:current-page="page"
+        :page-size="PAGE_SIZE"
+        :total="filtered.length"
+        layout="prev, pager, next"
+        background
+        hide-on-single-page
+      />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
+import CopyButton from '@/components/CopyButton.vue'
 import { getDevices, revokeDevice } from '@/api/devices'
 import type { Device } from '@/api/types'
 import { formatTime } from '@/utils/format'
 
 const ONLINE_WINDOW_MS = 90 * 1000
+const PAGE_SIZE = 20
 
 const loading = ref(false)
 const devices = ref<Device[]>([])
 const keyword = ref('')
+const page = ref(1)
 
 const filtered = computed(() => {
   const k = keyword.value.trim().toLowerCase()
@@ -81,6 +101,24 @@ const filtered = computed(() => {
       (d.group_id || '').toLowerCase().includes(k)
   )
 })
+
+// 前端分页只切展示用的那一页；筛选或吊销让结果变短时把页码夹回有效范围
+const paged = computed(() => {
+  const start = (page.value - 1) * PAGE_SIZE
+  return filtered.value.slice(start, start + PAGE_SIZE)
+})
+
+watch(keyword, () => {
+  page.value = 1
+})
+
+watch(
+  () => filtered.value.length,
+  len => {
+    const maxPage = Math.max(1, Math.ceil(len / PAGE_SIZE))
+    if (page.value > maxPage) page.value = maxPage
+  }
+)
 
 function isOnline(row: Device): boolean {
   return !!row.last_seen_at && Date.now() - row.last_seen_at < ONLINE_WINDOW_MS
@@ -136,9 +174,28 @@ onMounted(fetchDevices)
 }
 
 .table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin-top: 12px;
   font-size: 12px;
   color: #909399;
+}
+
+.id-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.id-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .muted-dash {

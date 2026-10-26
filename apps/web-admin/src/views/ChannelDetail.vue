@@ -6,7 +6,12 @@
     </div>
 
     <el-descriptions v-if="channel" :column="2" border>
-      <el-descriptions-item label="频道号码">{{ channel.channel_no }}</el-descriptions-item>
+      <el-descriptions-item label="频道号码">
+        <div class="copy-row">
+          <el-input :model-value="channel.channel_no" readonly size="small" class="copy-input" />
+          <CopyButton :text="channel.channel_no" label="频道号码" />
+        </div>
+      </el-descriptions-item>
       <el-descriptions-item label="名称">{{ channel.name || '-' }}</el-descriptions-item>
       <el-descriptions-item label="所属空间">{{ channel.group_id }}</el-descriptions-item>
       <el-descriptions-item label="创建时间">{{ formatTime(channel.created_at) }}</el-descriptions-item>
@@ -29,7 +34,14 @@
 
     <h3 class="section-title">接入设备</h3>
     <el-table :data="devices" stripe border style="width: 100%">
-      <el-table-column prop="device_id" label="设备 ID" min-width="200" show-overflow-tooltip />
+      <el-table-column label="设备 ID" min-width="260">
+        <template #default="{ row }">
+          <div class="id-cell">
+            <span class="id-text" :title="row.device_id">{{ row.device_id }}</span>
+            <CopyButton :text="row.device_id" label="设备 ID" />
+          </div>
+        </template>
+      </el-table-column>
       <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip />
       <el-table-column prop="platform" label="平台" width="100" />
       <el-table-column label="最近在线" width="170">
@@ -45,6 +57,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import CopyButton from '@/components/CopyButton.vue'
 import { getChannelDetail } from '@/api/channels'
 import type { Channel, Device } from '@/api/types'
 import { formatTime, formatBytes, formatQuota, formatFlag, levelTagType } from '@/utils/format'
@@ -86,5 +99,31 @@ onMounted(fetchDetail)
 .section-title {
   margin: 24px 0 12px;
   font-size: 15px;
+}
+
+/* 频道号码要能被整段拿走：只读输入框 + 一键复制，不是让人在表格里拖选 */
+.copy-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.copy-input {
+  width: 180px;
+}
+
+.id-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.id-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 </style>

@@ -17,7 +17,7 @@
       </div>
     </div>
 
-    <el-table v-loading="loading" :data="filtered" stripe border style="width: 100%">
+    <el-table v-loading="loading" :data="paged" stripe border style="width: 100%">
       <el-table-column prop="channel_no" label="频道号码" width="130">
         <template #default="{ row }">
           <router-link :to="`/channels/${row.channel_no}`" class="channel-link">
@@ -54,22 +54,35 @@
     </el-table>
 
     <div class="table-footer" v-if="!loading && channels.length > 0">
-      共 {{ channels.length }} 个频道<template v-if="keyword">，筛选后 {{ filtered.length }} 个</template>
+      <span
+        >共 {{ channels.length }} 个频道<template v-if="keyword">，筛选后 {{ filtered.length }} 个</template></span
+      >
+      <el-pagination
+        v-model:current-page="page"
+        :page-size="PAGE_SIZE"
+        :total="filtered.length"
+        layout="prev, pager, next"
+        background
+        hide-on-single-page
+      />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { getChannels, deleteChannel } from '@/api/channels'
 import type { Channel } from '@/api/types'
 import { formatTime, levelTagType } from '@/utils/format'
 
+const PAGE_SIZE = 20
+
 const loading = ref(false)
 const channels = ref<Channel[]>([])
 const keyword = ref('')
+const page = ref(1)
 
 const filtered = computed(() => {
   const k = keyword.value.trim().toLowerCase()
@@ -81,6 +94,24 @@ const filtered = computed(() => {
       (c.group_id || '').toLowerCase().includes(k)
   )
 })
+
+// 前端分页只切展示用的那一页；筛选或删除让结果变短时把页码夹回有效范围
+const paged = computed(() => {
+  const start = (page.value - 1) * PAGE_SIZE
+  return filtered.value.slice(start, start + PAGE_SIZE)
+})
+
+watch(keyword, () => {
+  page.value = 1
+})
+
+watch(
+  () => filtered.value.length,
+  len => {
+    const maxPage = Math.max(1, Math.ceil(len / PAGE_SIZE))
+    if (page.value > maxPage) page.value = maxPage
+  }
+)
 
 async function fetchChannels() {
   loading.value = true
@@ -137,6 +168,10 @@ onMounted(fetchChannels)
 }
 
 .table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin-top: 12px;
   font-size: 12px;
   color: #909399;

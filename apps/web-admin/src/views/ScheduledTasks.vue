@@ -26,7 +26,7 @@
       </div>
     </div>
 
-    <el-table v-loading="loading" :data="filtered" stripe border style="width: 100%">
+    <el-table v-loading="loading" :data="paged" stripe border style="width: 100%">
       <el-table-column prop="name" label="任务名" min-width="140" show-overflow-tooltip />
       <el-table-column label="分类" width="120" show-overflow-tooltip>
         <template #default="{ row }">
@@ -104,7 +104,19 @@
     </el-table>
 
     <div class="table-footer" v-if="!loading && tasks.length > 0">
-      共 {{ tasks.length }} 个任务<template v-if="keyword || categoryFilter">，筛选后 {{ filtered.length }} 个</template>
+      <span
+        >共 {{ tasks.length }} 个任务<template v-if="keyword || categoryFilter"
+          >，筛选后 {{ filtered.length }} 个</template
+        ></span
+      >
+      <el-pagination
+        v-model:current-page="page"
+        :page-size="PAGE_SIZE"
+        :total="filtered.length"
+        layout="prev, pager, next"
+        background
+        hide-on-single-page
+      />
     </div>
 
     <el-dialog
@@ -382,12 +394,15 @@ import { getChannels } from '@/api/channels'
 import type { Channel, ScheduledTask } from '@/api/types'
 import { formatTime, levelTagType } from '@/utils/format'
 
+const PAGE_SIZE = 20
+
 const loading = ref(false)
 const saving = ref(false)
 const tasks = ref<ScheduledTask[]>([])
 const channels = ref<Channel[]>([])
 const keyword = ref('')
 const categoryFilter = ref('')
+const page = ref(1)
 const toggling = ref('')
 const dialogVisible = ref(false)
 const editingId = ref('')
@@ -684,6 +699,24 @@ const filtered = computed(() => {
       (t.channel_name || '').toLowerCase().includes(k)
   )
 })
+
+// 前端分页只切展示用的那一页；改筛选或删任务让结果变短时把页码夹回有效范围
+const paged = computed(() => {
+  const start = (page.value - 1) * PAGE_SIZE
+  return filtered.value.slice(start, start + PAGE_SIZE)
+})
+
+watch([keyword, categoryFilter], () => {
+  page.value = 1
+})
+
+watch(
+  () => filtered.value.length,
+  len => {
+    const maxPage = Math.max(1, Math.ceil(len / PAGE_SIZE))
+    if (page.value > maxPage) page.value = maxPage
+  }
+)
 
 async function fetchTasks() {
   loading.value = true
@@ -1127,6 +1160,10 @@ onMounted(() => {
 }
 
 .table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin-top: 12px;
   font-size: 12px;
   color: #909399;
