@@ -9,7 +9,7 @@ name: CI
 # apps/server/data/config/pushbox.json —— 与真部署时安装页落盘的是同一个文件、同一份形状。
 # 三端各自的最小可跑口径：
 #   server    mysql:8.4（--ngram_token_size=2，V1 的 FULLTEXT 索引与 SearchServiceTest 都依赖它）+ rustfs
-#   web-admin npm ci && npm run build（vue-tsc -b 是类型门禁，vite build 顺带证明能烘进镜像）
+#   web-admin npm test + npm run build（排版断言只读源码；vue-tsc -b 是类型门禁，vite build 顺带证明能烘进镜像）
 #   windows   dotnet test ——必须 windows runner：PushBox.Crypto.Tests 引用 WinUI/WPF 主项目（net8.0-windows*）
 #   android   ./gradlew :app:assembleDebug（不签名，只为让 PR 上就能看到编译退化）
 on:
@@ -243,7 +243,7 @@ jobs:
           retention-days: 7
 
   web-admin:
-    name: 管理台类型检查与构建
+    name: 管理台断言、类型检查与构建
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -252,11 +252,35 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/web-admin/package-lock.json
-      - name: npm ci && npm run build
+      - name: npm ci
+        working-directory: apps/web-admin
+        run: npm ci
+      # 这一端原来只有"类型检查 + 构建"两道闸，排版规范（六档字号与行高、页头、表格节奏、对话框单层滚动）
+      # 全靠人手在浏览器里量。Android 与 Windows 各有一份 TypographyTest，缺的这一份补在这里：
+      # 断言只读源码、零依赖，排在 build 之前——看排版退化不必先等一遍 vue-tsc。
+      #
+      # 条数那一行不是可选的：node --test 在一条用例都没发现时同样退 0（2026-10-26 在空目录实测
+      # `tests 0 / pass 0 / fail 0`），于是"整份断言没被跑到"和"全绿"在退出码上长得一模一样，
+      # 和 Java/C# 那两个计数闸防的是同一件事。下面的 WEB_BASELINE 是 release-verify.sh 里
+      # 管理台计数闸读的唯一真值：加删断言就同步改它，别反过来抄文档。
+      - name: npm test（排版断言）
         working-directory: apps/web-admin
         run: |
-          npm ci
-          npm run build
+          set -euo pipefail
+          npm test 2>&1 | tee /tmp/web-admin-test.log
+          WEB_BASELINE=11
+          tests=$(sed -n 's/^.* tests \([0-9][0-9]*\)$/\1/p' /tmp/web-admin-test.log | tail -1)
+          if [ -z "$tests" ]; then
+            echo "::error::没能从 npm test 的输出里解析出用例条数：汇总格式变了，这条判据得跟着改，别删"
+            exit 1
+          elif [ "$tests" -lt "$WEB_BASELINE" ]; then
+            echo "::error::管理台排版断言只剩 $tests 条（基线 $WEB_BASELINE）：有用例被删掉，或整份文件没被 node --test 发现"
+            exit 1
+          fi
+          echo "✅ 管理台排版断言：$tests 条（基线 $WEB_BASELINE）"
+      - name: npm run build
+        working-directory: apps/web-admin
+        run: npm run build
       - name: 断言产物非空
         run: |
           set -euo pipefail

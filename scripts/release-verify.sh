@@ -813,6 +813,60 @@ else
     pass "site-deploy.yml 护栏齐全（paths 过滤 + 树哈希比较 + 不挂 tag + 只用官方 action + .nojekyll 就位）"
 fi
 
+# 管理台排版闸（2026-10-26 第五步补上）。Android 与 Windows 各有一份 TypographyTest 钉着六档字号，
+# 管理台这一端原来只有"类型检查 + 构建"两道闸，规范全靠人手在浏览器里量——那一份补在
+# apps/web-admin/tests/typography.test.mjs，由 ci.yml 的 web-admin job 跑。
+# 这里照旧只做静态判：文件在不在、脚本接没接、CI 跑没跑并带条数下限、文档写的条数与基线是否同一个数。
+# 条数下限那一条不是可选的——node --test 在一条用例都没发现时同样退 0（本机在空目录实测
+# `tests 0 / pass 0 / fail 0`），于是"整份断言没被跑到"与"全绿"在退出码上长得一模一样，
+# 和 Java/C# 那两个计数闸防的是同一件事。真跑一遍是 CI 的职责，本脚本不跑测试（见文件头那句口径）。
+WEB_TEST_REL="apps/web-admin/tests/typography.test.mjs"
+if [ ! -f "$ROOT_DIR/$WEB_TEST_REL" ]; then
+    fail "$WEB_TEST_REL 缺失：管理台的排版规范没有任何东西在断"
+elif ! (cd "$ROOT_DIR" && git ls-files --error-unmatch "$WEB_TEST_REL" >/dev/null 2>&1); then
+    fail "$WEB_TEST_REL 没进 git（.gitignore 还在挡？CI 上不会有这份文件，闸门等于不存在）"
+else
+    pass "管理台排版断言已入库（$WEB_TEST_REL）"
+fi
+
+if grep -qE '"test":[[:space:]]*"node --test"' "$ROOT_DIR/apps/web-admin/package.json"; then
+    pass "web-admin 的 test 脚本就是 node --test（零依赖，靠自动发现 *.test.mjs）"
+else
+    fail "web-admin 的 package.json 里没有「\"test\": \"node --test\"」：npm test 跑的不是那份断言"
+fi
+
+WEB_CI_BASELINE=$(grep -oE 'WEB_BASELINE=[0-9]+' "$ROOT_DIR/.github/workflows/ci.yml" | grep -oE '[0-9]+' | tail -1)
+if ! grep -q 'npm test' "$ROOT_DIR/.github/workflows/ci.yml"; then
+    fail "ci.yml 里没有跑 npm test：排版断言只活在开发机上，推上去没有任何流水线执行它"
+elif [ -z "$WEB_CI_BASELINE" ]; then
+    fail "ci.yml 跑了 npm test 却没有条数下限：node --test 发现不到用例时也退 0，「整份断言没被跑到」会显示成全绿"
+else
+    pass "ci.yml 的 web-admin job 跑 npm test 并带条数下限（$WEB_CI_BASELINE）"
+fi
+
+# 文档那个数同样是人手抄的，所以现读现比，形状与 Java/C# 两条同源：
+#   ① 只认"关键词同一行里的「N 条」"，别的数字（页码、字号、px）一概不看；
+#   ② 带日期的行整行跳过——CHANGELOG 与发布准备报告有意把历次实测并排留着当证据，
+#      单值判据在那里只会误报（docs/审计报告.md 同因由整个不扫）。
+#   ③ 反向判据：没有任何一处文档写着基线值时判红，否则这条闸只是"全都对"却没在比东西。
+WEB_DOC_KEYWORD='排版断言|npm test|node --test'
+WEB_DOC_PATHS=(README.md docs/开发指南.md docs/测试指南.md docs/字体规范.md docs/软件设计方案.md)
+WEB_DOC_LINES=$(git -C "$ROOT_DIR" grep -nE "$WEB_DOC_KEYWORD" -- "${WEB_DOC_PATHS[@]}" \
+    | grep -vE '2026-1[0-2]-[0-9]{2}' || true)
+WEB_DOC_COUNT_LINES=$(printf '%s\n' "$WEB_DOC_LINES" | grep -E '[0-9]+[[:space:]]*条' || true)
+WEB_DOC_NUMS=$(printf '%s\n' "$WEB_DOC_COUNT_LINES" | grep -oE '[0-9]+[[:space:]]*条' | grep -oE '[0-9]+' | sort -un | tr '\n' ' ' || true)
+WEB_DOC_NUMS=${WEB_DOC_NUMS% }
+WEB_DOC_FILES=$(printf '%s\n' "$WEB_DOC_COUNT_LINES" | grep -oE '^[^:]+' | sort -u | grep -c . || true)
+if [ -z "$WEB_CI_BASELINE" ]; then
+    : # 上面已经判过红，这里不再叠一条
+elif [ "$WEB_DOC_FILES" -lt 1 ]; then
+    fail "没有任何一处文档写着管理台排版断言的条数：这道计数闸在空转，改了断言没人会知道文档要不要跟"
+elif [ "$WEB_DOC_NUMS" != "$WEB_CI_BASELINE" ]; then
+    fail "文档里的管理台排版断言条数是 $WEB_DOC_NUMS，ci.yml 基线是 $WEB_CI_BASELINE；不一致的行：$(printf '%s\n' "$WEB_DOC_LINES" | grep -E '[0-9]+[[:space:]]*条' | cut -c1-160 | tr '\n' ' ')"
+else
+    pass "文档里的管理台排版断言条数与 ci.yml 基线一致：$WEB_CI_BASELINE（$WEB_DOC_FILES 个文档）"
+fi
+
 # ========================================
 # 6. 文档完整性检查
 # ========================================
