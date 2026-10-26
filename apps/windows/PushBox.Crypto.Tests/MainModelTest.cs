@@ -376,12 +376,54 @@ public sealed class MainModelTest : IDisposable
     // ---- 顶栏与栏宽 ---------------------------------------------------------------------------------
 
     [Fact]
-    public void TheNarrowBreakIsTheDocumentedPaneWidth()
+    public void ThePaneBreakIsTheDocumentedPaneWidth()
     {
-        var model = Model();
+        // 分界两侧只差 0.1：719.9 还退单栏，720 就摆满四栏
+        Assert.True(MainModel.PaneLayoutFor(MainModel.NarrowPaneBelow - 0.1, false, 260).Narrow);
+        Assert.False(MainModel.PaneLayoutFor(MainModel.NarrowPaneBelow, false, 260).Narrow);
+    }
 
-        Assert.True(model.IsNarrow(MainModel.NarrowPaneBelow - 0.1));
-        Assert.False(model.IsNarrow(MainModel.NarrowPaneBelow));
+    [Fact]
+    public void TheWidePaneKeepsAllFourColumnsAndClampsTheListWidth()
+    {
+        var layout = MainModel.PaneLayoutFor(1080, false, 260);
+
+        Assert.False(layout.Narrow);
+        Assert.Equal(MainModel.ColumnPlan.Of(MainModel.MenuColumnWidth), layout.Menu);
+        Assert.Equal(MainModel.ColumnPlan.Of(260), layout.List);
+        Assert.Equal(MainModel.ColumnPlan.Of(MainModel.SplitterColumnWidth), layout.Splitter);
+        Assert.True(layout.Conversation.Star);
+        // 宽屏时上下限要装回去，否则拖拽手柄能把列表拖成一条缝或半屏
+        Assert.Equal(MainModel.ListMinWidth, layout.ListMinWidth);
+        Assert.Equal(MainModel.ListMaxWidth, layout.ListMaxWidth);
+        // 1080 - 60 - 260 - 4：气泡百分比吃的是这个数
+        Assert.Equal(756, layout.RightPaneWidth);
+
+        // 拖过头或拖太小都在模型这层就被夹住，窗口拿到的永远是"合法值"
+        Assert.Equal(400, MainModel.PaneLayoutFor(1080, false, 5000).List.Width);
+        Assert.Equal(200, MainModel.PaneLayoutFor(1080, false, 10).List.Width);
+    }
+
+    [Fact]
+    public void TheNarrowPaneReleasesTheListBoundsSoCollapsingIsReal()
+    {
+        // 打开会话：列表收成 0。只是 Width=0 不够——XAML 的 MinWidth=200 会把它夹回 200px，
+        // 所以这里必须同时看到上下限被放开
+        var collapsed = MainModel.PaneLayoutFor(440, true, 260);
+        Assert.True(collapsed.Narrow);
+        Assert.Equal(MainModel.ColumnPlan.Of(0), collapsed.List);
+        Assert.Equal(0, collapsed.ListMinWidth);
+        Assert.Equal(MainModel.PaneLayout.NoMaxWidth, collapsed.ListMaxWidth);
+        Assert.True(collapsed.Conversation.Star);
+        Assert.Equal(380, collapsed.RightPaneWidth);
+
+        // 没选会话：列表吃满。窄屏最宽能到 700-60=640，MaxWidth=400 会把它截在半路
+        var listOnly = MainModel.PaneLayoutFor(700, false, 260);
+        Assert.True(listOnly.List.Star);
+        Assert.Equal(0, listOnly.ListMinWidth);
+        Assert.Equal(MainModel.PaneLayout.NoMaxWidth, listOnly.ListMaxWidth);
+        Assert.Equal(0, listOnly.Conversation.Width);
+        Assert.False(listOnly.Conversation.Star);
     }
 
     [Fact]

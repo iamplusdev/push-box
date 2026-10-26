@@ -3,24 +3,32 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <!-- 页面与卡片背景 -->
+    <!-- 页面与卡片背景。层级是"页面最暗、卡片与菜单浮在最上面"：
+         卡片必须先比页面亮，边框（Divider）才有地方显形——两者同色时那 1px 等于没画 -->
     <SolidColorBrush x:Key="Bg.Page" Color="#FAFAFA" />
-    <SolidColorBrush x:Key="Bg.Elevated" Color="#E0E0E0" />
+    <SolidColorBrush x:Key="Bg.Elevated" Color="#FFFFFF" />
     <SolidColorBrush x:Key="Bg.Bubble.In" Color="#E8E8EA" />
     <SolidColorBrush x:Key="Bg.SenderList" Color="#EEEFF0" />
     <!-- 会话行选中底：比列表底深一档的灰（微信 PC 那档），不铺 accent——整行染绿太吵 -->
     <SolidColorBrush x:Key="Bg.Selected" Color="#E2E2E2" />
+    <!-- 选中项/开关的浅绿底：accent 只做圆点与文字，整块铺绿太吵 -->
+    <SolidColorBrush x:Key="Bg.AccentTint" Color="#E6F9EF" />
 
-    <!-- 文字颜色 -->
+    <!-- 文字颜色。#5F5F5F 是对比度兜底：13px 次要字落在 #E0E0E0 那类底上时，
+         原来的 #757575 只有 3.5:1；#5F5F5F 在页面/卡片/列表三种底上都在 5:1 以上 -->
     <SolidColorBrush x:Key="Fg.Primary" Color="#19191A" />
-    <SolidColorBrush x:Key="Fg.Secondary" Color="#757575" />
+    <SolidColorBrush x:Key="Fg.Secondary" Color="#5F5F5F" />
 
-    <!-- 品牌主色（微信风格绿） -->
-    <SolidColorBrush x:Key="Accent" Color="#14A36A" />
+    <!-- 品牌主色（微信风格绿）。#0F7A4F 的白字对比度 5.4:1：
+         它同时当按钮底和正文色，浅绿 #0ABF5E 那类只够当 ≥18px 粗体的装饰色 -->
+    <SolidColorBrush x:Key="Accent" Color="#0F7A4F" />
+    <!-- 压在 Accent 实底上的字（主按钮）。深色主题的主色偏亮，所以那一边是深字 -->
+    <SolidColorBrush x:Key="OnAccent" Color="#FFFFFF" />
 
     <!-- 语义色 -->
     <SolidColorBrush x:Key="Badge.Unread" Color="#F5222D" />
-    <SolidColorBrush x:Key="Divider" Color="#E0E0E0" />
+    <!-- 分割线要比菜单底/卡片底都深一档：与 Bg.Elevated 同值时，菜单栏的右边框直接消失 -->
+    <SolidColorBrush x:Key="Divider" Color="#CFCFCF" />
     <SolidColorBrush x:Key="State.Offline" Color="#FF8C00" />
     <SolidColorBrush x:Key="Level.Error" Color="#F5222D" />
     <SolidColorBrush x:Key="Level.Warning" Color="#FF8C00" />

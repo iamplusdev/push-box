@@ -14,7 +14,7 @@
         <!-- 导航项样式：增加圆角和过渡效果 -->
         <Style x:Key="NavItemStyle" TargetType="RadioButton">
             <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="Medium" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -28,12 +28,9 @@
                                 <Setter TargetName="Shell" Property="Background" Value="{DynamicResource Bg.Page}" />
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Shell" Property="Background">
-                                    <Setter.Value>
-                                        <SolidColorBrush Color="#0ABF5E" Opacity="0.1"/>
-                                    </Setter.Value>
-                                </Setter>
-                                <Setter Property="Foreground" Value="#0ABF5E" />
+                                <Setter TargetName="Shell" Property="Background"
+                                        Value="{DynamicResource Bg.AccentTint}" />
+                                <Setter Property="Foreground" Value="{DynamicResource Accent}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -49,7 +46,8 @@
             <Setter Property="Foreground" Value="{DynamicResource Fg.Secondary}" />
         </Style>
         
-        <!-- 输入框样式：增加圆角和内边距 -->
+        <!-- 输入框样式：增加圆角和内边距。底色与前景必须跟主题走——
+             不写的话深色模式下这里是一片系统白底、字却是浅灰的 -->
         <Style TargetType="TextBox">
             <Setter Property="FontSize" Value="13" />
             <Setter Property="Height" Value="32" />
@@ -57,6 +55,9 @@
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="BorderBrush" Value="{DynamicResource Divider}" />
+            <Setter Property="Background" Value="{DynamicResource Bg.Page}" />
+            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
+            <Setter Property="CaretBrush" Value="{DynamicResource Fg.Primary}" />
         </Style>
         
         <!-- 按钮样式：增加圆角和主色 -->
@@ -64,8 +65,8 @@
             <Setter Property="FontSize" Value="13" />
             <Setter Property="Height" Value="32" />
             <Setter Property="Padding" Value="16,0" />
-            <Setter Property="Background" Value="#0ABF5E" />
-            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Background" Value="{DynamicResource Accent}" />
+            <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Cursor" Value="Hand" />
         </Style>
@@ -80,21 +81,7 @@
             <Setter Property="Margin" Value="0,12,0,0" />
         </Style>
         
-        <!-- Section 标题样式 -->
-        <Style x:Key="SectionTitleStyle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="16" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
-            <Setter Property="Margin" Value="0,16,0,8" />
-        </Style>
-        
-        <!-- Description 样式 -->
-        <Style x:Key="DescriptionStyle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="TextWrapping" Value="Wrap" />
-            <Setter Property="Foreground" Value="{DynamicResource Fg.Secondary}" />
-            <Setter Property="Margin" Value="0,4,0,0" />
-        </Style>
+        <!-- Section 标题与说明直接用 §9.2 的 Text.* 档位，不在这一页另立一套字号 -->
     </Window.Resources>
 
     <Grid>
@@ -126,22 +113,26 @@
             <ScrollViewer x:Name="ChannelsPanel" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
                     <!-- 新建频道 Section -->
-                    <TextBlock Text="新建频道" Style="{StaticResource SectionTitleStyle}" />
-                    <TextBlock Text="创建一个新频道来接收消息，名称留空则使用设备名" 
-                               Style="{StaticResource DescriptionStyle}"/>
+                    <TextBlock Text="新建频道" Style="{DynamicResource Text.H3}"
+                               Foreground="{DynamicResource Fg.Primary}" Margin="0,16,0,8" />
+                    <TextBlock Text="创建一个新频道来接收消息，名称留空则使用设备名"
+                               Style="{DynamicResource Text.Label}" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Fg.Secondary}" Margin="0,4,0,0"/>
                     
                     <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                         <TextBox x:Name="NewChannelName" Width="280" />
                         <Button Content="新建频道" Margin="10,0,0,0" Click="OnCreateChannel" />
                         <Button Content="刷新列表" Margin="10,0,0,0" Click="OnReloadChannels" 
-                                Background="Transparent" Foreground="#0ABF5E" BorderThickness="1" BorderBrush="#0ABF5E"/>
+                                Background="Transparent" Foreground="{DynamicResource Accent}"
+                                BorderThickness="1" BorderBrush="{DynamicResource Accent}"/>
                     </StackPanel>
 
                     <!-- 接入信息卡片 -->
                     <Border x:Name="IssuedCard" Visibility="Collapsed" Style="{StaticResource CardStyle}">
                         <StackPanel>
-                            <TextBlock Text="✅ 接入信息（密钥只显示这一次）" FontSize="14" FontWeight="SemiBold"
-                                       Foreground="#0ABF5E" />
+                            <TextBlock Text="✅ 接入信息（密钥只显示这一次）"
+                                       Style="{DynamicResource Text.H3}"
+                                       Foreground="{DynamicResource Accent}" />
                             <TextBlock x:Name="IssuedNo" FontSize="13" Margin="0,10,0,0"
                                        FontFamily="Consolas, Microsoft YaHei UI"
                                        Foreground="{DynamicResource Fg.Primary}" />
@@ -165,7 +156,8 @@
                     </Border>
 
                     <!-- 加入频道 Section -->
-                    <TextBlock Text="加入频道" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Text="加入频道" Style="{DynamicResource Text.H3}"
+                               Foreground="{DynamicResource Fg.Primary}" Margin="0,16,0,8" />
                     <TextBlock FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap"
                                Text="填别人给你的频道号与密钥即可接收该频道的消息。密钥只用来确认号码写对了，它不是读取凭据；跨 Space 的频道号服务端一律回 404。"
                                Foreground="{DynamicResource Fg.Secondary}" />
@@ -174,7 +166,8 @@
                         <TextBox x:Name="JoinSecret" Width="240" Margin="10,0,0,0" />
                         <Button Content="加入" Margin="10,0,0,0" Click="OnJoinChannel" />
                         <Button Content="用选中频道号" Margin="10,0,0,0" Click="OnUseSelectedNo"
-                                Background="Transparent" Foreground="#0ABF5E" BorderThickness="1" BorderBrush="#0ABF5E"/>
+                                Background="Transparent" Foreground="{DynamicResource Accent}"
+                                BorderThickness="1" BorderBrush="{DynamicResource Accent}"/>
                     </StackPanel>
                     
                     <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
@@ -195,7 +188,8 @@
                                Foreground="{DynamicResource Level.Error}" />
 
                     <!-- 我的频道列表 -->
-                    <TextBlock Text="我的频道" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Text="我的频道" Style="{DynamicResource Text.H3}"
+                               Foreground="{DynamicResource Fg.Primary}" Margin="0,16,0,8" />
                     <ListBox x:Name="ChannelList" Height="160" Margin="0,10,0,0" Background="Transparent"
                              BorderBrush="{DynamicResource Divider}" SelectionChanged="OnChannelSelected"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
@@ -302,7 +296,7 @@
                                     CornerRadius="8" BorderBrush="{DynamicResource Divider}" BorderThickness="1"
                                     Background="{DynamicResource Bg.Page}">
                                 <StackPanel>
-                                    <TextBlock Text="白名单发送者" FontSize="14" FontWeight="SemiBold"
+                                    <TextBlock Text="白名单发送者" Style="{DynamicResource Text.H3}"
                                                Foreground="{DynamicResource Fg.Primary}" />
                                     <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                         <TextBox x:Name="SenderIdInput" Width="240" />
@@ -326,8 +320,9 @@
                                                         <!-- Tag 交的是这一行那个对象本身：停用与启用是同一个动作的两个方向 -->
                                                         <Button Content="切换状态" Tag="{Binding}" Height="28"
                                                                 Padding="12,0" Click="OnSenderToggle"
-                                                                Background="Transparent" Foreground="#0ABF5E"
-                                                                BorderThickness="1" BorderBrush="#0ABF5E"/>
+                                                                Background="Transparent"
+                                                                Foreground="{DynamicResource Accent}"
+                                                                BorderThickness="1" BorderBrush="{DynamicResource Accent}"/>
                                                     </StackPanel>
                                                 </Border>
                                             </DataTemplate>

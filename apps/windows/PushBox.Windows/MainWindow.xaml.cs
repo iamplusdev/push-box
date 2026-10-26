@@ -44,13 +44,7 @@ public partial class MainWindow : Window
 
     /// <summary>会话列表那一栏的宽度。默认 260，用户拖过手柄之后记住拖到的值——
     /// <see cref="ApplyPaneWidth"/> 每次窗口尺寸变化都会重摆列宽，不回记就会把用户拖的宽度抹掉。</summary>
-    private double _listWidth = ListDefaultWidth;
-
-    private const double ListDefaultWidth = 260;
-
-    private const double MenuWidth = 60;
-
-    private const double SplitterWidth = 4;
+    private double _listWidth = MainModel.ListDefaultWidth;
 
     public MainWindow(DeviceStore db, IdentityStore identities, ReadReporter reporter,
         SearchService search, DeleteReporter deletions, MediaLoader media, SyncEngine? engine = null)
@@ -536,49 +530,29 @@ public partial class MainWindow : Window
         }), DispatcherPriority.Render).Task;
     }
 
-    /// <summary>§8.1 的窄窗口退化单栏：分界由模型算（<see cref="MainModel.NarrowPaneBelow"/>），这里只摆列宽。
-    /// Body 是**四**列：菜单 / 会话列表 / 拖拽手柄 / 对话区。手柄那一列必须跟着一起摆——
-    /// 漏掉它的话手柄列会留着 XAML 里的 4px 或被当成星号列，对话区就被挤到窗口右半边去了。</summary>
+    /// <summary>§8.1 的窄窗口退化单栏：判定与数值都由模型算（<see cref="MainModel.PaneLayoutFor"/>），
+    /// 这里只把结果抄到四列上。列表列的 Min/Max 也必须一起抄——只抄 Width，
+    /// XAML 里的 <c>MinWidth=200</c> 会把"已经收成 0"的列表夹回 200 像素。</summary>
     private void ApplyPaneWidth()
     {
         // 还没布局过就没有"窗口宽度"可言，此时别把上限算成 0 把整条时间线挤没
         if (ActualWidth <= 0) return;
 
-        var narrow = _model.IsNarrow(ActualWidth);
-        BackButton.Visibility = narrow ? Visibility.Visible : Visibility.Collapsed;
+        var layout = MainModel.PaneLayoutFor(ActualWidth, _model.Selected is not null, _listWidth);
+        BackButton.Visibility = layout.Narrow ? Visibility.Visible : Visibility.Collapsed;
 
-        if (!narrow)
-        {
-            // 宽屏模式：四栏全显示，列表宽用用户拖过的那个值
-            Body.ColumnDefinitions[0].Width = new GridLength(MenuWidth);
-            Body.ColumnDefinitions[1].Width = new GridLength(_listWidth);
-            Body.ColumnDefinitions[2].Width = new GridLength(SplitterWidth);
-            Body.ColumnDefinitions[3].Width = new GridLength(1, GridUnitType.Star);
-            Timeline.MaxWidth = MainModel.BubbleMaxWidth(
-                ActualWidth - MenuWidth - _listWidth - SplitterWidth, false);
-            return;
-        }
-
-        // 窄屏模式：手柄没有意义（只有一栏可见），连带对话区一起收掉
-        var showingConversation = _model.Selected is not null;
-        if (showingConversation)
-        {
-            // 打开会话时：保留菜单栏，隐藏列表，显示对话区
-            Body.ColumnDefinitions[0].Width = new GridLength(MenuWidth);
-            Body.ColumnDefinitions[1].Width = new GridLength(0);
-            Body.ColumnDefinitions[2].Width = new GridLength(0);
-            Body.ColumnDefinitions[3].Width = new GridLength(1, GridUnitType.Star);
-        }
-        else
-        {
-            // 未打开会话时：显示菜单栏和列表，隐藏对话区
-            Body.ColumnDefinitions[0].Width = new GridLength(MenuWidth);
-            Body.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
-            Body.ColumnDefinitions[2].Width = new GridLength(0);
-            Body.ColumnDefinitions[3].Width = new GridLength(0);
-        }
-        Timeline.MaxWidth = MainModel.BubbleMaxWidth(ActualWidth - MenuWidth, true);
+        var columns = Body.ColumnDefinitions;
+        columns[0].Width = WidthOf(layout.Menu);
+        columns[1].Width = WidthOf(layout.List);
+        columns[1].MinWidth = layout.ListMinWidth;
+        columns[1].MaxWidth = layout.ListMaxWidth;
+        columns[2].Width = WidthOf(layout.Splitter);
+        columns[3].Width = WidthOf(layout.Conversation);
+        Timeline.MaxWidth = MainModel.BubbleMaxWidth(layout.RightPaneWidth, layout.Narrow);
     }
+
+    private static GridLength WidthOf(MainModel.ColumnPlan plan) =>
+        plan.Star ? new GridLength(1, GridUnitType.Star) : new GridLength(plan.Width);
 
     // ---- 渲染用的小工具 ---------------------------------------------------------------------------
 

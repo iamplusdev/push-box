@@ -133,7 +133,9 @@
             <Grid.ColumnDefinitions>
                 <!-- 最左侧菜单栏：60px 宽（图标按钮 + 连接状态） -->
                 <ColumnDefinition Width="60" />
-                <!-- 中间消息列表栏：默认 260px，拖拽范围 200-400px（上下限由 Min/MaxWidth 夹住） -->
+                <!-- 中间消息列表栏：这里的 260/200-400 只是设计期的初值。
+                     运行时由 ApplyPaneWidth 按 MainModel.PaneLayoutFor 重设宽度与上下限——
+                     窄屏要把列表收成 0，只改 Width 会被 MinWidth 夹住 -->
                 <ColumnDefinition Width="260" MinWidth="200" MaxWidth="400" />
                 <!-- 拖拽手柄所在的窄列：它同时也是列表与对话区之间那条分割线，
                      所以列表那边不再自己画右边框，否则会出现"边框一条线、手柄另一条线" -->

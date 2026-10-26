@@ -61,7 +61,7 @@
             <Setter Property="Padding" Value="16,8" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
             <Setter Property="FontFamily" Value="{DynamicResource Font.UI}" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
@@ -128,7 +128,8 @@
                                 <Border x:Name="Box" Background="{DynamicResource Bg.Elevated}"
                                         BorderBrush="{DynamicResource Divider}" BorderThickness="1"
                                         CornerRadius="4" SnapsToDevicePixels="True" />
-                                <Path x:Name="Check" Data="M3.5,8 L6.5,11 L12.5,4.5" Stroke="White"
+                                <Path x:Name="Check" Data="M3.5,8 L6.5,11 L12.5,4.5"
+                                      Stroke="{DynamicResource OnAccent}"
                                       StrokeThickness="2" Visibility="Collapsed" />
                             </Grid>
                             <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center" />

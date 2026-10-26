@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Threading;
 using PushBox.Windows.Data;
 using PushBox.Windows.Media;
@@ -96,6 +97,66 @@ public sealed class MainWindowTest : IDisposable
 
         thread.Start();
         Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "构造主窗口没有按时完成");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    /// <summary>
+    /// 窄屏收列表的根因在 WPF 这一侧：<c>ColumnDefinition.Width=0</c> 会被 <c>MinWidth=200</c> 夹回 200px，
+    /// 于是"收掉列表"只是纸面上的，对话区白让 200px。这条用例把模型算出来的列宽与上下限真摆进 Grid，
+    /// 断的是字面上的 0——只断模型数值的话，把 Min/Max 忘了抄上去照样能过。
+    /// </summary>
+    [Fact]
+    public void TheModelPaneLayoutCollapsesTheListColumnForReal()
+    {
+        static GridLength AsLength(MainModel.ColumnPlan plan) =>
+            plan.Star ? new GridLength(1, GridUnitType.Star) : new GridLength(plan.Width);
+
+        static Grid Place(MainModel.PaneLayout plan, double width)
+        {
+            var grid = new Grid();
+            foreach (var _ in new[] { plan.Menu, plan.List, plan.Splitter, plan.Conversation })
+                grid.ColumnDefinitions.Add(new ColumnDefinition());
+            var columns = grid.ColumnDefinitions;
+            columns[0].Width = AsLength(plan.Menu);
+            columns[1].Width = AsLength(plan.List);
+            columns[1].MinWidth = plan.ListMinWidth;
+            columns[1].MaxWidth = plan.ListMaxWidth;
+            columns[2].Width = AsLength(plan.Splitter);
+            columns[3].Width = AsLength(plan.Conversation);
+            grid.Measure(new Size(width, 100));
+            grid.Arrange(new Rect(0, 0, width, 100));
+            return grid;
+        }
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                // 窄屏 + 已打开会话：列表是 0 而不是被 MinWidth 夹住的 200
+                var collapsed = Place(MainModel.PaneLayoutFor(440, true, 260), 440);
+                Assert.Equal(0, collapsed.ColumnDefinitions[1].ActualWidth);
+                Assert.Equal(380, collapsed.ColumnDefinitions[3].ActualWidth);
+
+                // 窄屏 + 没选会话：列表吃满 640，不被 MaxWidth=400 截住
+                var listOnly = Place(MainModel.PaneLayoutFor(700, false, 260), 700);
+                Assert.Equal(640, listOnly.ColumnDefinitions[1].ActualWidth);
+
+                // 回到宽屏：上下限装回去，列表还是用户拖过的那个绝对宽
+                var wide = Place(MainModel.PaneLayoutFor(1080, false, 260), 1080);
+                Assert.Equal(260, wide.ColumnDefinitions[1].ActualWidth);
+                Assert.Equal(756, wide.ColumnDefinitions[3].ActualWidth);
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "摆列没有按时完成");
         Assert.True(failure is null, failure?.ToString());
     }
 

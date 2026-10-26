@@ -136,6 +136,19 @@ public sealed class MainModel
     /// <summary>窄窗口退化单栏的分界（§8.1）。设备无关单位，与 XAML 里的宽度同一基准。</summary>
     public const double NarrowPaneBelow = 720;
 
+    /// <summary>最左侧菜单栏的宽度（图标按钮 + 连接状态）。</summary>
+    public const double MenuColumnWidth = 60;
+
+    /// <summary>会话列表的默认宽，也是用户拖过之后没记住任何值时的回退。</summary>
+    public const double ListDefaultWidth = 260;
+
+    /// <summary>会话列表拖拽的上下限。宽屏时夹住，窄屏时必须放开——见 <see cref="PaneLayoutFor"/>。</summary>
+    public const double ListMinWidth = 200;
+    public const double ListMaxWidth = 400;
+
+    /// <summary>列表与对话区之间那条分割线（同时是拖拽手柄）的宽度。</summary>
+    public const double SplitterColumnWidth = 4;
+
     public const int PageLimit = 50;
 
     /// <summary>§9.2 的气泡最大宽占比：宽栏 72%，窄屏（单栏）78%。</summary>
@@ -203,8 +216,6 @@ public sealed class MainModel
 
     public string EmptyText => "还没有消息";
 
-    public bool IsNarrow(double width) => width < NarrowPaneBelow;
-
     /// <summary>
     /// 气泡那一竖列的宽度上限：§9.2 的 72%（窄屏 78%），再封在 900 之内。
     /// 传进来的是**右栏**宽度而不是窗口宽度——左栏那 320 像素里没有气泡，把它算进百分比会越算越小。
@@ -212,6 +223,60 @@ public sealed class MainModel
     public static double BubbleMaxWidth(double rightPaneWidth, bool narrow) =>
         Math.Round(Math.Min(900, Math.Max(0, rightPaneWidth)
             * (narrow ? NarrowBubbleFraction : WideBubbleFraction)));
+
+    /// <summary>一列怎么摆：给一个绝对值，或者"剩下的都给它"。
+    /// 不直接用 WPF 的 GridLength，是为了让摆列的判定能在普通用例里断。</summary>
+    public readonly record struct ColumnPlan(double Width, bool Star)
+    {
+        public static ColumnPlan Of(double width) => new(width, false);
+        public static ColumnPlan Fill() => new(0, true);
+    }
+
+    /// <summary>§8.1 一次摆列要用到的全部数值：四列宽度、列表列的上下限、气泡百分比吃的那一栏。</summary>
+    public readonly record struct PaneLayout(
+        bool Narrow,
+        ColumnPlan Menu,
+        ColumnPlan List,
+        ColumnPlan Splitter,
+        ColumnPlan Conversation,
+        double ListMinWidth,
+        double ListMaxWidth,
+        double RightPaneWidth)
+    {
+        /// <summary>星号列不受绝对上限约束；WPF 的 <c>ColumnDefinition.MaxWidth</c> 默认也是它。</summary>
+        public const double NoMaxWidth = double.PositiveInfinity;
+    }
+
+    /// <summary>
+    /// 摆列的唯一判定处，窗口只负责把结果抄到 <c>ColumnDefinition</c> 上。
+    /// 窄屏收列表靠的是"列宽 0"，但 XAML 里列表列的 <c>MinWidth=200</c> 会把它夹回来——
+    /// 只改 Width 等于没收，对话区白让 200 像素。所以窄屏必须同时把 Min/Max 放开，
+    /// 回到宽屏再装回去；反过来窄屏那条"列表吃满"的星号列也会被 <c>MaxWidth=400</c> 截在半路。
+    /// </summary>
+    public static PaneLayout PaneLayoutFor(double windowWidth, bool hasSelection, double listWidth)
+    {
+        var menu = MenuColumnWidth;
+
+        if (windowWidth >= NarrowPaneBelow)
+        {
+            var list = Math.Clamp(listWidth, ListMinWidth, ListMaxWidth);
+            return new PaneLayout(false,
+                ColumnPlan.Of(menu), ColumnPlan.Of(list), ColumnPlan.Of(SplitterColumnWidth),
+                ColumnPlan.Fill(), ListMinWidth, ListMaxWidth,
+                Math.Max(0, windowWidth - menu - list - SplitterColumnWidth));
+        }
+
+        var right = Math.Max(0, windowWidth - menu);
+        return hasSelection
+            // 打开会话：菜单留着，列表和手柄收掉，对话区吃满
+            ? new PaneLayout(true,
+                ColumnPlan.Of(menu), ColumnPlan.Of(0), ColumnPlan.Of(0), ColumnPlan.Fill(),
+                0, PaneLayout.NoMaxWidth, right)
+            // 没选会话：列表吃满，对话区收掉
+            : new PaneLayout(true,
+                ColumnPlan.Of(menu), ColumnPlan.Fill(), ColumnPlan.Of(0), ColumnPlan.Of(0),
+                0, PaneLayout.NoMaxWidth, right);
+    }
 
     /// <summary>
     /// 打开一条会话：先出内容、再把红点清掉。已读上报是"本地立刻清 + 攒批上报"两件事（W9 的口径），

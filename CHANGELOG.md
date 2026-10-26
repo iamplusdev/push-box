@@ -9,6 +9,26 @@
 
 ---
 
+## 未发布 —— Windows：窄屏单栏真正生效，色板对比度收口
+
+> 起因两条：① 窗口拖到 720 以下时"退化单栏"只是纸面上的——列表列的 `Width` 虽然设成 0，XAML 里的 `MinWidth=200` 会把它夹回来，对话区白让 200px；未选会话那支反过来被 `MaxWidth=400` 截住，700 宽的窗口右边空出一大块。② 浅色下 `Bg.Elevated` 与 `Divider` 同为 `#E0E0E0`，卡片边框和菜单栏右边框落在同色的底上等于没画；`Fg.Secondary #757575` 在 `#E0E0E0` 上只有 3.5:1，`Accent #14A36A` 当正文色 3.1:1、白字压在其上 3.2:1；设置窗还自带 8 处 `#0ABF5E`（白字 2.4:1）与深色模式下的白底输入框。
+
+### Windows
+
+- **摆列收敛到 `MainModel.PaneLayoutFor`**：返回四列宽度、列表列的 Min/Max 与气泡百分比吃的右栏宽，窗口只负责抄到 `ColumnDefinition` 上。窄屏两支把列表列的 `MinWidth` 放开到 0、`MaxWidth` 放开到 ∞，回到宽屏再装回 200/400——`Width=0` 单独不够，WPF 会按 MinWidth 夹住。
+- **色板分层与对比度**：`Bg.Elevated` 浅色 `#FFFFFF` / 深色 `#2A2A2A`（抬升方向统一为"越浮起来越亮"），`Divider` 浅色 `#CFCFCF`；`Fg.Secondary` 浅色 `#5F5F5F`（页面/卡片/列表三种底都 ≥5:1）；`Accent` 浅色 `#0F7A4F`（白字 5.4:1、当正文色 5.1:1），深色 `#3FBF7A`（深底 6.6:1）。
+- **新增 `OnAccent` 与 `Bg.AccentTint`**：浅色主色偏深用白字、深色主色偏亮用深墨绿，压在主色实底上的字一律走 `OnAccent`（首启主按钮、设置页按钮与勾选框）；选中项的浅绿底从"内联 `#0ABF5E` + Opacity"改成 token，深色下不再是一块发灰的绿。
+- **设置窗去 token 孤岛**：8 处硬编码绿改成 `Accent`，两处 14px 标题改用 `Text.H3`，导航项 14px 归到 13px；`TextBox` 补 `Background`/`Foreground`/`CaretBrush`，深色模式不再是"白底浅字"。`SectionTitleStyle`/`DescriptionStyle` 两个本地字号样式由 `Text.H3`/`Text.Label` 取代。
+
+### 测试
+
+- `dotnet test apps/windows/PushBox.sln`：**561/561 通过**（本轮新增 3 条）。
+- `MainModelTest` 新增两条：宽屏四列与列表上下限、窄屏两支的"收起/吃满"及 Min/Max 放开；`MainWindowTest` 新增一条把模型算出的列宽真摆进 WPF `Grid` 再量 `ActualWidth` 的用例——只断模型数值的话，忘了把 Min/Max 抄上去照样能过。
+- `ThemeTest` 的两份字典与文档值同步（新增 `OnAccent`/`Bg.AccentTint`）；`ci.yml` 的 `$CS_BASELINE` 与六处文档现值 `558` → `561`。
+- **没跑的**：浅色/深色两套配色的真机观感（改的是数值，仍建议装机看一眼）；设置页 `ComboBox` 的深色模板还没做（下拉弹层仍是系统白底），留给下一批。
+
+---
+
 ## 未发布 —— Windows：开机自启只在托盘起，长消息不再被裁成一行
 
 > 起因两条：① 开机自启那一笔注册表只写了 exe 路径，每次登录都把主窗摆到脸上，"自启"应当等于"帮我收消息"而不是"开机先开一扇窗"；② 时间线里长正文被排成一条一万多像素的长条，超出一屏的那截被直接裁掉，看起来就是"消息内容显示不全"。
