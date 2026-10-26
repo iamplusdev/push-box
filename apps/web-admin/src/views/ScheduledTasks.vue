@@ -1064,16 +1064,13 @@ onMounted(() => {
 
 /* 展开 JSON 区后整张表单会顶出视口、把「保存」挤出屏幕；这里给对话框身体封个顶，
    让内容自己滚，标题与底部按钮始终在场。选择器直接落在 body 上：el-dialog 的根是遮罩层，
-   `.el-dialog` 那一层拿不到 scoped 的 data-v 标记。 */
+   `.el-dialog` 那一层拿不到 scoped 的 data-v 标记。
+   整个对话框只有这一层滚动——tab 内容原来另有一道 54vh 的内滚，
+   两层滚轮嵌在一起时，指针停在哪一层决定滚谁，读表单的人得先"找滚动条" */
 :deep(.el-dialog__body) {
   max-height: calc(100vh - 300px);
   overflow-y: auto;
   overflow-x: hidden;
-}
-
-.task-form :deep(.el-tabs__content) {
-  max-height: 54vh;
-  overflow-y: auto;
 }
 
 .paste-actions {
