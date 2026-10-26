@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -877,13 +878,15 @@ private fun PushBoxTopBar(title: @Composable () -> Unit,
 /** 底栏的一格：文字 + 图标，选中态只换色，不给它加 Material3 那块绿色的胶囊底。 */
 private data class BottomTab(val label: String, val icon: ImageVector)
 
-/** 底栏：52dp（Material3 NavigationBar 连内边距要 80dp），底色 #F7F7F7，顶部一条分割线。 */
+/** 底栏：内容高 56dp 起（Material3 NavigationBar 连内边距要 80dp），底色 #F7F7F7，顶部一条分割线。 */
 @Composable
 private fun PushBoxBottomBar(tabs: List<BottomTab>, selected: Int, onSelect: (Int) -> Unit) {
     val colors = LocalPushBoxColors.current
     Column(Modifier.fillMaxWidth().background(colors.bottomBar).navigationBarsPadding()) {
         Box(Modifier.fillMaxWidth().height(0.5.dp).background(colors.divider))
-        Row(Modifier.fillMaxWidth().height(52.dp)) {
+        // 7+21+3+16+7 = 54：height 写死 52 时常态就溢出，三档字号再放大就压到分割线。
+        // 改 heightIn 后大字号由它自己撑高，小字号也不松。
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
             tabs.forEachIndexed { index, tab ->
                 val active = index == selected
                 Column(
@@ -900,7 +903,8 @@ private fun PushBoxBottomBar(tabs: List<BottomTab>, selected: Int, onSelect: (In
                     Spacer(Modifier.height(3.dp))
                     Text(tab.label, style = MaterialTheme.typography.labelSmall,
                         color = if (active) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant)
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -1500,12 +1504,12 @@ private fun MessageBubble(row: MessageRow, senderName: String, showTime: Boolean
                 // §7.3 消息类型标签：改为带背景色的 Badge 样式
                 typeLabel(row.msgType)?.let {
                     Surface(
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                        color = MaterialTheme.colorScheme.primaryContainer,
                         shape = RoundedCornerShape(4.dp),
                         modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
                     ) {
                         Text(it, style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
                             fontWeight = FontWeight.Medium,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                     }
@@ -1513,7 +1517,7 @@ private fun MessageBubble(row: MessageRow, senderName: String, showTime: Boolean
                 Column(
                     Modifier
                         .widthIn(max = 320.dp)
-                        .background(if (highlighted) MaterialTheme.colorScheme.tertiaryContainer
+                        .background(if (highlighted) MaterialTheme.colorScheme.primaryContainer
                             else colors.bubble, RoundedCornerShape(8.dp))
                         // §7.3 非 info 级别在气泡左侧加一条竖向色条（warning 琥珀 / error 红）。
                         // 画在自身背景之上而不是另起一个 3dp Box：外层不再需要 IntrinsicSize.Min，
@@ -1521,9 +1525,9 @@ private fun MessageBubble(row: MessageRow, senderName: String, showTime: Boolean
                         .then(if (accent == null) Modifier else Modifier.drawBehind {
                             drawRect(accent, size = Size(3.dp.toPx(), size.height))
                         })
-                        // 添加微弱边框增强深度感
+                        // 边框走 token：原先写死黑色 8% 透明，深色气泡上压一道黑边等于没有
                         .then(Modifier.drawBehind {
-                            drawRect(Color.Black.copy(alpha = 0.08f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx()))
+                            drawRect(colors.divider, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx()))
                         })
                         .pointerInput(text) { detectTapGestures(onLongPress = { onLong() }) }
                         .padding(10.dp)) {
@@ -1798,9 +1802,11 @@ private fun DateHeader(label: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
+@Composable
 private fun levelAccent(level: String): Color? = when (level) {
-    "error" -> Color(0xFFD93025)
-    "warning" -> Color(0xFFB06900)
+    // 深浅两套各有一档：写死的深红/琥珀在深色气泡上会发闷
+    "error" -> LocalPushBoxColors.current.levelError
+    "warning" -> LocalPushBoxColors.current.levelWarning
     else -> null
 }
 
@@ -3390,7 +3396,8 @@ private fun KeepAliveBatteryRow() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(stringResource(if (ignoring) R.string.keepalive_status_on else R.string.keepalive_status_off),
                 style = MaterialTheme.typography.labelSmall,
-                color = if (ignoring) Color(0xFF0ABF5E) else MaterialTheme.colorScheme.onSurfaceVariant)
+                color = if (ignoring) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (!ignoring) {
             OutlinedButton(onClick = {
@@ -3792,7 +3799,7 @@ private fun connectionLabel(state: SyncEngine.State): Pair<String, Color> {
     val offlineColor = LocalPushBoxColors.current.offline
     return when (state) {
         is SyncEngine.State.Online ->
-            stringResource(R.string.state_connected) to Color(0xFF0ABF5E)
+            stringResource(R.string.state_connected) to MaterialTheme.colorScheme.primary
         is SyncEngine.State.Offline ->
             stringResource(R.string.state_disconnected) to offlineColor
         else ->

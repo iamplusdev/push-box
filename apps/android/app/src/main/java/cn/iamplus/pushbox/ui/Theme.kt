@@ -13,7 +13,6 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
@@ -73,8 +72,11 @@ private val DarkPushBoxColors = PushBoxColors(
 // 填充式 `TextField` 的容器是 `surfaceVariant` 叠 `onSurface`、提示条用 `secondaryContainer`——
 // 于是真机上频道页那几张卡是淡紫色的，而 §9.1 说的是"微信式中性"。少写一项就是一处漏色，
 // 且它只在真机上看得出来，编译期与预览都不报错。
+// 主色要同时当"实底"和"文字"：亮绿 #0ABF5E 在白底上只有 2.4:1，被拿来当 12sp 选中标签时读不清。
+// 浅色取深一档的 #0F7A4F（白字 5.4:1、自己当正文色 5.1:1）配白字；
+// 深色反过来取亮一档的 #3FBF7A（#141414 上 7.9:1）配深墨绿，与 PC 的 accent/onAccent 同值。
 private val LightScheme = lightColorScheme(
-    primary = Color(0xFF0ABF5E),
+    primary = Color(0xFF0F7A4F),
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFD6F1E1),
     onPrimaryContainer = Color(0xFF053A1E),
@@ -83,7 +85,8 @@ private val LightScheme = lightColorScheme(
     surface = Color(0xFFFFFFFF),
     onSurface = Color(0xFF161415),
     surfaceVariant = Color(0xFFEEEEEE),
-    onSurfaceVariant = Color(0xFF757575),
+    // 次要字要落在页面/列表/底栏三种底上都 ≥4.5:1：#757575 在 #F7F7F7 上只有 4.3
+    onSurfaceVariant = Color(0xFF5F5F5F),
     surfaceDim = Color(0xFFE6E6E6),
     surfaceBright = Color(0xFFFFFFFF),
     surfaceContainerLowest = Color(0xFFFFFFFF),
@@ -91,7 +94,7 @@ private val LightScheme = lightColorScheme(
     surfaceContainer = Color(0xFFF2F2F2),
     surfaceContainerHigh = Color(0xFFEDEDED),
     surfaceContainerHighest = Color(0xFFE6E6E6),
-    secondary = Color(0xFF0ABF5E),
+    secondary = Color(0xFF0F7A4F),
     onSecondary = Color(0xFFFFFFFF),
     secondaryContainer = Color(0xFFE4E4E4),
     onSecondaryContainer = Color(0xFF333333),
@@ -103,8 +106,8 @@ private val LightScheme = lightColorScheme(
 )
 
 private val DarkScheme = darkColorScheme(
-    primary = Color(0xFF0A8F4A),
-    onPrimary = Color(0xFF1A1A1A),
+    primary = Color(0xFF3FBF7A),
+    onPrimary = Color(0xFF08170E),
     primaryContainer = Color(0xFF0A3D22),
     onPrimaryContainer = Color(0xFFBCE8CD),
     background = Color(0xFF1A1A1A),
@@ -120,8 +123,8 @@ private val DarkScheme = darkColorScheme(
     surfaceContainer = Color(0xFF212121),
     surfaceContainerHigh = Color(0xFF262626),
     surfaceContainerHighest = Color(0xFF2E2E2E),
-    secondary = Color(0xFF0A8F4A),
-    onSecondary = Color(0xFFE0E0E0),
+    secondary = Color(0xFF3FBF7A),
+    onSecondary = Color(0xFF08170E),
     secondaryContainer = Color(0xFF2E2E2E),
     onSecondaryContainer = Color(0xFFDDDDDD),
     surfaceTint = Color(0xFF6E6E6E),
@@ -134,12 +137,9 @@ private val PushBoxTypography = Typography(
     titleMedium = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Normal, lineHeight = 22.sp),
     bodyLarge = TextStyle(fontSize = 15.sp, lineHeight = 23.sp),
     bodyMedium = TextStyle(fontSize = 13.sp, lineHeight = 18.sp),
-    labelSmall = TextStyle(
-        fontSize = 12.sp,
-        lineHeight = 16.sp,
-        fontFamily = FontFamily.Default,
-        color = Color(0xFF8A8A8A),
-    ),
+    // 字号归字号，颜色归调用方：原先在这里焊死 #8A8A8A（在 #F7F7F7 上约 3.4:1），
+    // 没显式传色的地方就都继承这一档灰，底栏标签与日期分节首当其冲。
+    labelSmall = TextStyle(fontSize = 12.sp, lineHeight = 16.sp),
 )
 
 val LocalPushBoxColors = staticCompositionLocalOf { LightPushBoxColors }

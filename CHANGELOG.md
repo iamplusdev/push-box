@@ -9,6 +9,25 @@
 
 ---
 
+## 未发布 —— Android：底栏兜住自己的内容，主色当文字够对比了
+
+> 起因两条：① 底栏行高写死 52dp，可里面 7（内边距）+ 21（图标）+ 3（间距）+ 16（`labelSmall` 行高）+ 7 已经是 54dp，常态就溢出 2dp；三档字号放到 1.18× 时差 6dp，文字会压到顶部发丝线和导航条留白上。② 主色 `#0ABF5E` 在白底只有 **2.43:1**，却被当作 12sp 的选中标签、连接状态、链接和类型标签文字；`labelSmall` 还把 `#8A8A8A` 焊进了 `TextStyle`，在底栏 `#F7F7F7` 上约 3.4:1。
+
+### Android
+
+- **底栏改用 `heightIn(min = 56.dp)`**：内容比下限高时由它自己撑高，不再裁到写死的高度；标签加 `maxLines = 1` + `TextOverflow.Ellipsis`，大字号下先省略而不是压线。
+- **主色拆成"实底 + 文字"两头都够**：`primary` 浅色 `#0F7A4F`（白字 5.4:1、自己当正文色 5.1:1）/ 深色 `#3FBF7A`（`#141414` 上 7.9:1），`onPrimary` 浅色白 / 深色 `#08170E`，`secondary` 同步；`onSurfaceVariant` 浅色 `#757575` → `#5F5F5F`（底栏/列表底上 ≥4.5:1）。两个值与 PC 的 `accent`/`onAccent` 对齐。
+- **`labelSmall` 不再自带颜色**：去掉 `TextStyle` 里的 `#8A8A8A`，"字号归字号、颜色归调用方"，没显式传色的 12sp 标签不再统一继承那一档灰。
+- **类型标签改 `primaryContainer`/`onPrimaryContainer`**（原先是 `primary` 15% 透明底压 `primary` 字，12sp 不足 4.5:1）。
+- **三处漏网色并回 token**：高亮气泡的 `tertiaryContainer`（未覆盖，落 M3 基线紫）→ `primaryContainer`；气泡边框 `Color.Black.copy(alpha = .08f)` → `colors.divider`（深色气泡上黑边等于没画）；级别色条写死的 `#D93025`/`#B06900` → `PushBoxColors.levelError`/`levelWarning`。连接状态与电池优化状态的 `#0ABF5E` → `MaterialTheme.colorScheme.primary`。
+
+### 验证
+
+- `./gradlew assembleDebug`：通过（`app-debug.apk` 正常产出）。
+- **没跑的**：真机上的浅色/深色观感。这一轮改的是数值与语义色，没有安装到设备截图复验；装机时重点看底栏在系统大字号下的高度、深色下选中标签的亮度。
+
+---
+
 ## 未发布 —— Windows：窄屏单栏真正生效，色板对比度收口
 
 > 起因两条：① 窗口拖到 720 以下时"退化单栏"只是纸面上的——列表列的 `Width` 虽然设成 0，XAML 里的 `MinWidth=200` 会把它夹回来，对话区白让 200px；未选会话那支反过来被 `MaxWidth=400` 截住，700 宽的窗口右边空出一大块。② 浅色下 `Bg.Elevated` 与 `Divider` 同为 `#E0E0E0`，卡片边框和菜单栏右边框落在同色的底上等于没画；`Fg.Secondary #757575` 在 `#E0E0E0` 上只有 3.5:1，`Accent #14A36A` 当正文色 3.1:1、白字压在其上 3.2:1；设置窗还自带 8 处 `#0ABF5E`（白字 2.4:1）与深色模式下的白底输入框。
