@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -17,7 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -33,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import cn.iamplus.pushbox.App
 import cn.iamplus.pushbox.net.MediaSlot
@@ -54,6 +56,13 @@ object ImageCache {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
     }
 
+    /**
+     * 记下每张图第一次解码出的宽高比。单图占位框按 4:3 画、解完再按真实比例换高，
+     * 列表会在眼前跳一下；把比例留住之后，滚回来时第一帧就是对的。
+     * 条目很小（只有比例），跟着淘汰走，不与位图缓存抢预算。
+     */
+    private val ratios = LruCache<String, Float>(512)
+
     private fun diskDir(context: Context): File =
         File(context.cacheDir, "media-img").apply { if (!exists()) mkdirs() }
 
@@ -62,6 +71,12 @@ object ImageCache {
 
     /** 取一张图：内存 → 磁盘 → 网络。thumb=true 优先缩略图。失败返回 null，调用方显示占位。 */
     suspend fun load(msgId: String, idx: Int, thumb: Boolean): Bitmap? {
+        val bmp = loadBitmap(msgId, idx, thumb) ?: return null
+        rememberRatio(msgId, idx, bmp.width.toFloat() / bmp.height)
+        return bmp
+    }
+
+    private suspend fun loadBitmap(msgId: String, idx: Int, thumb: Boolean): Bitmap? {
         val app = App.current
         val context = app.applicationContext
         val key = "$msgId#$idx#${if (thumb) 't' else 'f'}"
@@ -122,7 +137,15 @@ object ImageCache {
         dropSlot(App.current.applicationContext, msgId, idx)
     }
 
+    /** 上次解出来的宽高比；没见过就返回 null，由调用方退回 4:3 占位。 */
+    fun ratio(msgId: String, idx: Int): Float? = ratios.get("$msgId#$idx")
+
+    private fun rememberRatio(msgId: String, idx: Int, ratio: Float) {
+        if (ratio > 0f && ratio.isFinite()) ratios.put("$msgId#$idx", ratio)
+    }
+
     private fun dropSlot(context: Context, msgId: String, idx: Int) {
+        ratios.remove("$msgId#$idx")
         for (flag in charArrayOf('t', 'f')) {
             val key = "$msgId#$idx#$flag"
             mem.remove(key)
@@ -178,7 +201,7 @@ private sealed interface LoadOutcome {
  */
 @Composable
 fun MediaImage(msgId: String, idx: Int, slotStatus: String? = null, mediaStatus: String? = null,
-    single: Boolean = true, modifier: Modifier = Modifier) {
+    single: Boolean = true, cell: Dp = GRID_CELL, modifier: Modifier = Modifier) {
     var showFull by remember { mutableStateOf(false) }
     // 重试计数：produceState 的 key 里必须带上它，否则 evict 完缓存组合层根本不会重新取图
     var attempt by remember(msgId, idx) { mutableStateOf(0) }
@@ -194,11 +217,14 @@ fun MediaImage(msgId: String, idx: Int, slotStatus: String? = null, mediaStatus:
         }
     }
     val boxModifier = if (single) {
+        // 比例优先取这次解码出来的，其次取上次记下的；都没有才退回 4:3。
+        // 宽度是"最多 220dp、且不超过气泡给的空间"——写死 220 时窄屏会把气泡顶宽。
         val ratio = (outcome as? LoadOutcome.Ready)?.bmp?.let { it.width.toFloat() / it.height }
+            ?: ImageCache.ratio(msgId, idx)
             ?: 4f / 3f
-        modifier.width(SINGLE_MAX_WIDTH).aspectRatio(ratio)
+        modifier.widthIn(max = SINGLE_MAX_WIDTH).fillMaxWidth().aspectRatio(ratio)
     } else {
-        modifier.size(GRID_CELL)
+        modifier.size(cell)
     }
     Box(modifier = boxModifier.background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center) {
@@ -295,8 +321,10 @@ private fun FullImageDialog(msgId: String, idx: Int, gone: Boolean, onDismiss: (
  * 用户滑到第三张才想起来数，而气泡本身会被横向滚动条撑出与正文不一致的宽度。
  * 微信的做法是 1 张大图、2～9 张定尺寸方格按行铺开，超过 9 张折叠成 +N，这里照抄。
  *
- * 用 Column/Row 而不是 LazyVerticalGrid：外层气泡按内在尺寸测量（IntrinsicSize），
- * Lazy 系列是 SubcomposeLayout 不支持内在测量，混用直接崩在 intrinsic 查询上。
+ * 用 Column/Row 而不是 LazyVerticalGrid：Lazy 系列是 SubcomposeLayout，
+ * 一旦外层改回按内在尺寸测量（IntrinsicSize）就会直接崩在 intrinsic 查询上。
+ * 格子边长由 `BoxWithConstraints` 现算：3×88 + 2×4 = 272dp，360dp 屏上气泡只剩 260–270dp，
+ * 固定尺寸会把第三格顶出气泡背景；改成 `(可用宽 - 槽)/列数` 且不超过 88dp 后，窄屏自己缩、宽屏不涨。
  */
 @Composable
 fun MediaGrid(msgId: String, count: Int, mediaStatus: String? = null,
@@ -309,15 +337,19 @@ fun MediaGrid(msgId: String, count: Int, mediaStatus: String? = null,
     val shown = minOf(count, GRID_MAX)
     // 4 张排 3+1 会留一个孤零零的格子，微信是 2×2；其余张数按 3 列铺
     val columns = if (shown == 4) 2 else GRID_COLUMNS
-    Column(verticalArrangement = Arrangement.spacedBy(GUTTER)) {
-        var rowStart = 0
-        while (rowStart < shown) {
-            Row(horizontalArrangement = Arrangement.spacedBy(GUTTER)) {
-                for (i in rowStart until minOf(rowStart + columns, shown)) {
-                    MediaImage(msgId, i, slotStatus(i), mediaStatus, single = false)
+    BoxWithConstraints {
+        val cell = minOf(GRID_CELL,
+            (maxWidth - GUTTER * (columns - 1)) / columns).coerceAtLeast(1.dp)
+        Column(verticalArrangement = Arrangement.spacedBy(GUTTER)) {
+            var rowStart = 0
+            while (rowStart < shown) {
+                Row(horizontalArrangement = Arrangement.spacedBy(GUTTER)) {
+                    for (i in rowStart until minOf(rowStart + columns, shown)) {
+                        MediaImage(msgId, i, slotStatus(i), mediaStatus, single = false, cell = cell)
+                    }
                 }
+                rowStart += columns
             }
-            rowStart += columns
         }
     }
     if (count > GRID_MAX) {

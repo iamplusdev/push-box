@@ -146,6 +146,7 @@
     <string name="conv_search_close">关闭</string>
     <string name="conv_search_hits">命中 %1$d 条 · 点按清除筛选</string>
     <string name="conv_search_none">本会话没有匹配的消息</string>
+    <string name="conv_new_messages">%1$d 条新消息</string>
     <string name="section_about">关于</string>
     <string name="current_server">当前地址</string>
     <string name="change_server">更换服务器</string>

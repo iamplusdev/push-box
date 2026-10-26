@@ -79,9 +79,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -781,9 +783,25 @@ private fun RecoveryCodeCard(code: String, onConfirm: () -> Unit) {
 private fun MainShell(identity: Identity,
     deepLink: kotlinx.coroutines.flow.MutableStateFlow<Pair<String, String>?>, onLogout: () -> Unit) {
     val app = App.get(LocalContext.current)
-    var tab by remember { mutableStateOf(0) }
-    var open by remember { mutableStateOf<ConversationTarget?>(null) }
+    // 旋转/进程回收后要回到原来那一屏。选中的会话只存两把 key 不存整行：
+    // 会话行是 Room Flow 推出来的，存一份快照只会在数据变化后变成过期副本。
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var openChannel by rememberSaveable { mutableStateOf<String?>(null) }
+    var openSender by rememberSaveable { mutableStateOf<String?>(null) }
+    var openFocus by rememberSaveable { mutableStateOf<String?>(null) }
     val conversations by app.dao.conversations().collectAsState(initial = emptyList())
+    val open = remember(openChannel, openSender, openFocus, conversations) {
+        val channel = openChannel
+        val sender = openSender
+        if (channel == null || sender == null) null
+        else conversations.firstOrNull { it.channelNo == channel && it.senderId == sender }
+            ?.let { ConversationTarget(it, openFocus) }
+    }
+    val showConversation: (ConversationTarget?) -> Unit = { target ->
+        openChannel = target?.conversation?.channelNo
+        openSender = target?.conversation?.senderId
+        openFocus = target?.focusMsgId
+    }
     val conn by app.connection.collectAsState()
     val (connLabel, connColor) = connectionLabel(conn)
     // §7.2 省电模式应对：低电量模式或轮询模式下，实时性下降，顶栏显式提示可能延迟
@@ -800,7 +818,7 @@ private fun MainShell(identity: Identity,
             it.channelNo == key.first && it.senderId == key.second
         }
         if (row != null) {
-            open = ConversationTarget(row)
+            showConversation(ConversationTarget(row))
             deepLink.value = null
         }
     }
@@ -808,7 +826,7 @@ private fun MainShell(identity: Identity,
     val detail = open
     if (detail != null) {
         ConversationDetail(app, detail.conversation, detail.focusMsgId,
-            onBack = { open = null })
+            onBack = { showConversation(null) })
         return
     }
 
@@ -840,7 +858,7 @@ private fun MainShell(identity: Identity,
             val content = Modifier.fillMaxWidth().weight(1f)
             when (tab) {
                 0 -> MessagesTab(identity, conversations, content,
-                    onOpen = { row, focus -> open = ConversationTarget(row, focus) },
+                    onOpen = { row, focus -> showConversation(ConversationTarget(row, focus)) },
                     onNavigateToChannels = { tab = 1 })
                 1 -> ChannelsTab(identity, content)
                 else -> SettingsTab(identity, content, onLogout)
@@ -1199,8 +1217,14 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
     // 筛选按钮点下去只会把刚刚还看得见的内容变没，没有读者。
     // §7.4 会话内搜索：输入先防抖再进 Room 的查询参数，
     // 每敲一个字就重查一次全表在慢机上会把列表打字卡住。
-    var searchOpen by remember(conversation) { mutableStateOf(false) }
-    var rawQuery by remember(conversation) { mutableStateOf("") }
+    // 关键词与搜索条开合要过旋转：正在搜的时候转一下屏，结果和输入框一起没了等于白敲。
+    // 键用会话的两把 id，换会话才重置；`query` 是防抖后的派生物，跟着 rawQuery 重算即可。
+    var searchOpen by rememberSaveable(conversation.channelNo, conversation.senderId) {
+        mutableStateOf(false)
+    }
+    var rawQuery by rememberSaveable(conversation.channelNo, conversation.senderId) {
+        mutableStateOf("")
+    }
     var query by remember(conversation) { mutableStateOf<String?>(null) }
     LaunchedEffect(rawQuery) {
         if (rawQuery.isBlank()) {
@@ -1240,7 +1264,10 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
         if (!awaitingFocus) return@LaunchedEffect
         val index = rows.indexOfFirst { it.msgId == target }
         if (index < 0) {
-            if (rows.isNotEmpty()) awaitingFocus = false
+            if (rows.isNotEmpty()) {
+                listState.scrollToItem(rows.lastIndex)
+                awaitingFocus = false
+            }
             return@LaunchedEffect
         }
         listState.scrollToItem(index)
@@ -1249,8 +1276,33 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
         delay(FOCUS_HIGHLIGHT_MILLIS)
         highlightId = null
     }
+    // §9.3 只在"人本来就贴着底"时跟随新消息。距底不足 2 条也算贴在底——
+    // 上一版每次落库都 animateScrollToItem(最后一条)，翻旧账的人每来一条新消息就被拽回页尾。
+    val nearBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
+            last.index >= info.totalItemsCount - 1 - NEAR_BOTTOM_ITEMS
+        }
+    }
+    var unseen by remember(conversation) { mutableIntStateOf(0) }
+    var lastCount by remember(conversation) { mutableIntStateOf(0) }
+    var placed by remember(conversation) { mutableStateOf(false) }
+    LaunchedEffect(nearBottom) { if (nearBottom) unseen = 0 }
     LaunchedEffect(rows.size, awaitingFocus) {
-        if (!awaitingFocus && rows.isNotEmpty()) listState.animateScrollToItem(rows.lastIndex)
+        if (awaitingFocus || rows.isEmpty()) return@LaunchedEffect
+        val grew = rows.size - lastCount
+        lastCount = rows.size
+        when {
+            // 首次落位只做一次；带命中目标的会话由上面那个 effect 负责，这里不抢
+            !placed -> {
+                placed = true
+                if (focusMsgId == null) listState.animateScrollToItem(rows.lastIndex)
+            }
+
+            nearBottom -> listState.animateScrollToItem(rows.lastIndex)
+            grew > 0 -> unseen += grew
+        }
     }
 
     Scaffold(topBar = {
@@ -1292,8 +1344,9 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
                 }
             }
             if (query != null) {
-                // 会话内搜索态：点一条就退出，免得用户找不到出口
-                Row(Modifier.fillMaxWidth().height(24.dp)
+                // 会话内搜索态：点一条就退出，免得用户找不到出口。
+                // 24dp 是原来的一行，手指点不中；抬到 Material 的 48dp 最小触控高，底色本身照旧。
+                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     .background(MaterialTheme.colorScheme.surfaceVariant)
                     .clickable { rawQuery = "" }
                     .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1336,23 +1389,44 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
                     )
                 }
             } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    itemsIndexed(rows, key = { _, row -> row.msgId }) { index, row ->
-                        // §7.3 按日期分节：与上一条不同日则插一个分节头（今天/昨天/M月d日）
-                        if (index == 0 || dayKey(rows[index - 1].createdAt) != dayKey(row.createdAt)) {
-                            DateHeader(dateLabel(row.createdAt))
+                Box(Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        itemsIndexed(rows, key = { _, row -> row.msgId }) { index, row ->
+                            // §7.3 按日期分节：与上一条不同日则插一个分节头（今天/昨天/M月d日）
+                            if (index == 0 || dayKey(rows[index - 1].createdAt) != dayKey(row.createdAt)) {
+                                DateHeader(dateLabel(row.createdAt))
+                            }
+                            // 时间智能分组：5分钟内的连续消息只显示一次时间戳
+                            val showTime = index == 0 || 
+                                (row.createdAt - rows[index - 1].createdAt) > 5 * 60 * 1000L ||
+                                dayKey(rows[index - 1].createdAt) != dayKey(row.createdAt)
+                            MessageBubble(row, conversation.displayName, showTime = showTime,
+                                highlighted = highlightId == row.msgId) { selected = row }
                         }
-                        // 时间智能分组：5分钟内的连续消息只显示一次时间戳
-                        val showTime = index == 0 || 
-                            (row.createdAt - rows[index - 1].createdAt) > 5 * 60 * 1000L ||
-                            dayKey(rows[index - 1].createdAt) != dayKey(row.createdAt)
-                        MessageBubble(row, conversation.displayName, showTime = showTime,
-                            highlighted = highlightId == row.msgId) { selected = row }
+                    }
+                    // 人在上面读历史时，新消息只在底部报个数，不抢滚动位置
+                    if (unseen > 0) {
+                        Box(
+                            Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp)
+                                .heightIn(min = 48.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(MaterialTheme.colorScheme.primary)
+                                .clickable {
+                                    unseen = 0
+                                    scope.launch { listState.animateScrollToItem(rows.lastIndex) }
+                                }
+                                .padding(horizontal = 16.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(stringResource(R.string.conv_new_messages, unseen),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onPrimary)
+                        }
                     }
                 }
             }
@@ -1378,6 +1452,9 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
 
 /** 定位到命中那条后高亮停留多久。再久一点就会被读成"这条消息有什么特别"。 */
 private const val FOCUS_HIGHLIGHT_MILLIS = 1_600L
+
+/** 距列表末尾不足两条就算"贴着底"：新消息可以跟随；再往上就是人在读历史，只报数不抢滚动。 */
+private const val NEAR_BOTTOM_ITEMS = 1
 
 /** 长按气泡的操作面板：复制 / 删除（§7.3 长按气泡动作）。 */
 @Composable
@@ -3701,10 +3778,11 @@ private fun GuideRow(title: String, desc: String, onClick: () -> Unit) {
     }
 }
 
-/** 主题选择行：标题 + 选中态勾选。 */
+/** 主题选择行：标题 + 选中态勾选。整行可点，高度按 48dp 最小触控目标兜住。 */
 @Composable
 private fun ThemeOption(label: String, selected: Boolean, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick)
+        .heightIn(min = 48.dp).padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Text(label, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
         if (selected) {
