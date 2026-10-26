@@ -140,7 +140,8 @@ function handleReset() {
 
 .page-header h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--pb-font-h2);
+  line-height: var(--pb-line-h2);
 }
 
 .search-form {
@@ -154,20 +155,21 @@ function handleReset() {
 
 .chan-name {
   margin-left: 8px;
-  color: #909399;
-  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-size: var(--pb-font-label);
 }
 
 .table-footer {
   margin-top: 12px;
-  font-size: 12px;
-  color: #909399;
+  font-size: var(--pb-font-label);
+  line-height: var(--pb-line-label);
+  color: var(--el-text-color-secondary);
 }
 
 .msg-detail {
   padding: 8px 24px;
-  font-size: 13px;
-  color: #303133;
+  font-size: var(--pb-font-small);
+  color: var(--el-text-color-primary);
 }
 
 .detail-line {
@@ -177,7 +179,7 @@ function handleReset() {
 .detail-line .k {
   display: inline-block;
   width: 80px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 
 .detail-body {

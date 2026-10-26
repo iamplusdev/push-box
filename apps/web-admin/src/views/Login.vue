@@ -105,15 +105,20 @@ async function handleLogin() {
   width: 400px;
 }
 
+/* 登录页只有这一处标题：h2 的浏览器默认是 1.5em（body 15 下就是 22.5px），
+   六档里没有这一档，所以显式落到 H1 */
 .login-card h2 {
   text-align: center;
   margin: 0;
+  font-size: var(--pb-font-h1);
+  line-height: var(--pb-line-h1);
 }
 
 .tips {
   margin-top: 16px;
-  font-size: 12px;
-  color: #999;
+  font-size: var(--pb-font-label);
+  line-height: var(--pb-line-label);
+  color: var(--el-text-color-secondary);
   text-align: center;
 }
 </style>

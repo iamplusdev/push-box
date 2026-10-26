@@ -164,7 +164,8 @@ onMounted(fetchDevices)
 
 .page-header h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--pb-font-h2);
+  line-height: var(--pb-line-h2);
 }
 
 .header-actions {
@@ -179,8 +180,9 @@ onMounted(fetchDevices)
   justify-content: space-between;
   gap: 12px;
   margin-top: 12px;
-  font-size: 12px;
-  color: #909399;
+  font-size: var(--pb-font-label);
+  line-height: var(--pb-line-label);
+  color: var(--el-text-color-secondary);
 }
 
 .id-cell {
@@ -195,7 +197,7 @@ onMounted(fetchDevices)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--pb-font-mono);
 }
 
 .muted-dash {

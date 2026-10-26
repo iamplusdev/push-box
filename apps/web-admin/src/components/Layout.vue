@@ -97,12 +97,14 @@ function handleLogout() {
 
 .logo h3 {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--pb-font-h2);
+  line-height: var(--pb-line-h2);
   color: #fff;
 }
 
 .logo .subtitle {
-  font-size: 12px;
+  font-size: var(--pb-font-label);
+  line-height: var(--pb-line-label);
   color: rgba(255, 255, 255, 0.5);
 }
 
@@ -167,7 +169,7 @@ function handleLogout() {
   }
 
   .logo h3 {
-    font-size: 15px;
+    font-size: var(--pb-font-body);
   }
 }
 </style>

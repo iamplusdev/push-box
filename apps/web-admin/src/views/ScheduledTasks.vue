@@ -1014,7 +1014,8 @@ onMounted(() => {
 
 .page-header h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--pb-font-h2);
+  line-height: var(--pb-line-h2);
 }
 
 .header-actions {
@@ -1030,8 +1031,8 @@ onMounted(() => {
 
 .channel-name {
   margin-left: 8px;
-  color: #909399;
-  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-size: var(--pb-font-label);
 }
 
 .images {
@@ -1059,16 +1060,16 @@ onMounted(() => {
 }
 
 .json-title {
-  font-size: 13px;
+  font-size: var(--pb-font-small);
   font-weight: 600;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 
 .json-sub {
   margin-left: 8px;
-  font-size: 12px;
+  font-size: var(--pb-font-label);
   font-weight: normal;
-  color: #a8abb2;
+  color: var(--el-text-color-secondary);
 }
 
 .task-form {
@@ -1100,9 +1101,9 @@ onMounted(() => {
 .paste-hint {
   flex: 1 0 100%;
   min-width: 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: #a8abb2;
+  font-size: var(--pb-font-label);
+  line-height: var(--pb-line-label);
+  color: var(--el-text-color-secondary);
 }
 
 .image-row {
@@ -1134,7 +1135,7 @@ onMounted(() => {
 
 .cron-row-next {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--pb-font-label);
   color: var(--el-color-success);
 }
 
@@ -1147,20 +1148,20 @@ onMounted(() => {
 }
 
 .presets-label {
-  font-size: 12px;
-  color: #909399;
+  font-size: var(--pb-font-label);
+  color: var(--el-text-color-secondary);
 }
 
 .hint {
   margin-left: 8px;
-  font-size: 12px;
-  color: #909399;
+  font-size: var(--pb-font-label);
+  color: var(--el-text-color-secondary);
 }
 
 .field-hint {
-  font-size: 12px;
-  line-height: 1.6;
-  color: #909399;
+  font-size: var(--pb-font-label);
+  line-height: var(--pb-line-label);
+  color: var(--el-text-color-secondary);
 }
 
 .variables {
@@ -1180,14 +1181,14 @@ onMounted(() => {
 }
 
 .variables-title {
-  font-size: 12px;
+  font-size: var(--pb-font-label);
   font-weight: 600;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 
 .variables-sub {
-  font-size: 12px;
-  color: #a8abb2;
+  font-size: var(--pb-font-label);
+  color: var(--el-text-color-secondary);
 }
 
 .variable-group {
@@ -1206,9 +1207,9 @@ onMounted(() => {
   flex: none;
   width: 56px;
   padding-top: 2px;
-  font-size: 12px;
+  font-size: var(--pb-font-label);
   line-height: 20px;
-  color: #a8abb2;
+  color: var(--el-text-color-secondary);
 }
 
 .variable-chips {
@@ -1219,7 +1220,7 @@ onMounted(() => {
 
 .variable-tag {
   cursor: pointer;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--pb-font-mono);
   color: var(--el-color-primary);
   background: #eef4ff;
   border-color: #d6e4ff;
@@ -1231,8 +1232,8 @@ onMounted(() => {
 }
 
 .unset {
-  color: #909399;
-  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-size: var(--pb-font-label);
 }
 
 .table-footer {
@@ -1241,8 +1242,8 @@ onMounted(() => {
   justify-content: space-between;
   gap: 12px;
   margin-top: 12px;
-  font-size: 12px;
-  color: #909399;
+  font-size: var(--pb-font-label);
+  color: var(--el-text-color-secondary);
 }
 
 .dialog-footer {
@@ -1255,8 +1256,8 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   margin-bottom: 12px;
-  font-size: 12px;
-  color: #606266;
+  font-size: var(--pb-font-label);
+  color: var(--el-text-color-regular);
 }
 
 .preview-bytes {
@@ -1275,8 +1276,8 @@ onMounted(() => {
   background: #fafbfc;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
-  font-size: 12px;
-  color: #606266;
+  font-size: var(--pb-font-label);
+  color: var(--el-text-color-regular);
 }
 
 .preview-next-row {
@@ -1287,7 +1288,7 @@ onMounted(() => {
 }
 
 .preview-next-row code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--pb-font-mono);
   color: var(--el-color-primary);
 }
 
@@ -1305,13 +1306,13 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   margin-bottom: 6px;
-  font-size: 12px;
-  color: #909399;
+  font-size: var(--pb-font-label);
+  color: var(--el-text-color-secondary);
 }
 
 .preview-sender-id {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color: #a8abb2;
+  font-family: var(--pb-font-mono);
+  color: var(--el-text-color-secondary);
 }
 
 .preview-title {
@@ -1319,9 +1320,11 @@ onMounted(() => {
   font-weight: 600;
 }
 
+/* 预览正文就是一条消息正文：15/23，与两端气泡同一档。
+   原来写 14/1.6——六档之外的第七个数，也只在这一页出现过 */
 .preview-content {
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: var(--pb-font-body);
+  line-height: var(--pb-line-body);
   white-space: pre-wrap;
   word-break: break-word;
 }

@@ -93,12 +93,14 @@ onMounted(fetchDetail)
 
 .page-header h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--pb-font-h2);
+  line-height: var(--pb-line-h2);
 }
 
 .section-title {
   margin: 24px 0 12px;
-  font-size: 15px;
+  font-size: var(--pb-font-body);
+  line-height: var(--pb-line-body);
 }
 
 /* 频道号码要能被整段拿走：只读输入框 + 一键复制，不是让人在表格里拖选 */
@@ -124,6 +126,6 @@ onMounted(fetchDetail)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--pb-font-mono);
 }
 </style>

@@ -125,7 +125,8 @@ onBeforeUnmount(() => {
 
 .page-header h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--pb-font-h2);
+  line-height: var(--pb-line-h2);
 }
 
 .stat-row {
@@ -136,23 +137,24 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
+/* 统计数字原来 30px——规范只有六档，最大 20。数字仍靠字重与留白压住，不靠再大一号 */
 .stat-num {
-  font-size: 30px;
+  font-size: var(--pb-font-h1);
+  line-height: var(--pb-line-h1);
   font-weight: 600;
-  color: #303133;
-  line-height: 1.4;
+  color: var(--el-text-color-primary);
 }
 
 .stat-sub {
-  font-size: 15px;
+  font-size: var(--pb-font-small);
   font-weight: 400;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-left: 4px;
 }
 
 .stat-label {
-  font-size: 13px;
-  color: #909399;
+  font-size: var(--pb-font-small);
+  color: var(--el-text-color-secondary);
   margin-top: 4px;
 }
 

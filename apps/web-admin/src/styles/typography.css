@@ -1,0 +1,88 @@
+/* §9.2 的字号层级，落到管理台这一端。
+ *
+ * 这一层原来不存在：Element Plus 的基线是 14px，页面又各自散写 12/13/14/15/18/30，
+ * 于是同一屏里"标签"和"正文"只差 1px、表格头与正文同重同色、12 号副文本压在 #909399 上只有 2.9:1。
+ * 六档字号、行高与两个字体族收在这里，Element 自己的字号变量也指过来——
+ * 按钮、表格、表单、弹窗的每一处都跟着走一遍，页面里就只剩 var()。
+ *
+ * 行高与客户端同一张表：20/28、18/25、16/22、15/23、13/18、12/16（1.53× 取整）。
+ */
+
+:root {
+  --pb-font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+    'Microsoft YaHei UI', 'Microsoft YaHei', Arial, sans-serif;
+  --pb-font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Microsoft YaHei UI',
+    'Microsoft YaHei', monospace;
+
+  --pb-font-h1: 20px;
+  --pb-line-h1: 28px;
+  --pb-font-h2: 18px;
+  --pb-line-h2: 25px;
+  --pb-font-h3: 16px;
+  --pb-line-h3: 22px;
+  --pb-font-body: 15px;
+  --pb-line-body: 23px;
+  --pb-font-small: 13px;
+  --pb-line-small: 18px;
+  --pb-font-label: 12px;
+  --pb-line-label: 16px;
+
+  /* Element 的六档按本表重指：extra-large 是页面标题、small 是表格与按钮、extra-small 是标签。
+     base 从 14 抬到 15 —— element-plus/dist/index.css 里 14 是正文基数，而 14 不在六档里 */
+  --el-font-family: var(--pb-font-ui);
+  --el-font-size-extra-large: var(--pb-font-h1);
+  --el-font-size-large: var(--pb-font-h2);
+  --el-font-size-medium: var(--pb-font-h3);
+  --el-font-size-base: var(--pb-font-body);
+  --el-font-size-small: var(--pb-font-small);
+  --el-font-size-extra-small: var(--pb-font-label);
+
+  /* 三级文字色：#909399 在白底上只有 2.9:1，12 号字几乎糊掉；次级色压到 #5f5f5f（5.9:1），
+     和两张客户端色板里的 Fg.Secondary 同值 */
+  --el-text-color-primary: #19191a;
+  --el-text-color-regular: #3f3f45;
+  --el-text-color-secondary: #5f5f5f;
+
+  /* 表单标签比输入值小一档：两边原来都是 14，读的时候分不出哪是标签哪是内容 */
+  --el-form-label-font-size: var(--pb-font-small);
+}
+
+body {
+  font-family: var(--pb-font-ui);
+  font-size: var(--pb-font-body);
+  line-height: var(--pb-line-body);
+  color: var(--el-text-color-primary);
+}
+
+/* 表格是管理台里最密的一块：13px 正文 + 加粗表头 + 约 44px 行高。
+   Element 默认表头与正文同号同重，扫一眼分不出哪行是头；单元格上下只留 8px，长页面读起来挤成一团 */
+.el-table {
+  --el-table-header-text-color: var(--el-text-color-primary);
+  --el-table-text-color: var(--el-text-color-regular);
+  font-size: var(--pb-font-small);
+}
+
+.el-table th.el-table__cell {
+  font-weight: 600;
+}
+
+.el-table th.el-table__cell,
+.el-table td.el-table__cell {
+  padding: 11px 0;
+}
+
+.el-table .cell {
+  line-height: var(--pb-line-small);
+}
+
+/* 表格里的操作按钮跟着表格字号走：Element 的 .el-button 自己钉了 base 字号（15），
+   混在 13 号的行里会大一圈 */
+.el-table .el-button {
+  font-size: var(--pb-font-small);
+}
+
+/* 标识符、cron、JSON 一律等宽：设备 ID / 频道号码 / 消息 ID 要能逐字符核对 */
+.pb-mono {
+  font-family: var(--pb-font-mono);
+  font-variant-numeric: tabular-nums;
+}
