@@ -214,13 +214,14 @@ public class MediaFetchService {
           source.url() == null ? "-" : hostOf(source.url()));
       return null;
     }
+    AvatarImage.Normalized avatar = AvatarImage.normalize(body, mime, media.getAvatarSize());
     String key = MediaObjects.avatarKey(channelNo, token);
     // 换头像是在同一个对象键上覆盖写：延用库里那把客户钥，读侧就不会撞上"新字节配旧封装钥"的空窗
-    MediaObjects.PutResult stored = objects.put(key, body, mime,
+    MediaObjects.PutResult stored = objects.put(key, avatar.body(), avatar.mime(),
         objects.reuseKey(current == null ? null : current.getBytes("sse_key_wrapped")));
     store.setSenderAvatarKey(channelNo, senderId, key, stored.encMode(), stored.sseKeyWrapped());
-    log.info("头像已转存 channel={} sender={} mime={} bytes={}", channelNo, senderId, mime,
-        body.length);
+    log.info("头像已转存 channel={} sender={} mime={} bytes={} rawBytes={} {}x{}", channelNo, senderId,
+        avatar.mime(), avatar.body().length, body.length, avatar.width(), avatar.height());
     return key;
   }
 

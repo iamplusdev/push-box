@@ -222,6 +222,12 @@ public class PbProperties {
     private int queueCapacity = 256;
     private int retryMax = 3;
     private int thumbLongEdge = 512;
+    /**
+     * §5.2 头像归一化的目标边长（正方形，中心裁剪）。客户端只把头像画进 40dp（Android）/
+     * 44px（Windows）的圆角框，256 已经是最密那档（40dp × 3.5 倍密度 ≈ 140px）的将近两倍。
+     * {@code <= 0} 表示不归一化，外链头像第三方给多大就存多大。
+     */
+    private int avatarSize = 256;
     /** §14：频道级图片抓取频率限制（每分钟），默认 30 次/分钟。 */
     private int fetchRatePerChannelPerMin = 30;
 
@@ -249,6 +255,8 @@ public class PbProperties {
     public void setRetryMax(int v) { this.retryMax = v; }
     public int getThumbLongEdge() { return thumbLongEdge; }
     public void setThumbLongEdge(int v) { this.thumbLongEdge = v; }
+    public int getAvatarSize() { return avatarSize; }
+    public void setAvatarSize(int v) { this.avatarSize = v; }
     public int getFetchRatePerChannelPerMin() { return fetchRatePerChannelPerMin; }
     public void setFetchRatePerChannelPerMin(int v) { this.fetchRatePerChannelPerMin = v; }
   }
