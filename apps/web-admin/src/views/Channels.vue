@@ -48,12 +48,14 @@
           <el-button type="danger" link @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
+      <template #empty>
+        <el-empty description="暂无频道" />
+      </template>
     </el-table>
 
-    <div class="table-footer" v-if="!loading">
+    <div class="table-footer" v-if="!loading && channels.length > 0">
       共 {{ channels.length }} 个频道<template v-if="keyword">，筛选后 {{ filtered.length }} 个</template>
     </div>
-    <el-empty v-if="!loading && channels.length === 0" description="暂无频道" />
   </div>
 </template>
 
@@ -97,7 +99,7 @@ async function handleDelete(row: Channel) {
     await ElMessageBox.confirm(
       `确定删除频道 ${row.channel_no}（${row.name}）吗？删除后入站即刻 403，历史消息仍保留。`,
       '删除确认',
-      { type: 'warning' }
+      { type: 'warning', confirmButtonType: 'danger', confirmButtonText: '删除' }
     )
     await deleteChannel(row.channel_no)
     ElMessage.success('已删除')

@@ -98,12 +98,14 @@
           <el-button type="danger" link @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
+      <template #empty>
+        <el-empty description="暂无定时推送任务" />
+      </template>
     </el-table>
 
-    <div class="table-footer" v-if="!loading">
+    <div class="table-footer" v-if="!loading && tasks.length > 0">
       共 {{ tasks.length }} 个任务<template v-if="keyword || categoryFilter">，筛选后 {{ filtered.length }} 个</template>
     </div>
-    <el-empty v-if="!loading && tasks.length === 0" description="暂无定时推送任务" />
 
     <el-dialog
       v-model="dialogVisible"
@@ -902,7 +904,7 @@ async function handleDelete(row: ScheduledTask) {
     await ElMessageBox.confirm(
       `确定删除定时任务「${row.name || row.task_id}」吗？删除后不再触发，已发出的消息不受影响。`,
       '删除确认',
-      { type: 'warning' }
+      { type: 'warning', confirmButtonType: 'danger', confirmButtonText: '删除' }
     )
     await deleteScheduledTask(row.task_id)
     ElMessage.success('已删除')

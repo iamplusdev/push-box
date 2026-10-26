@@ -1,11 +1,17 @@
 <template>
   <el-container class="layout-container">
-    <el-aside width="200px" class="layout-aside">
+    <el-aside :width="collapsed ? '64px' : '200px'" class="layout-aside" :class="{ collapsed }">
       <div class="logo">
-        <h3>PushBox</h3>
-        <span class="subtitle">管理台</span>
+        <h3>{{ collapsed ? 'PB' : 'PushBox' }}</h3>
+        <span v-if="!collapsed" class="subtitle">管理台</span>
       </div>
-      <el-menu :default-active="activeMenu" router class="side-menu">
+      <el-menu
+        :default-active="activeMenu"
+        router
+        class="side-menu"
+        :collapse="collapsed"
+        :collapse-transition="false"
+      >
         <el-menu-item index="/dashboard">
           <el-icon><Odometer /></el-icon>
           <span>概览</span>
@@ -30,7 +36,7 @@
       <div class="aside-footer">
         <el-button text class="logout-btn" @click="handleLogout">
           <el-icon class="logout-icon"><SwitchButton /></el-icon>
-          <span>退出登录</span>
+          <span v-if="!collapsed">退出登录</span>
         </el-button>
       </div>
     </el-aside>
@@ -41,7 +47,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Odometer, Message, Cellphone, Search, SwitchButton, Timer } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
@@ -49,6 +55,17 @@ import { useAuthStore } from '@/stores/auth'
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+
+// 断点与 PC 端窄屏一致取 768px：侧栏收成 64px 图标列，把横向空间让给内容区。
+// 不引第三方媒体查询库，matchMedia 的变化回调就够。
+const NARROW = '(max-width: 767px)'
+const query = window.matchMedia(NARROW)
+const collapsed = ref(query.matches)
+function syncCollapsed() {
+  collapsed.value = query.matches
+}
+onMounted(() => query.addEventListener('change', syncCollapsed))
+onUnmounted(() => query.removeEventListener('change', syncCollapsed))
 
 const activeMenu = computed(() => {
   if (route.path.startsWith('/channels')) return '/channels'
@@ -126,8 +143,31 @@ function handleLogout() {
   margin-right: 8px;
 }
 
+.layout-aside.collapsed .logout-btn {
+  justify-content: center;
+}
+
+.layout-aside.collapsed .logout-icon {
+  margin-right: 0;
+}
+
 .layout-main {
   background: #f5f7fa;
   padding: 20px;
+}
+
+@media (max-width: 767px) {
+  .layout-main {
+    padding: 12px;
+  }
+
+  .logo {
+    padding: 16px 8px;
+    text-align: center;
+  }
+
+  .logo h3 {
+    font-size: 15px;
+  }
 }
 </style>

@@ -35,16 +35,7 @@
       </el-form-item>
     </el-form>
 
-    <el-alert
-      v-if="searched && messages.length === 0 && !loading"
-      title="没有匹配的消息"
-      type="info"
-      :closable="false"
-      show-icon
-      style="margin-bottom: 12px"
-    />
-
-    <el-table v-if="messages.length" :data="messages" stripe border style="width: 100%">
+    <el-table v-loading="loading" :data="messages" stripe border style="width: 100%">
       <el-table-column type="expand">
         <template #default="{ row }">
           <div class="msg-detail">
@@ -76,12 +67,14 @@
       <el-table-column label="内容" min-width="240" show-overflow-tooltip>
         <template #default="{ row }">{{ row.title || row.summary || row.body }}</template>
       </el-table-column>
+      <template #empty>
+        <el-empty :description="searched ? '没有匹配的消息' : '输入关键词后开始搜索'" />
+      </template>
     </el-table>
 
     <div class="table-footer" v-if="searched && messages.length">
       命中 {{ messages.length }} 条（上限 {{ form.limit }}）
     </div>
-    <el-empty v-if="!searched && !loading" description="输入关键词后开始搜索" />
   </div>
 </template>
 

@@ -35,8 +35,10 @@
       <el-table-column label="最近在线" width="170">
         <template #default="{ row }">{{ formatTime(row.last_seen_at) }}</template>
       </el-table-column>
+      <template #empty>
+        <el-empty description="暂无设备接入" />
+      </template>
     </el-table>
-    <el-empty v-if="!loading && devices.length === 0" description="暂无设备接入" />
   </div>
 </template>
 

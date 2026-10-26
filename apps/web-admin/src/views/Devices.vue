@@ -46,12 +46,14 @@
           <span v-else class="muted-dash">-</span>
         </template>
       </el-table-column>
+      <template #empty>
+        <el-empty description="暂无设备" />
+      </template>
     </el-table>
 
-    <div class="table-footer" v-if="!loading">
+    <div class="table-footer" v-if="!loading && devices.length > 0">
       共 {{ devices.length }} 台设备<template v-if="keyword">，筛选后 {{ filtered.length }} 台</template>
     </div>
-    <el-empty v-if="!loading && devices.length === 0" description="暂无设备" />
   </div>
 </template>
 
@@ -101,7 +103,7 @@ async function handleRevoke(row: Device) {
     await ElMessageBox.confirm(
       `确定吊销设备 ${row.name || row.device_id} 吗？吊销后该设备立即作废并被踢下线。`,
       '吊销确认',
-      { type: 'warning' }
+      { type: 'warning', confirmButtonType: 'danger', confirmButtonText: '吊销' }
     )
     await revokeDevice(row.device_id)
     ElMessage.success('已吊销')
