@@ -59,62 +59,8 @@
             </Setter>
         </Style>
 
-        <!-- 主按钮：accent 实底 -->
-        <Style x:Key="PrimaryButton" TargetType="Button">
-            <Setter Property="Padding" Value="16,8" />
-            <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
-            <Setter Property="FontFamily" Value="{DynamicResource Font.UI}" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" Background="{DynamicResource Accent}" CornerRadius="6"
-                                Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Opacity" Value="0.88" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="Bd" Property="Opacity" Value="0.45" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- 次按钮：描边空心，悬停铺灰 -->
-        <Style x:Key="SecondaryButton" TargetType="Button">
-            <Setter Property="Padding" Value="16,8" />
-            <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
-            <Setter Property="FontFamily" Value="{DynamicResource Font.UI}" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="6"
-                                BorderBrush="{DynamicResource Divider}" BorderThickness="1"
-                                Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Bg.Elevated}" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="Bd" Property="Opacity" Value="0.45" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        <!-- 按钮不再各窗自养一份：主/次两键在 token 字典里（Button.Primary / Button.Secondary），
+             三态与换肤都在那边，这一窗只挂 DynamicResource -->
 
         <!-- 复选框：圆角小方井，勾选填 accent 打白勾 -->
         <Style x:Key="AccentCheck" TargetType="CheckBox">
@@ -229,14 +175,14 @@
                 <TextBox x:Name="CodeBox" Style="{StaticResource FieldBox}" Margin="0,0,0,6" />
                 <TextBlock Style="{StaticResource HintText}" Margin="0,0,0,14"
                            Text="在手机的「设置 → 设备信息」里能看到恢复码和二维码。加入之后这里不会再次显示它。" />
-                <Button x:Name="JoinConfirmButton" Style="{StaticResource PrimaryButton}"
+                <Button x:Name="JoinConfirmButton" Style="{DynamicResource Button.Primary}"
                         Content="加入" HorizontalAlignment="Left" Click="OnJoinConfirmClick" />
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                <Button x:Name="CreateButton" Style="{StaticResource PrimaryButton}"
+                <Button x:Name="CreateButton" Style="{DynamicResource Button.Primary}"
                         Content="创建新的个人空间" Click="OnCreateClick" />
-                <Button x:Name="JoinButton" Style="{StaticResource SecondaryButton}"
+                <Button x:Name="JoinButton" Style="{DynamicResource Button.Secondary}"
                         Content="我有恢复码，加入已有空间" Margin="10,0,0,0" Click="OnJoinClick" />
             </StackPanel>
         </StackPanel>
@@ -254,8 +200,8 @@
             <TextBlock Style="{StaticResource HintText}" Foreground="{DynamicResource Level.Error}"
                        Margin="0,0,0,16" Text="抄好之前不要退出。下一次只有已登录的设备能重新导出它。" />
             <StackPanel Orientation="Horizontal">
-                <Button Style="{StaticResource SecondaryButton}" Content="复制到剪贴板" Click="OnCopyCodeClick" />
-                <Button x:Name="EnterButton" Style="{StaticResource PrimaryButton}"
+                <Button Style="{DynamicResource Button.Secondary}" Content="复制到剪贴板" Click="OnCopyCodeClick" />
+                <Button x:Name="EnterButton" Style="{DynamicResource Button.Primary}"
                         Content="我已抄好，进入" Margin="10,0,0,0" Click="OnEnterClick" />
             </StackPanel>
         </StackPanel>

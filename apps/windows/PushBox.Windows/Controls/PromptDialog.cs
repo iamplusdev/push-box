@@ -20,8 +20,12 @@ public static class PromptDialog
             Text = current, FontSize = MarkdownStyle.SmallSize, MinWidth = 320,
             Margin = new Thickness(0, 8, 0, 12)
         };
-        var ok = new Button { Content = "确定", Width = 72, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
-        var cancel = new Button { Content = "取消", Width = 72, IsCancel = true };
+        var ok = new Button
+        {
+            Content = "确定", Width = 72, IsDefault = true, Margin = new Thickness(0, 0, 8, 0),
+            Style = StyleOf(owner, "Button.Primary")
+        };
+        var cancel = new Button { Content = "取消", Width = 72, IsCancel = true, Style = StyleOf(owner, "Button.Secondary") };
         var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right
@@ -55,4 +59,8 @@ public static class PromptDialog
     /// <summary>token 字典挂在应用级资源上（§9.1 的深浅色由 ThemeManager 换），对话框没有自己的父级可视树。</summary>
     private static Brush? BrushOf(Window? owner, string key) =>
         (owner?.TryFindResource(key) ?? Application.Current?.TryFindResource(key)) as Brush;
+
+    /// <summary>按钮样式也在 token 字典里（Button.Primary / Button.Secondary）；拿不到就退回系统默认钮。</summary>
+    private static Style? StyleOf(Window? owner, string key) =>
+        (owner?.TryFindResource(key) ?? Application.Current?.TryFindResource(key)) as Style;
 }

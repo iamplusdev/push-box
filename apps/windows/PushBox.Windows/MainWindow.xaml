@@ -167,10 +167,10 @@
                     <!-- 底部：设置按钮 -->
                     <Border DockPanel.Dock="Bottom" Height="48" Padding="0,8"
                             BorderBrush="{DynamicResource Divider}" BorderThickness="0,1,0,0">
-                        <Button x:Name="SettingsButton" Content="⚙"
+                        <Button x:Name="SettingsButton" Content="&#xE713;"
+                                Style="{DynamicResource Button.Icon}"
+                                Width="36" Height="36"
                                 FontSize="{x:Static controls:MarkdownStyle.H2Size}"
-                                Background="Transparent" BorderThickness="0"
-                                Foreground="{DynamicResource Fg.Secondary}"
                                 ToolTip="设置（Alt+S）" Click="OnOpenSettings" />
                     </Border>
                     <!-- 顶部：连接状态指示。正文只有两字（"在线/离线/异常"），原因挂在整块的悬停提示上——
@@ -220,8 +220,7 @@
                                        TextWrapping="Wrap"
                                        Margin="0,0,0,16"/>
                             <Button Content="打开设置创建频道" Click="OnOpenSettingsFromEmpty"
-                                    Background="Transparent" BorderBrush="{DynamicResource Accent}"
-                                    Foreground="{DynamicResource Accent}"/>
+                                    Style="{DynamicResource Button.Accent}"/>
                         </StackPanel>
                     </Grid>
                 </Grid>
@@ -256,11 +255,10 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <Button x:Name="BackButton" Grid.Column="0" Content="←" Width="28" Height="28"
-                            Padding="0" Visibility="Collapsed" Background="Transparent"
-                            BorderThickness="0" FontSize="{x:Static controls:MarkdownStyle.H3Size}"
-                            ToolTip="返回（Alt+←）"
-                            Foreground="{DynamicResource Fg.Primary}" />
+                    <Button x:Name="BackButton" Grid.Column="0" Content="&#xE72B;" Width="28" Height="28"
+                            Style="{DynamicResource Button.Icon}" Visibility="Collapsed"
+                            FontSize="{x:Static controls:MarkdownStyle.H3Size}"
+                            ToolTip="返回（Alt+←）" />
                     <TextBlock x:Name="ConversationTitle" Grid.Column="1" Margin="10,0,0,0"
                                Style="{DynamicResource Text.H3}" VerticalAlignment="Center"
                                Foreground="{DynamicResource Fg.Primary}"

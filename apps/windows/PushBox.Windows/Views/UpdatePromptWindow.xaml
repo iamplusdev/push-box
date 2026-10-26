@@ -33,9 +33,10 @@
                    TextWrapping="Wrap"
                    Visibility="Collapsed" Foreground="{DynamicResource Level.Error}" />
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-            <Button x:Name="LaterButton" Content="稍后" MinWidth="76" Click="OnLater" />
+            <Button x:Name="LaterButton" Content="稍后" MinWidth="76" Click="OnLater"
+                    Style="{DynamicResource Button.Secondary}" />
             <Button x:Name="InstallButton" Content="下载并安装" MinWidth="100" Margin="10,0,0,0"
-                    Click="OnInstall" />
+                    Click="OnInstall" Style="{DynamicResource Button.Primary}" />
         </StackPanel>
     </StackPanel>
 </Window>

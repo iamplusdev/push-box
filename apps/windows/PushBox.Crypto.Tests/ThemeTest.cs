@@ -93,6 +93,14 @@ public class ThemeTest
         ["ScrollBar.Thumb"] = "#A1A1A2",
         ["ScrollBar.ThumbHover"] = "#888889",
         ["ScrollBar.ThumbDrag"] = "#6E6E6F",
+        // 按钮三态：Primary 越按越深，Ghost（中性/图标钮）铺灰，Accent 描边钮只补 pressed（hover 复用 Bg.AccentTint），Danger 铺浅红
+        ["Btn.Primary.Hover"] = "#0C6742",
+        ["Btn.Primary.Pressed"] = "#0A5536",
+        ["Btn.Ghost.Hover"] = "#EFEFF0",
+        ["Btn.Ghost.Pressed"] = "#E2E2E4",
+        ["Btn.Accent.Pressed"] = "#CFF3E1",
+        ["Btn.Danger.Hover"] = "#FDECEC",
+        ["Btn.Danger.Pressed"] = "#FAD9D9",
     };
 
     /// <summary>§9.1 的深色那一列：整站反色且不碰纯黑。
@@ -123,6 +131,14 @@ public class ThemeTest
         ["ScrollBar.Thumb"] = "#6E6E6F",
         ["ScrollBar.ThumbHover"] = "#888889",
         ["ScrollBar.ThumbDrag"] = "#A1A1A2",
+        // 深色下抬升方向反过来：Primary 越按越亮，Ghost 抬灰，Danger 铺暗红
+        ["Btn.Primary.Hover"] = "#55C98B",
+        ["Btn.Primary.Pressed"] = "#6BD39B",
+        ["Btn.Ghost.Hover"] = "#333334",
+        ["Btn.Ghost.Pressed"] = "#3D3D3E",
+        ["Btn.Accent.Pressed"] = "#2A4A36",
+        ["Btn.Danger.Hover"] = "#3B2325",
+        ["Btn.Danger.Pressed"] = "#4C2A2C",
     };
 
     [Fact]
@@ -378,5 +394,34 @@ public class ThemeTest
         // 焦点框本身也得在字典里（DynamicResource 拿不到键时不会报错，只是又变回"看不见"）
         Assert.Contains("Focus.Visual", TokenFiles.AllKeys("Themes/Tokens.xaml"));
         Assert.Contains("Focus.Visual", TokenFiles.AllKeys("Themes/Tokens.Dark.xaml"));
+    }
+
+    /// <summary>
+    /// §9.4 的按钮体系：五个键两份字典都得有，且每一个都带齐 hover/pressed/disabled 三个触发器。
+    /// 少一个键那一面就悄悄退回 WPF 默认灰钮，少一个触发器那只按钮就没有按压反馈——两者编译期都不报错，
+    /// 要到用户面前才看得出来。
+    /// </summary>
+    [Fact]
+    public void EveryButtonStyleCarriesAllThreeStatesOnBothSides()
+    {
+        var keys = new[] { "Button.Primary", "Button.Secondary", "Button.Accent", "Button.Danger", "Button.Icon" };
+        foreach (var file in new[] { Light, Dark })
+        {
+            var doc = XDocument.Parse(TokenFiles.Text(file));
+            foreach (var key in keys)
+            {
+                var style = doc.Root!.Elements()
+                    .SingleOrDefault(e => e.Name.LocalName == "Style" && (string?)e.Attribute(X + "Key") == key);
+                Assert.True(style is not null, $"{file}: 缺 {key}");
+                var markup = style!.ToString();
+                Assert.Contains("IsMouseOver", markup);
+                Assert.Contains("IsPressed", markup);
+                Assert.Contains("IsEnabled", markup);
+                Assert.Contains("Focus.Visual", markup);
+            }
+
+            // 图标字体键也在：⚙/←/✅/⚠️ 已换成 MDL2 字形，键丢了那几处就退回方块字
+            Assert.Contains("Font.Icon", TokenFiles.AllKeys(file));
+        }
     }
 }

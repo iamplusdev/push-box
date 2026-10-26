@@ -46,6 +46,17 @@
     <SolidColorBrush x:Key="ScrollBar.ThumbHover" Color="#888889" />
     <SolidColorBrush x:Key="ScrollBar.ThumbDrag" Color="#6E6E6F" />
 
+    <!-- 按钮三态：默认态用已有 token（Accent 实底 / Divider 描边 / Level.Error 描边），
+         这里只补 hover 与 pressed 那两档。浅色下 Primary 越按越深、Ghost 铺灰、Danger 铺浅红；
+         Accent 描边钮的 hover 复用 Bg.AccentTint，只补 pressed 一档 -->
+    <SolidColorBrush x:Key="Btn.Primary.Hover" Color="#0C6742" />
+    <SolidColorBrush x:Key="Btn.Primary.Pressed" Color="#0A5536" />
+    <SolidColorBrush x:Key="Btn.Ghost.Hover" Color="#EFEFF0" />
+    <SolidColorBrush x:Key="Btn.Ghost.Pressed" Color="#E2E2E4" />
+    <SolidColorBrush x:Key="Btn.Accent.Pressed" Color="#CFF3E1" />
+    <SolidColorBrush x:Key="Btn.Danger.Hover" Color="#FDECEC" />
+    <SolidColorBrush x:Key="Btn.Danger.Pressed" Color="#FAD9D9" />
+
     <!-- §9.2 的字体层级系统（字号常量）。XAML 用 {x:Static} 直接引用 Controls/MarkdownView.cs 里
          那组 const——数字只写一份，改档位时这里跟着走（TypographyTest 会读这四份文件逐条比）。
          正文 15/行高23、摘要 13/行高18、标签 12/行高16、标题四档 20/28、18/25、16/22、15/23。
@@ -54,6 +65,9 @@
     <!-- 基础字体族 -->
     <FontFamily x:Key="Font.UI">Segoe UI, Microsoft YaHei UI</FontFamily>
     <FontFamily x:Key="Font.Code">Consolas, Microsoft YaHei UI</FontFamily>
+    <!-- 图标字体：系统自带的 Segoe MDL2 Assets。⚙/← 那类 emoji 与 ✅/⚠️ 彩符在深浅两色下
+         都不跟 token 走（彩符根本染不了色），换成字形后颜色随 Foreground、字形随系统字体 -->
+    <FontFamily x:Key="Font.Icon">Segoe MDL2 Assets</FontFamily>
 
     <!-- H1: 20px / 行高 28 / Bold -->
     <Style x:Key="Text.H1" TargetType="TextBlock">
@@ -105,6 +119,165 @@
         <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
         <Setter Property="LineHeight" Value="{x:Static controls:MarkdownStyle.SmallLine}" />
         <Setter Property="FontFamily" Value="{StaticResource Font.Code}" />
+    </Style>
+
+    <!-- 按钮体系：五个键覆盖全部场景——Primary 实底、Secondary 中性描边、Accent 主色描边、
+         Danger 危险描边、Icon 纯字形。三态（默认/hover/pressed）加禁用与键盘焦点全在模板触发器里，
+         窗口那边只挂 Style，不再写 Background/BorderBrush 内联属性（写回去就等于这一处不参加换肤）。
+         五个样式在两份字典里逐字相同：颜色一律 DynamicResource，换主题时自己跟着走 -->
+    <Style x:Key="Button.Primary" TargetType="Button">
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Padding" Value="16,0" />
+        <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Focus.Visual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="{DynamicResource Accent}" CornerRadius="6"
+                            Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Btn.Primary.Hover}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Btn.Primary.Pressed}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="Button.Secondary" TargetType="Button">
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Padding" Value="16,0" />
+        <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Focus.Visual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="Transparent" BorderThickness="1" CornerRadius="6"
+                            BorderBrush="{DynamicResource Divider}"
+                            Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Btn.Ghost.Hover}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Btn.Ghost.Pressed}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="Button.Accent" TargetType="Button">
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Padding" Value="16,0" />
+        <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Focus.Visual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="Transparent" BorderThickness="1" CornerRadius="6"
+                            BorderBrush="{DynamicResource Accent}"
+                            Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Bg.AccentTint}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Btn.Accent.Pressed}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="Button.Danger" TargetType="Button">
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Padding" Value="16,0" />
+        <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource Level.Error}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Focus.Visual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="Transparent" BorderThickness="1" CornerRadius="6"
+                            BorderBrush="{DynamicResource Level.Error}"
+                            Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Btn.Danger.Hover}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Btn.Danger.Pressed}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 图标钮（顶栏 ⚙、返回 ←）：字形与尺寸由挂它的地方给（Content=&#xE713; + x:Static 字号），
+         这一份只管三态底色与焦点框 -->
+    <Style x:Key="Button.Icon" TargetType="Button">
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Icon}" />
+        <Setter Property="Foreground" Value="{DynamicResource Fg.Secondary}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Focus.Visual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="6"
+                            Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Btn.Ghost.Hover}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Btn.Ghost.Pressed}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <!-- 键盘焦点框：2px Accent 内描边。会话行原来把 FocusVisualStyle 置成 null，

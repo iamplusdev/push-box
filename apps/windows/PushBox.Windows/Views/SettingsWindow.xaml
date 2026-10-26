@@ -179,16 +179,8 @@
             </Setter>
         </Style>
         
-        <!-- 按钮样式：增加圆角和主色 -->
-        <Style TargetType="Button">
-            <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
-            <Setter Property="Height" Value="32" />
-            <Setter Property="Padding" Value="16,0" />
-            <Setter Property="Background" Value="{DynamicResource Accent}" />
-            <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Cursor" Value="Hand" />
-        </Style>
+        <!-- 按钮不再用这一窗自己的隐式样式：五个 Button.* 键在两份 token 字典里（§9.4），
+             三态与换肤都在那边，这里每个按钮显式挂 Style -->
         
         <!-- 卡片样式 -->
         <Style x:Key="CardStyle" TargetType="Border">
@@ -240,18 +232,18 @@
                     
                     <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                         <TextBox x:Name="NewChannelName" Width="280" />
-                        <Button Content="新建频道" Margin="10,0,0,0" Click="OnCreateChannel" />
-                        <Button Content="刷新列表" Margin="10,0,0,0" Click="OnReloadChannels" 
-                                Background="Transparent" Foreground="{DynamicResource Accent}"
-                                BorderThickness="1" BorderBrush="{DynamicResource Accent}"/>
+                        <Button Content="新建频道" Margin="10,0,0,0" Click="OnCreateChannel"
+                                Style="{DynamicResource Button.Primary}" />
+                        <Button Content="刷新列表" Margin="10,0,0,0" Click="OnReloadChannels"
+                                Style="{DynamicResource Button.Accent}" />
                     </StackPanel>
 
                     <!-- 接入信息卡片 -->
                     <Border x:Name="IssuedCard" Visibility="Collapsed" Style="{StaticResource CardStyle}">
                         <StackPanel>
-                            <TextBlock Text="✅ 接入信息（密钥只显示这一次）"
-                                       Style="{DynamicResource Text.H3}"
-                                       Foreground="{DynamicResource Accent}" />
+                            <TextBlock Style="{DynamicResource Text.H3}" Foreground="{DynamicResource Accent}">
+                                <Run FontFamily="{DynamicResource Font.Icon}" Text="&#xE73E;" /><Run Text=" 接入信息（密钥只显示这一次）" />
+                            </TextBlock>
                                     <TextBlock x:Name="IssuedNo" Style="{DynamicResource Text.Code}" Margin="0,10,0,0"
                                        Foreground="{DynamicResource Fg.Primary}" />
                             <TextBlock x:Name="IssuedSecret" Style="{DynamicResource Text.Code}" Margin="0,6,0,0"
@@ -260,15 +252,19 @@
                                        TextWrapping="Wrap" FontFamily="{DynamicResource Font.Code}"
                                        Foreground="{DynamicResource Fg.Secondary}" />
                             <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                <Button Content="复制频道号" Height="30" Click="OnCopyChannelNo" />
-                                <Button Content="复制密钥" Margin="10,0,0,0" Height="30" Click="OnCopySecret" />
-                                <Button Content="复制 curl" Margin="10,0,0,0" Height="30" Click="OnCopyCurl" />
-                                <Button Content="收起来" Margin="10,0,0,0" Height="30" Click="OnDismissIssued"
-                                        Background="Transparent" Foreground="{DynamicResource Fg.Secondary}" 
-                                        BorderThickness="1" BorderBrush="{DynamicResource Divider}"/>
+                                <Button Content="复制频道号" Click="OnCopyChannelNo"
+                                        Style="{DynamicResource Button.Primary}" />
+                                <Button Content="复制密钥" Margin="10,0,0,0" Click="OnCopySecret"
+                                        Style="{DynamicResource Button.Primary}" />
+                                <Button Content="复制 curl" Margin="10,0,0,0" Click="OnCopyCurl"
+                                        Style="{DynamicResource Button.Primary}" />
+                                <Button Content="收起来" Margin="10,0,0,0" Click="OnDismissIssued"
+                                        Style="{DynamicResource Button.Secondary}" />
                             </StackPanel>
-                            <TextBlock Text="⚠️ 密钥只显示这一次，请立即复制保存。" Style="{DynamicResource Text.Label}"
-                                       Margin="0,10,0,0" Foreground="{DynamicResource Level.Error}" />
+                            <TextBlock Style="{DynamicResource Text.Label}" Margin="0,10,0,0"
+                                       Foreground="{DynamicResource Level.Error}">
+                                <Run FontFamily="{DynamicResource Font.Icon}" Text="&#xE7BA;" /><Run Text=" 密钥只显示这一次，请立即复制保存。" />
+                            </TextBlock>
                         </StackPanel>
                     </Border>
 
@@ -281,10 +277,10 @@
                     <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                         <TextBox x:Name="JoinNo" Width="140" />
                         <TextBox x:Name="JoinSecret" Width="240" Margin="10,0,0,0" />
-                        <Button Content="加入" Margin="10,0,0,0" Click="OnJoinChannel" />
+                        <Button Content="加入" Margin="10,0,0,0" Click="OnJoinChannel"
+                                Style="{DynamicResource Button.Primary}" />
                         <Button Content="用选中频道号" Margin="10,0,0,0" Click="OnUseSelectedNo"
-                                Background="Transparent" Foreground="{DynamicResource Accent}"
-                                BorderThickness="1" BorderBrush="{DynamicResource Accent}"/>
+                                Style="{DynamicResource Button.Accent}" />
                     </StackPanel>
                     
                     <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
@@ -395,22 +391,24 @@
                                        Margin="0,6,0,0"
                                        TextWrapping="Wrap" Foreground="{DynamicResource Fg.Secondary}" />
                             <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
-                                <Button Content="保存" Click="OnSaveGovernance" />
-                                <Button Content="发送者白名单" Margin="10,0,0,0" Click="OnOpenSenders" />
-                                <Button Content="重置密钥" Margin="10,0,0,0" Click="OnRotateSecret" />
-                                <Button Content="换发新频道号" Margin="10,0,0,0" Click="OnResetChannelNo" />
-                                <Button Content="容量报表" Margin="10,0,0,0" Click="OnCapacity" />
+                                <Button Content="保存" Click="OnSaveGovernance"
+                                        Style="{DynamicResource Button.Primary}" />
+                                <Button Content="发送者白名单" Margin="10,0,0,0" Click="OnOpenSenders"
+                                        Style="{DynamicResource Button.Secondary}" />
+                                <Button Content="重置密钥" Margin="10,0,0,0" Click="OnRotateSecret"
+                                        Style="{DynamicResource Button.Danger}" />
+                                <Button Content="换发新频道号" Margin="10,0,0,0" Click="OnResetChannelNo"
+                                        Style="{DynamicResource Button.Danger}" />
+                                <Button Content="容量报表" Margin="10,0,0,0" Click="OnCapacity"
+                                        Style="{DynamicResource Button.Secondary}" />
                                 <Button Content="清空" Margin="10,0,0,0" Click="OnClearChannel"
-                                        Background="Transparent" BorderBrush="{DynamicResource Level.Error}"
-                                        Foreground="{DynamicResource Level.Error}" />
+                                        Style="{DynamicResource Button.Danger}" />
                                 <!-- 取消接入不需要密钥（这台设备本来就接进来过），所以它留在治理区而不是上面那格表单里 -->
                                 <Button x:Name="LeaveButton" Content="取消接入" Margin="10,0,0,0"
                                         Visibility="Collapsed" Click="OnLeaveChannel"
-                                        Background="Transparent" BorderBrush="{DynamicResource Level.Error}"
-                                        Foreground="{DynamicResource Level.Error}" />
+                                        Style="{DynamicResource Button.Danger}" />
                                 <Button Content="归档" Margin="10,0,0,0" Click="OnArchiveChannel"
-                                        Background="Transparent" BorderBrush="{DynamicResource Level.Error}"
-                                        Foreground="{DynamicResource Level.Error}" />
+                                        Style="{DynamicResource Button.Danger}" />
                             </StackPanel>
 
                             <!-- 白名单就地展开：它只管这一条频道，弹一层窗口只会让人找不到刚点了什么 -->
@@ -422,7 +420,8 @@
                                                Foreground="{DynamicResource Fg.Primary}" />
                                     <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                         <TextBox x:Name="SenderIdInput" Width="240" />
-                                        <Button Content="添加" Margin="10,0,0,0" Height="32" Click="OnAddSender" />
+                                        <Button Content="添加" Margin="10,0,0,0" Click="OnAddSender"
+                                                Style="{DynamicResource Button.Primary}" />
                                     </StackPanel>
                                     <TextBlock x:Name="SendersHint" Style="{DynamicResource Text.Label}" Margin="0,8,0,0"
                                                TextWrapping="Wrap" Foreground="{DynamicResource Level.Error}" />
@@ -441,9 +440,7 @@
                                                         <!-- Tag 交的是这一行那个对象本身：停用与启用是同一个动作的两个方向 -->
                                                         <Button Content="切换状态" Tag="{Binding}" Height="28"
                                                                 Padding="12,0" Click="OnSenderToggle"
-                                                                Background="Transparent"
-                                                                Foreground="{DynamicResource Accent}"
-                                                                BorderThickness="1" BorderBrush="{DynamicResource Accent}"/>
+                                                                Style="{DynamicResource Button.Accent}" />
                                                     </StackPanel>
                                                 </Border>
                                             </DataTemplate>
@@ -461,7 +458,8 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="设备" Style="{DynamicResource Text.H3}" VerticalAlignment="Center"
                                    Foreground="{DynamicResource Fg.Primary}" />
-                        <Button Content="刷新" Margin="12,0,0,0" Click="OnReloadDevices" />
+                        <Button Content="刷新" Margin="12,0,0,0" Click="OnReloadDevices"
+                                Style="{DynamicResource Button.Secondary}" />
                     </StackPanel>
                     <TextBlock x:Name="DeviceNotice" Style="{DynamicResource Text.Label}" Margin="0,8,0,0"
                                TextWrapping="Wrap" Foreground="{DynamicResource Level.Error}" />
@@ -488,8 +486,7 @@
                     </ListBox>
                     <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                         <Button Content="吊销这台" Click="OnRevokeDevice"
-                                Background="Transparent" BorderBrush="{DynamicResource Level.Error}"
-                                Foreground="{DynamicResource Level.Error}" />
+                                Style="{DynamicResource Button.Danger}" />
                     </StackPanel>
                     <TextBlock x:Name="DeviceEmpty" Style="{DynamicResource Text.Small}" Margin="0,8,0,0"
                                Visibility="Collapsed"
@@ -504,16 +501,17 @@
                                Style="{DynamicResource Text.Label}" Margin="0,4,0,0" TextWrapping="Wrap"
                                Foreground="{DynamicResource Fg.Secondary}" />
                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                        <Button Content="轮换恢复码" Click="OnRotateRecovery" />
-                        <Button Content="复制" Margin="8,0,0,0" Click="OnCopyRecovery" />
+                        <Button Content="轮换恢复码" Click="OnRotateRecovery"
+                                Style="{DynamicResource Button.Danger}" />
+                        <Button Content="复制" Margin="8,0,0,0" Click="OnCopyRecovery"
+                                Style="{DynamicResource Button.Secondary}" />
                     </StackPanel>
                     <TextBlock x:Name="RecoveryHint" Style="{DynamicResource Text.Label}" Margin="0,6,0,0"
                                TextWrapping="Wrap"
                                Visibility="Collapsed" Foreground="{DynamicResource Level.Error}" />
                     <!-- §7.3 退出空间：清空所有数据回到首启，与 Android "更换服务器"同效 -->
                     <Button Content="退出空间（清空数据）" Margin="0,16,0,0" Click="OnLogout"
-                            Background="Transparent" BorderBrush="{DynamicResource Level.Error}"
-                            Foreground="{DynamicResource Level.Error}" />
+                            HorizontalAlignment="Left" Style="{DynamicResource Button.Danger}" />
                 </StackPanel>
             </ScrollViewer>
 
@@ -552,7 +550,8 @@
                     <CheckBox x:Name="AutoCheckOn" Content="启动时自动检查更新" FontSize="{x:Static controls:MarkdownStyle.SmallSize}" Margin="0,12,0,0"
                               Click="OnToggleAutoCheck" Foreground="{DynamicResource Fg.Primary}" />
                     <Button x:Name="CheckUpdateButton" Content="检查更新" Margin="0,10,0,0"
-                            HorizontalAlignment="Left" Click="OnCheckUpdate" />
+                            HorizontalAlignment="Left" Click="OnCheckUpdate"
+                            Style="{DynamicResource Button.Primary}" />
                     <TextBlock x:Name="UpdateStatus" Style="{DynamicResource Text.Label}" Margin="0,10,0,0"
                                TextWrapping="Wrap"
                                Foreground="{DynamicResource Fg.Primary}" />
