@@ -1,9 +1,10 @@
 <template>
   <div v-loading="loading">
-    <div class="page-header">
-      <h2>概览</h2>
-      <el-button type="primary" :loading="loading" @click="fetchOverview">刷新</el-button>
-    </div>
+    <PageHeader title="概览" description="频道、设备与消息量的运行概况。">
+      <template #actions>
+        <el-button type="primary" :loading="loading" @click="fetchOverview">刷新</el-button>
+      </template>
+    </PageHeader>
 
     <el-row :gutter="16" class="stat-row">
       <el-col :span="6">
@@ -45,6 +46,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import * as echarts from 'echarts'
+import PageHeader from '@/components/PageHeader.vue'
 import { getOverview, type OverviewStats, type TrendPoint } from '@/api/messages'
 
 const loading = ref(false)
@@ -116,19 +118,6 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.page-header h2 {
-  margin: 0;
-  font-size: var(--pb-font-h2);
-  line-height: var(--pb-line-h2);
-}
-
 .stat-row {
   margin-bottom: 16px;
 }

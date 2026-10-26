@@ -1,8 +1,7 @@
 <template>
   <div>
-    <div class="page-header">
-      <h2>定时推送</h2>
-      <div class="header-actions">
+    <PageHeader title="定时推送" description="按 cron 计划自动发送的消息；停用后不再触发，历史执行记录保留。">
+      <template #actions>
         <el-select v-model="categoryFilter" placeholder="全部分类" clearable style="width: 160px">
           <el-option
             v-for="c in categoryOptions"
@@ -23,8 +22,8 @@
         </el-input>
         <el-button type="primary" :loading="loading" @click="fetchTasks">刷新</el-button>
         <el-button type="primary" plain @click="openCreate">新建任务</el-button>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
     <el-table v-loading="loading" :data="paged" stripe border style="width: 100%">
       <el-table-column prop="name" label="任务名" min-width="140" show-overflow-tooltip />
@@ -396,6 +395,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
+import PageHeader from '@/components/PageHeader.vue'
 import {
   getScheduledTasks,
   getScheduledTask,
@@ -1005,25 +1005,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.page-header h2 {
-  margin: 0;
-  font-size: var(--pb-font-h2);
-  line-height: var(--pb-line-h2);
-}
-
-.header-actions {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-
 .channel-link {
   color: var(--el-color-primary);
   text-decoration: none;

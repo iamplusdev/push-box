@@ -1,8 +1,7 @@
 <template>
   <div>
-    <div class="page-header">
-      <h2>频道管理</h2>
-      <div class="header-actions">
+    <PageHeader title="频道管理" description="频道是消息的入口：第三方凭频道号与密钥投递，接入的设备接收。">
+      <template #actions>
         <el-input
           v-model="keyword"
           placeholder="搜索号码 / 名称 / 空间"
@@ -14,8 +13,8 @@
           </template>
         </el-input>
         <el-button type="primary" :loading="loading" @click="fetchChannels">刷新</el-button>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
     <el-table v-loading="loading" :data="paged" stripe border style="width: 100%">
       <el-table-column prop="channel_no" label="频道号码" width="130">
@@ -73,6 +72,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
+import PageHeader from '@/components/PageHeader.vue'
 import { getChannels, deleteChannel } from '@/api/channels'
 import type { Channel } from '@/api/types'
 import { formatTime, levelTagType } from '@/utils/format'
@@ -144,25 +144,6 @@ onMounted(fetchChannels)
 </script>
 
 <style scoped>
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.page-header h2 {
-  margin: 0;
-  font-size: var(--pb-font-h2);
-  line-height: var(--pb-line-h2);
-}
-
-.header-actions {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-
 .channel-link {
   color: var(--el-color-primary);
   text-decoration: none;

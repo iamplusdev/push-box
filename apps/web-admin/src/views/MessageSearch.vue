@@ -1,8 +1,6 @@
 <template>
   <div>
-    <div class="page-header">
-      <h2>消息搜索</h2>
-    </div>
+    <PageHeader title="消息搜索" description="按关键词全文检索历史消息，可再按频道、类型与起始时间收窄。" />
 
     <el-form :model="form" inline class="search-form" @submit.prevent="handleSearch">
       <el-form-item label="关键词">
@@ -81,6 +79,7 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
+import PageHeader from '@/components/PageHeader.vue'
 import { searchMessages, type MessageRow } from '@/api/messages'
 import { formatTime, levelTagType } from '@/utils/format'
 
@@ -131,19 +130,6 @@ function handleReset() {
 </script>
 
 <style scoped>
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.page-header h2 {
-  margin: 0;
-  font-size: var(--pb-font-h2);
-  line-height: var(--pb-line-h2);
-}
-
 .search-form {
   margin-bottom: 8px;
 }

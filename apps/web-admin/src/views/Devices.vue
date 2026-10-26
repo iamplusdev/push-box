@@ -1,8 +1,7 @@
 <template>
   <div>
-    <div class="page-header">
-      <h2>设备管理</h2>
-      <div class="header-actions">
+    <PageHeader title="设备管理" description="设备注册后接收其空间内频道的消息；吊销立即作废并被踢下线。">
+      <template #actions>
         <el-input
           v-model="keyword"
           placeholder="搜索设备 ID / 名称 / 空间"
@@ -14,8 +13,8 @@
           </template>
         </el-input>
         <el-button type="primary" :loading="loading" @click="fetchDevices">刷新</el-button>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
     <el-table v-loading="loading" :data="paged" stripe border style="width: 100%">
       <el-table-column label="设备 ID" min-width="260">
@@ -79,6 +78,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import CopyButton from '@/components/CopyButton.vue'
+import PageHeader from '@/components/PageHeader.vue'
 import { getDevices, revokeDevice } from '@/api/devices'
 import type { Device } from '@/api/types'
 import { formatTime } from '@/utils/format'
@@ -155,25 +155,6 @@ onMounted(fetchDevices)
 </script>
 
 <style scoped>
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.page-header h2 {
-  margin: 0;
-  font-size: var(--pb-font-h2);
-  line-height: var(--pb-line-h2);
-}
-
-.header-actions {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-
 .table-footer {
   display: flex;
   align-items: center;

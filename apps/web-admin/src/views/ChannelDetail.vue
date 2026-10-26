@@ -1,9 +1,10 @@
 <template>
   <div v-loading="loading">
-    <div class="page-header">
-      <h2>频道详情</h2>
-      <el-button @click="$router.back()">返回</el-button>
-    </div>
+    <PageHeader title="频道详情" description="这一条频道的治理参数与接入设备。">
+      <template #actions>
+        <el-button @click="$router.back()">返回</el-button>
+      </template>
+    </PageHeader>
 
     <el-descriptions v-if="channel" :column="2" border>
       <el-descriptions-item label="频道号码">
@@ -58,6 +59,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import CopyButton from '@/components/CopyButton.vue'
+import PageHeader from '@/components/PageHeader.vue'
 import { getChannelDetail } from '@/api/channels'
 import type { Channel, Device } from '@/api/types'
 import { formatTime, formatBytes, formatQuota, formatFlag, levelTagType } from '@/utils/format'
@@ -84,19 +86,6 @@ onMounted(fetchDetail)
 </script>
 
 <style scoped>
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.page-header h2 {
-  margin: 0;
-  font-size: var(--pb-font-h2);
-  line-height: var(--pb-line-h2);
-}
-
 .section-title {
   margin: 24px 0 12px;
   font-size: var(--pb-font-body);
