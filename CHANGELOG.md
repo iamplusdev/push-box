@@ -9,6 +9,33 @@
 
 ---
 
+## 未发布 —— 管理台页头与表格：标题升到 20px 并各配一句说明，标识列一律等宽
+
+> 起因一条：管理台六个内页的页头是同一个 `<h2>` 抄六遍，标题只有 18px、和表格正文只差 5px，页面上没有"这是哪一页"的落点；频道号、设备 ID、cron 这些要逐字符核对的串用的是比例字体，`32941977` 与 `58201344` 在表格里对不齐列；长正文列挂 Element 的 `show-overflow-tooltip`，一行截断之后能看到的只剩开头十来个字。这一轮同样不改任何行为，只换排布与字体。
+
+### 页头
+
+- **六个内页收成一个 `PageHeader`**（`components/PageHeader.vue`）：标题 20/28 字重 600、下面一句 13/18 的说明、右侧 `#actions` 插槽放刷新/新建，整块下间距 24px。概览、频道管理、频道详情、设备管理、消息搜索、定时推送各写一句说明，说清这一页管什么（例如设备页是"设备注册后接收其空间内频道的消息；吊销立即作废并被踢下线"）。
+- 六份视图里重复的 `.page-header` / `.header-actions` scoped 样式随之删掉，标题从 `<h2>` 升到语义正确的 `<h1>`（每页只有一个）。
+
+### 表格
+
+- **标识列统一挂全局 `.pb-mono`**（等宽 + `tabular-nums`）：频道号、设备 ID、所属空间、创建/注册/最近在线/下次触发等时间列、cron 表达式、消息详情里的 `msg_id`/`seq`/`sender_id`、定时任务的变量标签与 JSON 文本域。此前有 4 处各自写 `font-family: var(--pb-font-mono)`，`.pb-mono` 定义了却一次没用上——现在数字只有一处。
+- Element 的输入框与文本域不继承外层字体族，所以 `.pb-mono` 补了一条 `.pb-mono input, .pb-mono textarea`；频道详情那个只读的频道号输入框因此也是等宽。
+- **长文列改两行截断 `.pb-clamp2`**（消息搜索的"内容"、定时任务的"正文预览"）：`-webkit-line-clamp: 2` + 原生 `title` 兜住全文。`show-overflow-tooltip` 只能单行，两行既给足上下文又不至于把行高撑开——实测长正文行 59px，短行仍是 44–46px。名称、分类这类短列保留单行 tooltip。
+
+### 对话框
+
+- **定时任务对话框只剩一层滚动**：删掉 `.task-form` 里 `.el-tabs__content` 那道 54vh 内滚，滚动只由 `.el-dialog__body`（`max-height: calc(100vh - 300px)`）负责。两层滚轮嵌在一起时，指针停在哪一层决定滚谁，填表单的人得先"找滚动条"。预览气泡里那道 320px 是刻意留的——它模拟的就是气泡自己的视口。
+
+### 验证
+
+- `npm run build`（vue-tsc + vite）：通过。
+- **真浏览器实测**（vite dev 7403 + 本机 mock 管理台 API 8081，`getComputedStyle` 逐页量）：六页页头均为标题 20px/28px/600、说明 13px/18px `#5f5f5f`、页头下间距 24px；等宽列计算值 `font-family: ui-monospace…` + `font-variant-numeric: tabular-nums`（频道 6 处、设备 8 处、频道详情 7 处含只读输入框、消息搜索与定时任务各 4–8 处）；两行截断在 mock 的长正文上算得 `-webkit-line-clamp: 2`、渲染高 36px 而 `scrollHeight` 270px，`title` 带全文；表格行高 44–46px、表头 13px/600；控制台无报错。
+- **没跑的**：对话框的"单层滚动"只验到结构——DOM 里 `.el-dialog__body` 是唯一的 `overflow-y: auto` 容器、`.el-tabs__content` 计算值为 `overflow: hidden` 且无 `max-height`，但内嵌浏览器标签页的视口是 0×0（`document.visibilityState: hidden`），`calc(100vh - 300px)` 算成 0px，所以真实窗口高度下的滚动观感仍要人眼过一遍。
+
+---
+
 ## 未发布 —— Windows 视觉体系：按钮五键三态、图标换字体、危险操作独立分组
 
 > 起因一条：PC 端的按钮全靠系统默认模板，hover/pressed 是系统浅蓝，深色主题下弹层与三态都不跟 token 走；顶栏的 ⚙、返回的 ← 是文本字符，接入信息的 ✅/⚠️ 是 emoji，三种"图标"来源各不相同；设置页里"重置密钥""清空""退出空间"这些不可逆动作和"保存""刷新"排成一横排，只靠红色边框区分，点错的代价却完全不是一个量级。这一轮不改任何行为，只换视觉与摆放。
