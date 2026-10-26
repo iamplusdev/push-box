@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -21,6 +22,9 @@ public sealed class MediaLoaderTest : IDisposable
 {
     private const string BaseUrl = "http://127.0.0.1:8081";
     private const string AvatarToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// <summary>节流的时间起点由用例给，断言才不受跑用例的那台机器时钟影响。</summary>
+    private static readonly DateTimeOffset Stamp = new(2026, 10, 26, 9, 0, 0, TimeSpan.Zero);
 
     private static readonly byte[] DeviceEncPriv =
         Support.Hex(Support.Str(Support.Vectors.GetProperty("inputs"), "device_enc_priv"));
@@ -197,6 +201,55 @@ public sealed class MediaLoaderTest : IDisposable
         Assert.Equal(MediaState.Ready, (await restarted.AvatarAsync(Device(), "/api/v1/avatars/" + AvatarToken)).State);
     }
 
+    [Fact]
+    public async Task AFrameCarryingTheAvatarDropsTheCachedBytesSoTheNextLookRefetches()
+    {
+        // 服务端换头像不换 token，本机能拿到的信号只有"又来了这个人一条带 sender_avatar 的帧"。
+        // 那一帧到引擎时作废缓存，画着的格子重画才会真的去取新图，而不是又拿到旧字节
+        var handler = Images();
+        var loader = Loader(handler);
+        var avatar = "/api/v1/avatars/" + AvatarToken;
+        await loader.AvatarAsync(Device(), avatar);
+        await loader.AvatarAsync(Device(), avatar);
+        Assert.Single(handler.Requests);
+
+        var invalidated = new List<string>();
+        loader.AvatarInvalidated += invalidated.Add;
+        Assert.True(loader.InvalidateAvatar(avatar, Stamp));
+
+        Assert.Equal(new[] { AvatarToken }, invalidated);
+        Assert.Null(loader.Cache.Get(MediaLoader.AvatarKey(AvatarToken)));
+        await loader.AvatarAsync(Device(), avatar);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public void TheSameSenderIsRevalidatedAtMostOncePerWindow()
+    {
+        // 每条消息都回源等于给每个活跃发送者加一次 RTT：窗口里再来几条就什么都不动，
+        // 缓存里那份本来就是上一次作废后刚取回来的，不会因此变旧
+        var loader = Loader(Images());
+        var avatar = "/api/v1/avatars/" + AvatarToken;
+
+        Assert.True(loader.InvalidateAvatar(avatar, Stamp));
+        Assert.False(loader.InvalidateAvatar(avatar, Stamp.AddMinutes(9)));
+        Assert.True(loader.InvalidateAvatar(avatar, Stamp.AddMinutes(11)));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("/api/v1/avatars/not-a-token")]
+    public void AFrameWithoutAnAvatarInvalidatesNothing(string? senderAvatar)
+    {
+        var loader = Loader(Images());
+        var invalidated = new List<string>();
+        loader.AvatarInvalidated += invalidated.Add;
+
+        Assert.False(loader.InvalidateAvatar(senderAvatar, Stamp));
+        Assert.Empty(invalidated);
+    }
+
     // ---- 清理 ----------------------------------------------------------------------------------
 
     [Fact]
@@ -216,6 +269,23 @@ public sealed class MediaLoaderTest : IDisposable
         Assert.Empty(Directory.EnumerateFiles(_dir, "*.img"));
         await loader.ImageAsync(Device(), "m_83", 0, thumb: true);
         Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task EvictingOneKeyLeavesTheOthersAlone()
+    {
+        // 头像那条路要的是单键作废：两级都清，但别人那一格照旧命中，不能把整个缓存带走
+        var handler = Images();
+        var loader = Loader(handler);
+        await loader.ImageAsync(Device(), "m_83", 0, thumb: true);
+        await loader.ImageAsync(Device(), "m_83", 1, thumb: true);
+
+        loader.Cache.Evict(MediaLoader.ImageKey("m_83", 0, true));
+
+        Assert.Null(loader.Cache.Get(MediaLoader.ImageKey("m_83", 0, true)));
+        Assert.NotNull(loader.Cache.Get(MediaLoader.ImageKey("m_83", 1, true)));
+        await loader.ImageAsync(Device(), "m_83", 0, thumb: true);
+        Assert.Equal(3, handler.Requests.Count);
     }
 
     [Fact]

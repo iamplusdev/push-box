@@ -25,6 +25,16 @@ public sealed class AvatarBox : Grid
     /// <summary>窗口装配时挂上来的取字节委托；为 null 时永远只有占位（用例、以及还没注册好的那台机器）。</summary>
     public static Func<string, Task<MediaAsset>>? Loader;
 
+    /// <summary>
+    /// 某个 token 的头像作废了（服务端覆盖写了它）：画着它的那一格要重新取一次字节。
+    /// 做成事件而不是让装配层去遍历可视树，是因为头像既在会话行里也在气泡里，还随虚拟化进出，
+    /// 没有一份"现在有谁画着这个 token"的现成名册。与 Android 的 <c>AvatarCache.revision</c> 同一手法。
+    /// </summary>
+    public static event Action<string>? Invalidated;
+
+    /// <summary>装配层收到"帧里带着 sender_avatar"时调这里（另一端是 <see cref="MediaLoader.AvatarInvalidated"/>）。</summary>
+    public static void Invalidate(string token) => Invalidated?.Invoke(token);
+
     public static readonly DependencyProperty DisplayNameProperty = DependencyProperty.Register(
         nameof(DisplayName), typeof(string), typeof(AvatarBox), new PropertyMetadata(string.Empty, OnShapeChanged));
 
@@ -69,8 +79,33 @@ public sealed class AvatarBox : Grid
     /// <summary>这一次请求是为哪个 token 发的：续延回来时换人了就把那份字节丢掉。</summary>
     private string? _waiting;
 
+    public AvatarBox()
+    {
+        // 订阅跟着可视树的进出走：会话列表每次重画都换一批格子，构造函数里订阅而不在这里退订，
+        // 会让每一个被淘汰的格子都被 <see cref="Invalidated"/> 永久钉在内存里
+        Loaded += (_, _) =>
+        {
+            Invalidated -= OnInvalidated;
+            Invalidated += OnInvalidated;
+        };
+        Unloaded += (_, _) => Invalidated -= OnInvalidated;
+    }
+
     private static void OnShapeChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
         ((AvatarBox)d).Render();
+
+    private void OnInvalidated(string token)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(() => OnInvalidated(token)));
+            return;
+        }
+
+        // 画的不是它（或者已经是另一个人了）：重画一次只是白跑一趟
+        if (!string.Equals((Token ?? string.Empty).Trim(), token, StringComparison.Ordinal)) return;
+        Render();
+    }
 
     private void Render()
     {

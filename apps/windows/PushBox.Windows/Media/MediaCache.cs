@@ -128,6 +128,21 @@ public sealed class MediaCache
         if (diskFailure != null) AppLog.MediaCacheWriteFailed(diskFailure.GetType().Name);
     }
 
+    /// <summary>
+    /// 单键作废：调用方说的是"这个键的字节不再可信"，所以两级都清，不去指望哪一层恰好没存过。
+    /// 头像走这里——token 恒为 <c>sha256(sender_id)</c>，服务端是按 (频道, 发送者) 覆盖写的，
+    /// "字节变了"不会以新地址的形式通知本机。
+    /// </summary>
+    public void Evict(string key)
+    {
+        lock (_gate)
+        {
+            DropMemory(key);
+            var path = PathOf(key);
+            if (File.Exists(path)) DeleteFile(path);
+        }
+    }
+
     /// <summary>W14 的删除/清空要连带把字节抹掉：消息都没了，本地图位不能还能翻出来看。</summary>
     public void EvictMessage(string msgId)
     {

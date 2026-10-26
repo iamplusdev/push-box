@@ -259,7 +259,10 @@ public partial class App : Application
         var notifier = _notifier ??= new ToastNotifier(
             new AlertPolicy(() => _settings), tally, media, identities.Load,
             avatarBaseDir: ToastAvatar.DirectoryOf(), fallback: plan => _tray?.Balloon(plan));
-        var engine = _engine ??= new SyncEngine(identities, db, _client, notifier);
+        // 头像按 (频道, 发送者) 覆盖写、token 不变：帧里带着 sender_avatar 是"这人现在有头像"的唯一信号，
+        // 作废本地那份（内部按 token 节流），再让画着这一格的控件重取
+        var engine = _engine ??= new SyncEngine(identities, db, _client, notifier,
+            onIngest: frame => media.InvalidateAvatar(frame.SenderAvatar));
         engine.StateChanged += state => reporter.SetOnline(state is SyncState.Online);
 
         var window = new MainWindow(db, identities, reporter,

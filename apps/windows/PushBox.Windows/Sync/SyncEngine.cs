@@ -69,6 +69,9 @@ public sealed class SyncEngine : IPushObserver
     /// <summary>抽出来是因为退避节奏本身要在测试里被断言，而不是让测试真等 60 秒。</summary>
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
 
+    /// <summary>每条消息进 <see cref="Ingest"/> 时额外通知一次（装配层拿它作废头像缓存）。</summary>
+    private readonly Action<MessageFrame>? _onIngest;
+
     private Channel<Frame> _inbox = NewInbox();
 
     /// <summary>每轮起跑都要一条新队列（见 <see cref="Start"/>），所以工厂方法而不是字段初始化器。</summary>
@@ -95,7 +98,8 @@ public sealed class SyncEngine : IPushObserver
 
     public SyncEngine(IdentityStore identities, DeviceStore db, DeviceClient client, INotifier notifier,
         Func<DeviceIdentity, IPushTransport>? transports = null,
-        Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<TimeSpan, CancellationToken, Task>? delay = null,
+        Action<MessageFrame>? onIngest = null)
     {
         _identities = identities;
         _db = db;
@@ -103,6 +107,7 @@ public sealed class SyncEngine : IPushObserver
         _notifier = notifier;
         _transports = transports ?? (_ => new ClientWebSocketTransport());
         _delay = delay ?? Task.Delay;
+        _onIngest = onIngest;
     }
 
     /// <summary>状态变化可能在任意线程上触发：W12 订阅后要自己转回 Dispatcher。</summary>
@@ -432,6 +437,9 @@ public sealed class SyncEngine : IPushObserver
     /// 和 Android 的 <c>SyncEngine.kt</c> 同一分工：会话行读库这件事属于引擎，通知器只管"要弹了怎么弹"。</summary>
     private void Ingest(MessageFrame message, bool allowNotify)
     {
+        // 重复帧也照样通知：头像换没换与"这条消息是不是新的"无关，作废那一步自己按 token 节流
+        _onIngest?.Invoke(message);
+
         if (_db.ApplyMessage(message))
         {
             ApplyPendingMedia(message.Id);

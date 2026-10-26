@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -66,8 +68,22 @@ public sealed record MediaAsset(MediaState State, byte[]? Bytes = null, string? 
 /// </summary>
 public sealed class MediaLoader
 {
+    /// <summary>
+    /// 同一个发送者两次回源的最小间隔。头像按 (频道, 发送者) 覆盖写、token 不变，本机唯一的发现信号
+    /// 是"又收到这个人一条带 <c>sender_avatar</c> 的帧"；每条消息都回源等于给每个活跃发送者加一次 RTT。
+    /// 十分钟与 Android 的正缓存有效期同一条口径。
+    /// </summary>
+    public static readonly TimeSpan AvatarRevalidateInterval = TimeSpan.FromMinutes(10);
+
     private readonly DeviceClient _client;
     private readonly MediaCache _cache;
+
+    /// <summary>每个 token 上一次作废的时刻（UTC ticks）。只用来节流，过期条目在下一次插入时清掉。</summary>
+    private readonly Dictionary<string, long> _avatarSignals = new(StringComparer.Ordinal);
+    private readonly object _signalGate = new();
+
+    /// <summary>某个 token 的头像被作废了：画着它的控件要重新取一次字节。可能在帧线程上触发。</summary>
+    public event Action<string>? AvatarInvalidated;
 
     public MediaLoader(DeviceClient? client = null, MediaCache? cache = null)
     {
@@ -104,6 +120,39 @@ public sealed class MediaLoader
         // 头像对象是覆盖写的（§4.5），只进内存：落盘等于把换掉的头像永久留在本机
         return LoadAsync(AvatarKey(token), false,
             inner => _client.AvatarAsync(identity, token, inner), ct);
+    }
+
+    /// <summary>
+    /// 这一帧带了 <c>sender_avatar</c>：服务端现在有这个人的头像，而本地缓存里那份可能就是换掉之前那张。
+    /// 作废它并通知画着这一格的控件重取一次。
+    ///
+    /// 只有"又收到这个人的一条消息"这一个信号可用（token 不变、也没有 ETag），所以按 token 节流：
+    /// 窗口内返回 false 表示这次什么都没动，缓存里那份就是上一次作废后刚取回来的。
+    /// 返回是否真的作废了，用例靠它判"这次有没有产生副作用"。
+    /// </summary>
+    public bool InvalidateAvatar(string? senderAvatar, DateTimeOffset? now = null)
+    {
+        var token = DeviceClient.AvatarTokenOf(senderAvatar);
+        if (token == null) return false;
+
+        var stamp = (now ?? DateTimeOffset.UtcNow).UtcTicks;
+        lock (_signalGate)
+        {
+            if (_avatarSignals.TryGetValue(token, out var last) && last <= stamp
+                && stamp - last < AvatarRevalidateInterval.Ticks)
+                return false;
+
+            // 过了窗口的条目节流不了任何人，顺手清掉：这张表的大小就只跟"最近十分钟里说过话的发送者"走
+            foreach (var stale in _avatarSignals
+                         .Where(entry => stamp - entry.Value >= AvatarRevalidateInterval.Ticks)
+                         .Select(entry => entry.Key).ToList())
+                _avatarSignals.Remove(stale);
+            _avatarSignals[token] = stamp;
+        }
+
+        _cache.Evict(AvatarKey(token));
+        AvatarInvalidated?.Invoke(token);
+        return true;
     }
 
     /// <summary>消息被删（W14 的 tombstone / 清空）时连带清掉它的图。</summary>

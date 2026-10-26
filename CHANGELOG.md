@@ -9,6 +9,27 @@
 
 ---
 
+## 未发布 —— Windows：换了头像不必等进程重启
+
+> 起因一条：服务端换头像不换 token（`sha256(sender_id)`），PC 的头像缓存又只进内存、没有 TTL——只要进程不重启，`avatar#{token}` 那一格命中之后就一直返回旧字节。Android 那边已经靠"回到前台复核 + 10 分钟有效期"补上了，PC 还停在原地。
+
+### Windows
+
+- **帧里带了 `sender_avatar` 就作废头像缓存**：`SyncEngine` 新增可选回调 `onIngest`，每条消息进 `Ingest` 时先交出去（重复帧也交，头像换没换与"这条消息是不是新的"无关）；装配层接的是 `MediaLoader.InvalidateAvatar(frame.SenderAvatar)`。
+- **按 token 节流 10 分钟**（`MediaLoader.AvatarRevalidateInterval`）：同一个发送者在这个窗口里再来几条消息都不再回源——缓存里那份本来就是上一次作废后刚取回来的。窗口起点的表按"最近十分钟里说过话的发送者"自然收敛，过期条目在下次插入时清掉。
+- **已画出来的头像会自己重画**：`MediaLoader.AvatarInvalidated` → `AvatarBox.Invalidate(token)` → 每个 `AvatarBox` 在自己的 Dispatcher 上比对 `Token`，对上就 `Render()`（缓存已经空了，重画就是一次真正的回源）。订阅挂在 `Loaded`/`Unloaded` 上而不是构造函数里——会话列表每次重画都换一批格子，不在这里退订等于把每个淘汰的格子永久钉住。
+- **单键作废**：`MediaCache.Evict(key)` 两级都清（内存 + 磁盘），只带走这一个键，别人那一格照旧命中。
+- **窗口关掉时摘掉订阅**：`MainWindow.OnClosed` 退订 `AvatarInvalidated`，与另外两条订阅同一条口径。
+
+### 验证
+
+- `dotnet test apps/windows/PushBox.sln`：**575/575 通过**（本轮新增 8 条）。
+- 新增用例：`AFrameCarryingTheAvatarDropsTheCachedBytesSoTheNextLookRefetches`（作废后事件带出 token、缓存里那条没了、下一次 `AvatarAsync` 真发请求）、`TheSameSenderIsRevalidatedAtMostOncePerWindow`（9 分钟不作废、11 分钟作废）、`AFrameWithoutAnAvatarInvalidatesNothing`（null / 空串 / 不成形 token 三个入参都不产生副作用）、`EvictingOneKeyLeavesTheOthersAlone`（单键作废不动别的键）、`AnAvatarAlreadyPaintedRepaintsWhenItsTokenIsInvalidated`（别的 token 不重画，自己的 token 重画——`Render()` 换掉外层 `Border`）、`EveryLandedMessageHandsTheSendersAvatarPathToTheCache`（帧落库时把 `sender_avatar` 原文交给回调）。
+- `ci.yml` 的 `$CS_BASELINE` 与六份文档现值 `567` → `575`。
+- **没跑的**：真机上"服务端换头像 → 对方发一条消息 → 窗口里的头像变"这条整链路，以及十分钟节流的手感。xunit 用的是脚本 handler 与 STA 线程上的控件，没有真实服务端与真实窗口；装机复验时重点看两件事：对方换头像后发一条消息，会话行与气泡头像是否都变；连发几条时头像接口是不是只被打了一次。
+
+---
+
 ## 未发布 —— 管理台：定时任务表单分四组，JSON 回填收进折叠区
 
 > 起因一条：新建/编辑定时任务是一个十几项的单列长表单，底部「预览/保存」跟着字段一路往下漂，改个时区得来回滚；顶上的「粘贴 API JSON」用得少，却常驻在表单最显眼的位置。字段一个没删，只换了摆放方式。

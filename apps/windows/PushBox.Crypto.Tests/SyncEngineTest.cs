@@ -270,6 +270,24 @@ public sealed class SyncEngineTest : IDisposable
         Assert.Equal(18484L, _db.GroupCursor());
     }
 
+    [Fact]
+    public async Task EveryLandedMessageHandsTheSendersAvatarPathToTheCache()
+    {
+        // PC 的头像缓存只进内存、没有 TTL：换头像只能靠"又收到这个人的一条消息"这次机会发现。
+        // 帧进引擎时要把 sender_avatar 交出去（装配层拿它作废缓存），否则界面会一直画着旧图到进程重启
+        const string avatar = "/api/v1/avatars/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        var seen = new ConcurrentQueue<string?>();
+        var row = Item(18483, "m_83");
+        row["sender_avatar"] = avatar;
+        var harness = Harness(Device(), onIngest: frame => seen.Enqueue(frame.SenderAvatar));
+        harness.EnqueueHanging(Handshake(Message(row)));
+        harness.Start();
+        await Until(() => Rows().Any(r => r.MsgId == "m_83"), "这条消息要先落库");
+        harness.Engine.Stop();
+
+        Assert.Equal(new[] { avatar }, seen.ToArray());
+    }
+
     // ---- 失败与线程边界 ---------------------------------------------------------------------------
 
     [Fact]
@@ -425,9 +443,10 @@ public sealed class SyncEngineTest : IDisposable
         }
     }
 
-    private Rig Harness(DeviceIdentity identity, FakeHandler? http = null, bool sleepForReal = false)
+    private Rig Harness(DeviceIdentity identity, FakeHandler? http = null, bool sleepForReal = false,
+        Action<MessageFrame>? onIngest = null)
     {
-        var harness = new Rig(this, identity, http, sleepForReal);
+        var harness = new Rig(this, identity, http, sleepForReal, onIngest);
         _started.Add(harness);
         return harness;
     }
@@ -563,7 +582,8 @@ public sealed class SyncEngineTest : IDisposable
         private readonly Queue<(string[] Frames, bool Hang)> _scripts = new();
         private readonly IdentityStore _identities;
 
-        public Rig(SyncEngineTest test, DeviceIdentity identity, FakeHandler? http, bool sleepForReal)
+        public Rig(SyncEngineTest test, DeviceIdentity identity, FakeHandler? http, bool sleepForReal,
+            Action<MessageFrame>? onIngest = null)
         {
             _identities = test._identities;
             _identities.Save(identity);
@@ -574,7 +594,7 @@ public sealed class SyncEngineTest : IDisposable
             States = new ConcurrentQueue<SyncState>();
 
             Engine = new SyncEngine(test._identities, test._db, new DeviceClient(new HttpClient(Http)),
-                new ToastRecorder(Toasts), Next, sleepForReal ? null : StubSleepAsync);
+                new ToastRecorder(Toasts), Next, sleepForReal ? null : StubSleepAsync, onIngest);
             Engine.StateChanged += state => States.Enqueue(state);
         }
 

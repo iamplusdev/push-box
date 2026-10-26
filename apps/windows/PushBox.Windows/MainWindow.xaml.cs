@@ -61,6 +61,8 @@ public partial class MainWindow : Window
         _engine = engine;
         // 头像这一格自己取字节，所以取字节的这条路要在窗口装配时接上（只有窗口有 MediaLoader 和身份）
         AvatarBox.Loader = token => _media.AvatarAsync(Identity(), token);
+        // 服务端覆盖写了某个头像之后，画着同一个 token 的格子要重取一次：缓存已经作废，重画就会取到新的
+        _media.AvatarInvalidated += AvatarBox.Invalidate;
         // 拖完才记账：拖动过程中列宽是连续变的，每一下都写会让 ApplyPaneWidth 和手柄互相抢
         ListSplitter.DragCompleted += (_, _) =>
         {
@@ -370,6 +372,7 @@ public partial class MainWindow : Window
     {
         _model.Changed -= OnModelChanged;
         ThemeManager.Changed -= OnThemeChanged;
+        _media.AvatarInvalidated -= AvatarBox.Invalidate;
         if (_engine is not null) _engine.StateChanged -= OnEngineState;
         // 停引擎与释放库归装配它们的那一层（App）：窗口只管自己这一屏的订阅
         base.OnClosed(e);

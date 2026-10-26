@@ -825,4 +825,48 @@ public class AvatarTest
             Assert.Equal("P", ((TextBlock)((Border)box.Children[0]).Child).Text);
         });
     }
+
+    [Fact]
+    public void AnAvatarAlreadyPaintedRepaintsWhenItsTokenIsInvalidated()
+    {
+        Sta.Run(() =>
+        {
+            // 服务端换头像不换 token，界面收不到"地址变了"这回事：装配层在帧带着 sender_avatar 时
+            // 调 AvatarBox.Invalidate(token)（缓存已经在那一步作废），画着它的那一格必须自己再画一遍
+            var file = WritePng();
+            try
+            {
+                var box = new AvatarBox { DisplayName = "Grafana", Token = "t0k3n", LocalPath = file };
+                // Loaded 只有进了可视树才会来；用例里不进窗口，手动把那一下补上
+                box.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+                var painted = box.Children[0];
+
+                // 别的 token 换了头像不该让这一格白画一次
+                AvatarBox.Invalidate("someone-else");
+                Assert.Same(painted, box.Children[0]);
+
+                AvatarBox.Invalidate("t0k3n");
+                Assert.NotSame(painted, box.Children[0]);
+            }
+            finally
+            {
+                File.Delete(file);
+            }
+        });
+    }
+
+    /// <summary>一张能解开的小 PNG：走本地头像那条路要真的解出像素，落到占位分支就不算数了。</summary>
+    private static string WritePng()
+    {
+        var visual = new DrawingVisual();
+        using (var dc = visual.RenderOpen()) dc.DrawRectangle(Brushes.Green, null, new Rect(0, 0, 4, 4));
+        var bitmap = new RenderTargetBitmap(4, 4, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(visual);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        var path = Path.Combine(Path.GetTempPath(), "pushbox-avatar-" + Guid.NewGuid().ToString("N") + ".png");
+        using var stream = File.Create(path);
+        encoder.Save(stream);
+        return path;
+    }
 }
