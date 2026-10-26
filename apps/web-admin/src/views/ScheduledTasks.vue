@@ -122,204 +122,220 @@
     <el-dialog
       v-model="dialogVisible"
       :title="editingId ? '编辑定时任务' : '新建定时任务'"
-      width="620px"
+      width="680px"
       :close-on-click-modal="false"
-      @closed="resetJsonDraft"
+      @closed="resetDraft"
     >
-      <div class="paste-json">
-        <div class="paste-head">
-          <span class="paste-title">粘贴 API JSON</span>
-          <span class="paste-sub">只回显到下面的表单，不会提交；凭据字段一律忽略</span>
-        </div>
-        <el-input
-          v-model="jsonDraft"
-          type="textarea"
-          :rows="4"
-          placeholder='{"channel":"32941977","sender_id":"…","title":"…","content":"…"}'
-        />
-        <div class="paste-actions">
-          <el-button size="small" type="primary" plain @click="applyJson">识别并填入</el-button>
-          <el-button size="small" @click="jsonDraft = ''">清空</el-button>
-          <span class="paste-hint">
-            认得的键：channel / sender_id / sender_avatar / sender_name / title / level / content / images；
-            secret、type、msg_key、ts、nonce、sign、url 与其它键都忽略，cron 与时区不受影响
-          </span>
-        </div>
-      </div>
-      <el-form :model="form" label-width="90px">
-        <el-form-item label="任务名">
-          <el-input v-model="form.name" maxlength="64" placeholder="例如：每日晨报" />
-        </el-form-item>
-        <el-form-item label="分类">
-          <el-select
-            v-model="form.category"
-            placeholder="选已有分类，或直接输入新建一个"
-            filterable
-            allow-create
-            default-first-option
-            clearable
-            style="width: 100%"
-          >
-            <el-option v-for="c in namedCategories" :key="c" :label="c" :value="c" />
-          </el-select>
-          <div class="field-hint">
-            自由标签，32 字以内；留空的任务在上方筛选里选「未分类」能找到
-          </div>
-        </el-form-item>
-        <el-form-item label="目标频道" required>
-          <el-select v-model="form.channelNo" placeholder="选择频道" filterable style="width: 100%">
-            <el-option
-              v-for="c in channels"
-              :key="c.channel_no"
-              :label="`${c.channel_no} · ${c.name}`"
-              :value="c.channel_no"
-            />
-          </el-select>
-          <div v-if="channels.length === 0" class="field-hint">
-            还没有任何频道：管理台暂无建频道入口，先用 <code>POST /api/v1/admin/channels</code> 建一个再回来
-          </div>
-        </el-form-item>
-        <el-form-item label="标题">
-          <el-input v-model="form.title" maxlength="512" placeholder="可留空" />
-        </el-form-item>
-        <el-form-item label="正文" required>
+      <el-collapse v-model="jsonPanel" class="json-panel">
+        <el-collapse-item name="json">
+          <template #title>
+            <span class="json-title">从 API JSON 回填</span>
+            <span class="json-sub">只回显到表单，不会提交；凭据字段一律忽略</span>
+          </template>
           <el-input
-            v-model="form.content"
+            v-model="jsonDraft"
             type="textarea"
-            :rows="5"
-            placeholder="到点按这条内容下发一条消息，与外部系统调 POST /message 等价"
+            :rows="4"
+            placeholder='{"channel":"32941977","sender_id":"…","title":"…","content":"…"}'
           />
-          <div class="variables">
-            <div class="variables-head">
-              <span class="variables-title">可用变量</span>
-              <span class="variables-sub">点一下插入到正文末尾，悬停看说明</span>
-            </div>
-            <div v-for="group in variableGroups" :key="group.label" class="variable-group">
-              <span class="variable-group-label">{{ group.label }}</span>
-              <div class="variable-chips">
-                <el-tooltip
-                  v-for="v in group.items"
-                  :key="v.token"
-                  :content="v.desc"
-                  placement="top"
-                >
-                  <el-tag size="small" class="variable-tag" @click="insertVariable(v.token)">
-                    {{ v.token }}
-                  </el-tag>
-                </el-tooltip>
-              </div>
-            </div>
+          <div class="paste-actions">
+            <el-button size="small" type="primary" plain @click="applyJson">识别并填入</el-button>
+            <el-button size="small" @click="jsonDraft = ''">清空</el-button>
+            <span class="paste-hint">
+              认得的键：channel / sender_id / sender_avatar / sender_name / title / level / content / images；
+              secret、type、msg_key、ts、nonce、sign、url 与其它键都忽略，cron 与时区不受影响
+            </span>
           </div>
-          <div class="field-hint">
-            认不出的变量会原样留在正文里；渲染后超过频道 max_body_bytes 的任务存不下来
-          </div>
-        </el-form-item>
-        <el-form-item label="级别">
-          <el-radio-group v-model="form.level">
-            <el-radio-button value="info">info</el-radio-button>
-            <el-radio-button value="warning">warning</el-radio-button>
-            <el-radio-button value="error">error</el-radio-button>
-          </el-radio-group>
-          <span class="hint">最终生效级别仍受频道上限截断</span>
-        </el-form-item>
-        <el-form-item label="发送者">
-          <el-input v-model="form.senderName" maxlength="64" placeholder="显示名，可留空" />
-        </el-form-item>
-        <el-form-item label="发送者 ID">
-          <el-input v-model="form.senderId" maxlength="64" placeholder="留空按 scheduled 发送" />
-          <div class="field-hint">
-            客户端按它把消息归到同一个发送者会话；与外部系统调 <code>POST /message</code> 的 sender_id 是同一个字段
-          </div>
-        </el-form-item>
-        <el-form-item label="发送者头像">
-          <el-input v-model="form.senderAvatar" maxlength="1024" :placeholder="AVATAR_URL_HINT" />
-          <div class="field-hint">
-            只收 http(s) 图片地址，触发时由服务端转存；<code>data:</code> 内联头像超过列宽 1024，先传到图床再填
-          </div>
-        </el-form-item>
-        <el-form-item label="图片外链">
-          <div class="images">
-            <div v-for="(url, index) in form.images" :key="index" class="image-row">
-              <el-input :model-value="url" :placeholder="IMAGE_URL_HINT"
-                @update:model-value="setImage(index, $event)" />
-              <el-button @click="removeImage(index)">移除</el-button>
-            </div>
-            <el-button
-              v-if="form.images.length < maxImages"
-              link
-              type="primary"
-              @click="addImage"
-            >
-              + 添加图片（最多 {{ maxImages }} 条）
-            </el-button>
-          </div>
-        </el-form-item>
-        <el-form-item label="cron" required>
-          <div class="cron-rows">
-            <div v-for="(_, index) in cronRows" :key="index" class="cron-row">
-              <el-input v-model="cronRows[index]" placeholder="0 0 9 * * *" />
-              <span v-if="rowNextFire(cronRows[index])" class="cron-row-next">
-                下次 {{ rowNextFire(cronRows[index]) }}
-              </span>
-              <el-button
-                link
-                type="danger"
-                :disabled="cronRows.length <= 1"
-                @click="removeCronRow(index)"
+        </el-collapse-item>
+      </el-collapse>
+
+      <el-form :model="form" label-width="90px" class="task-form">
+        <el-tabs v-model="formTab" class="form-tabs">
+          <el-tab-pane label="基本" name="basic">
+            <el-form-item label="任务名">
+              <el-input v-model="form.name" maxlength="64" placeholder="例如：每日晨报" />
+            </el-form-item>
+            <el-form-item label="分类">
+              <el-select
+                v-model="form.category"
+                placeholder="选已有分类，或直接输入新建一个"
+                filterable
+                allow-create
+                default-first-option
+                clearable
+                style="width: 100%"
               >
-                删除
-              </el-button>
-            </div>
-            <el-button
-              v-if="cronRows.length < MAX_CRONS"
-              link
-              type="primary"
-              @click="addCronRow"
-            >
-              + 添加一条（最多 {{ MAX_CRONS }} 条，触发取最近的一次）
-            </el-button>
-          </div>
-          <div class="presets">
-            <span class="presets-label">快捷添加：</span>
-            <el-button
-              v-for="preset in cronPresets"
-              :key="preset.cron"
-              size="small"
-              @click="appendCron(preset.cron)"
-            >
-              {{ preset.label }}
-            </el-button>
-          </div>
-          <div class="hint">
-            每行一条，需要 6 段（秒 分 时 日 月 周），Spring 不认 5 段 unix cron。
-            同时写「工作日 09:00」和「周末 12:00」就是一条任务两种作息；触发精度受扫描周期（默认 15 秒）限制。
-            每条的下次触发点一次「预览」就会标在对应行上
-          </div>
-        </el-form-item>
-        <el-form-item label="时区">
-          <el-select
-            v-model="form.timezone"
-            placeholder="Asia/Shanghai"
-            filterable
-            allow-create
-            default-first-option
-            style="width: 100%"
-          >
-            <el-option
-              v-for="z in timezoneOptions"
-              :key="z.value"
-              :label="z.label"
-              :value="z.value"
-            />
-          </el-select>
-          <div class="field-hint">
-            cron 的「每天 09:00」和正文里的时间变量都按这个时区算；可以直接输入任意 IANA 时区名。
-            正文里写 ${timezone:其他区域} 不会生效——定时任务只认这里选的时区
-          </div>
-        </el-form-item>
-        <el-form-item label="启用">
-          <el-switch v-model="form.enabled" :active-value="1" :inactive-value="0" />
-        </el-form-item>
+                <el-option v-for="c in namedCategories" :key="c" :label="c" :value="c" />
+              </el-select>
+              <div class="field-hint">
+                自由标签，32 字以内；留空的任务在上方筛选里选「未分类」能找到
+              </div>
+            </el-form-item>
+            <el-form-item label="目标频道" required>
+              <el-select v-model="form.channelNo" placeholder="选择频道" filterable style="width: 100%">
+                <el-option
+                  v-for="c in channels"
+                  :key="c.channel_no"
+                  :label="`${c.channel_no} · ${c.name}`"
+                  :value="c.channel_no"
+                />
+              </el-select>
+              <div v-if="channels.length === 0" class="field-hint">
+                还没有任何频道：管理台暂无建频道入口，先用 <code>POST /api/v1/admin/channels</code> 建一个再回来
+              </div>
+            </el-form-item>
+            <el-form-item label="标题">
+              <el-input v-model="form.title" maxlength="512" placeholder="可留空" />
+            </el-form-item>
+            <el-form-item label="级别">
+              <el-radio-group v-model="form.level">
+                <el-radio-button value="info">info</el-radio-button>
+                <el-radio-button value="warning">warning</el-radio-button>
+                <el-radio-button value="error">error</el-radio-button>
+              </el-radio-group>
+              <span class="hint">最终生效级别仍受频道上限截断</span>
+            </el-form-item>
+            <el-form-item label="启用">
+              <el-switch v-model="form.enabled" :active-value="1" :inactive-value="0" />
+            </el-form-item>
+          </el-tab-pane>
+
+          <el-tab-pane label="内容" name="content">
+            <el-form-item label="正文" required>
+              <el-input
+                v-model="form.content"
+                type="textarea"
+                :rows="6"
+                placeholder="到点按这条内容下发一条消息，与外部系统调 POST /message 等价"
+              />
+              <div class="variables">
+                <div class="variables-head">
+                  <span class="variables-title">可用变量</span>
+                  <span class="variables-sub">点一下插入到正文末尾，悬停看说明</span>
+                </div>
+                <div v-for="group in variableGroups" :key="group.label" class="variable-group">
+                  <span class="variable-group-label">{{ group.label }}</span>
+                  <div class="variable-chips">
+                    <el-tooltip
+                      v-for="v in group.items"
+                      :key="v.token"
+                      :content="v.desc"
+                      placement="top"
+                    >
+                      <el-tag size="small" class="variable-tag" @click="insertVariable(v.token)">
+                        {{ v.token }}
+                      </el-tag>
+                    </el-tooltip>
+                  </div>
+                </div>
+              </div>
+              <div class="field-hint">
+                认不出的变量会原样留在正文里；渲染后超过频道 max_body_bytes 的任务存不下来
+              </div>
+            </el-form-item>
+            <el-form-item label="图片外链">
+              <div class="images">
+                <div v-for="(url, index) in form.images" :key="index" class="image-row">
+                  <el-input :model-value="url" :placeholder="IMAGE_URL_HINT"
+                    @update:model-value="setImage(index, $event)" />
+                  <el-button @click="removeImage(index)">移除</el-button>
+                </div>
+                <el-button
+                  v-if="form.images.length < maxImages"
+                  link
+                  type="primary"
+                  @click="addImage"
+                >
+                  + 添加图片（最多 {{ maxImages }} 条）
+                </el-button>
+              </div>
+            </el-form-item>
+          </el-tab-pane>
+
+          <el-tab-pane label="计划" name="schedule">
+            <el-form-item label="cron" required>
+              <div class="cron-rows">
+                <div v-for="(_, index) in cronRows" :key="index" class="cron-row">
+                  <el-input v-model="cronRows[index]" placeholder="0 0 9 * * *" />
+                  <span v-if="rowNextFire(cronRows[index])" class="cron-row-next">
+                    下次 {{ rowNextFire(cronRows[index]) }}
+                  </span>
+                  <el-button
+                    link
+                    type="danger"
+                    :disabled="cronRows.length <= 1"
+                    @click="removeCronRow(index)"
+                  >
+                    删除
+                  </el-button>
+                </div>
+                <el-button
+                  v-if="cronRows.length < MAX_CRONS"
+                  link
+                  type="primary"
+                  @click="addCronRow"
+                >
+                  + 添加一条（最多 {{ MAX_CRONS }} 条，触发取最近的一次）
+                </el-button>
+              </div>
+              <div class="presets">
+                <span class="presets-label">快捷添加：</span>
+                <el-button
+                  v-for="preset in cronPresets"
+                  :key="preset.cron"
+                  size="small"
+                  @click="appendCron(preset.cron)"
+                >
+                  {{ preset.label }}
+                </el-button>
+              </div>
+              <div class="hint">
+                每行一条，需要 6 段（秒 分 时 日 月 周），Spring 不认 5 段 unix cron。
+                同时写「工作日 09:00」和「周末 12:00」就是一条任务两种作息；触发精度受扫描周期（默认 15 秒）限制。
+                每条的下次触发点一次「预览」就会标在对应行上
+              </div>
+            </el-form-item>
+            <el-form-item label="时区">
+              <el-select
+                v-model="form.timezone"
+                placeholder="Asia/Shanghai"
+                filterable
+                allow-create
+                default-first-option
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="z in timezoneOptions"
+                  :key="z.value"
+                  :label="z.label"
+                  :value="z.value"
+                />
+              </el-select>
+              <div class="field-hint">
+                cron 的「每天 09:00」和正文里的时间变量都按这个时区算；可以直接输入任意 IANA 时区名。
+                正文里写 ${timezone:其他区域} 不会生效——定时任务只认这里选的时区
+              </div>
+            </el-form-item>
+          </el-tab-pane>
+
+          <el-tab-pane label="发送者" name="sender">
+            <el-form-item label="发送者">
+              <el-input v-model="form.senderName" maxlength="64" placeholder="显示名，可留空" />
+            </el-form-item>
+            <el-form-item label="发送者 ID">
+              <el-input v-model="form.senderId" maxlength="64" placeholder="留空按 scheduled 发送" />
+              <div class="field-hint">
+                客户端按它把消息归到同一个发送者会话；与外部系统调 <code>POST /message</code> 的 sender_id 是同一个字段
+              </div>
+            </el-form-item>
+            <el-form-item label="发送者头像">
+              <el-input v-model="form.senderAvatar" maxlength="1024" :placeholder="AVATAR_URL_HINT" />
+              <div class="field-hint">
+                只收 http(s) 图片地址，触发时由服务端转存；<code>data:</code> 内联头像超过列宽 1024，先传到图床再填
+              </div>
+            </el-form-item>
+          </el-tab-pane>
+        </el-tabs>
       </el-form>
       <template #footer>
         <div class="dialog-footer">
@@ -406,6 +422,11 @@ const page = ref(1)
 const toggling = ref('')
 const dialogVisible = ref(false)
 const editingId = ref('')
+/** 表单四个分组：字段多到一屏放不下，攒在一个滚动表单里找「时区」要来回滚。 */
+type FormTab = 'basic' | 'content' | 'schedule' | 'sender'
+const formTab = ref<FormTab>('basic')
+/** 折叠的 JSON 区默认收起：它是旁路入口，不该占着表单最上面的位置。 */
+const jsonPanel = ref<string[]>([])
 const previewVisible = ref(false)
 const previewLoading = ref(false)
 const preview = ref<ScheduledTaskPreview | null>(null)
@@ -562,8 +583,28 @@ function asText(value: unknown): string {
   return ''
 }
 
-function resetJsonDraft() {
+/** 关窗或换任务时把旁路那份 JSON 与视图状态一起复位：下次打开永远落在「基本」。 */
+function resetDraft() {
   jsonDraft.value = ''
+  jsonPanel.value = []
+  formTab.value = 'basic'
+}
+
+/** 校验没过时先把人送到出错的那一组，否则提示闪一下、字段还躺在看不见的 Tab 里。 */
+function focusTab(tab: FormTab) {
+  formTab.value = tab
+}
+
+/** JSON 键 → 它落在哪一组；填完直接把表单翻到那一页，省得自己去点。 */
+const TAB_OF_KEY: Record<string, FormTab> = {
+  channel: 'basic',
+  title: 'basic',
+  level: 'basic',
+  content: 'content',
+  images: 'content',
+  sender_id: 'sender',
+  sender_name: 'sender',
+  sender_avatar: 'sender'
 }
 
 /**
@@ -650,6 +691,8 @@ async function applyJson() {
     return
   }
   ElMessage.success(`已填入 ${filled.join('、')}；cron 与时区未动`)
+  formTab.value = TAB_OF_KEY[filled[0]] || 'basic'
+  jsonPanel.value = []
 }
 
 /** 6 段 cron（秒 分 时 日 月 周）——Spring CronExpression 不认 5 段 unix 写法。 */
@@ -743,7 +786,7 @@ function openCreate() {
   editingId.value = ''
   form.value = emptyForm()
   cronRows.value = [DEFAULT_CRON]
-  resetJsonDraft()
+  resetDraft()
   dialogVisible.value = true
   // 频道可能在别处被删掉；打开表单时重拉一次，免得下拉里留着一条点了就 404 的旧值
   fetchChannels()
@@ -771,7 +814,7 @@ async function openEdit(row: ScheduledTask) {
     }
     const lines = String(task.cron_expr || '').split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean)
     cronRows.value = lines.length > 0 ? lines : [DEFAULT_CRON]
-    resetJsonDraft()
+    resetDraft()
     dialogVisible.value = true
     fetchChannels()
   } catch (e) {
@@ -814,12 +857,14 @@ function formatInZone(ts: number, zone: string) {
  */
 async function ensureChannel(): Promise<boolean> {
   if (!form.value.channelNo) {
+    focusTab('basic')
     ElMessage.warning('请选择目标频道')
     return false
   }
   if (channels.value.some(c => c.channel_no === form.value.channelNo)) {
     return true
   }
+  focusTab('basic')
   ElMessage.warning('所选频道已不存在（可能已被删除），已刷新频道列表，请重新选择')
   form.value.channelNo = ''
   await fetchChannels()
@@ -835,6 +880,7 @@ async function resetIfChannelGone(e: any): Promise<boolean> {
   if (!gone) {
     return false
   }
+  focusTab('basic')
   form.value.channelNo = ''
   await fetchChannels()
   return true
@@ -845,11 +891,13 @@ async function handlePreview() {
     return
   }
   if (!form.value.content.trim()) {
+    focusTab('content')
     ElMessage.warning('正文不能为空')
     return
   }
   const crons = collectCrons()
   if (crons.length === 0) {
+    focusTab('schedule')
     ElMessage.warning('cron 表达式必填')
     return
   }
@@ -881,11 +929,13 @@ async function handleSave() {
     return
   }
   if (!form.value.content.trim()) {
+    focusTab('content')
     ElMessage.warning('正文不能为空')
     return
   }
   const crons = collectCrons()
   if (crons.length === 0) {
+    focusTab('schedule')
     ElMessage.warning('cron 表达式必填')
     return
   }
@@ -893,6 +943,7 @@ async function handleSave() {
   // 服务端会静默截到 32 字，截出来的那个词和用户想写的就不是同一个分类了。
   const category = (form.value.category || '').trim()
   if (category.length > 32) {
+    focusTab('basic')
     ElMessage.warning('分类不能超过 32 字，现在是 ' + category.length + ' 字')
     return
   }
@@ -987,30 +1038,55 @@ onMounted(() => {
   width: 100%;
 }
 
-.paste-json {
-  margin-bottom: 18px;
-  padding: 10px 12px 12px;
-  background: #fafbfc;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 6px;
+.json-panel {
+  margin-bottom: 4px;
+  border-top: none;
+  border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
-.paste-head {
-  display: flex;
-  align-items: baseline;
+.json-panel :deep(.el-collapse-item__header) {
+  height: 40px;
   gap: 8px;
-  margin-bottom: 8px;
+  border-bottom: none;
 }
 
-.paste-title {
-  font-size: 12px;
+.json-panel :deep(.el-collapse-item__wrap) {
+  border-bottom: none;
+}
+
+.json-panel :deep(.el-collapse-item__content) {
+  padding-bottom: 12px;
+}
+
+.json-title {
+  font-size: 13px;
   font-weight: 600;
   color: #606266;
 }
 
-.paste-sub {
+.json-sub {
+  margin-left: 8px;
   font-size: 12px;
+  font-weight: normal;
   color: #a8abb2;
+}
+
+.task-form {
+  padding-top: 4px;
+}
+
+/* 展开 JSON 区后整张表单会顶出视口、把「保存」挤出屏幕；这里给对话框身体封个顶，
+   让内容自己滚，标题与底部按钮始终在场。选择器直接落在 body 上：el-dialog 的根是遮罩层，
+   `.el-dialog` 那一层拿不到 scoped 的 data-v 标记。 */
+:deep(.el-dialog__body) {
+  max-height: calc(100vh - 300px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.task-form :deep(.el-tabs__content) {
+  max-height: 54vh;
+  overflow-y: auto;
 }
 
 .paste-actions {
@@ -1022,8 +1098,8 @@ onMounted(() => {
 }
 
 .paste-hint {
-  flex: 1;
-  min-width: 240px;
+  flex: 1 0 100%;
+  min-width: 0;
   font-size: 12px;
   line-height: 1.6;
   color: #a8abb2;
