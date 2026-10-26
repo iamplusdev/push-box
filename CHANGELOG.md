@@ -9,6 +9,41 @@
 
 ---
 
+## 未发布 —— 三端排版层：六档字号只留一张表
+
+> 起因一条：同一张字号表，三端各记各的。Android 的 `Typography` 只写了 4 个槽位，没写的落回 Material3 基线（`headlineSmall` 24、`titleSmall`/`labelLarge` 14）；Windows 的 14、11、18 散在四个 XAML 与两个 `Controls` 文件里；管理台根本没有排版层，Element 的 14px 基线之下页面又各自写 12/13/14/15/18/30。规范里只有六档（12/13/15/16/18/20），编进代码的却远不止六个。
+
+### Android
+
+- **`PushBoxTypography` 15 个槽位全写**：`display*` 与 `headlineLarge` 压到 H1 20/28，`headlineMedium` 18/25，`headlineSmall`/`titleLarge`/`titleMedium` 16/22，`titleSmall`/`bodyLarge` 15/23，`bodyMedium`/`bodySmall` 13/18，`labelLarge` 13/18，`labelMedium`/`labelSmall` 12/16。不写的槽位会落回基线的 24 与 14，编译期不报、预览也不一定看得出来。
+- **按钮走 13 而不是 12**：12sp 的中文按钮笔画会糊，13 仍属 Small 档。
+- **`labelSmall` 不再带颜色**：原先在这里焊死 `#8A8A8A`（`#F7F7F7` 上约 3.4:1），没显式传色的地方都继承这档灰；颜色归还调用方。
+- **聊天气泡标题改走槽位**：`MainActivity` 的标题从裸 `fontSize` 改为 `headlineLarge/Medium/Small` + `bodyLarge`，行高随槽位来。
+
+### Windows
+
+- **字号与行高收到 `MarkdownStyle` 一处**：`H1Size/H1Line`、`H2Size/H2Line`、`H3Size/H3Line`、`Body*`、`Small*`、`Label*`；标题行高原来缺，20 号字只剩 1.15×。
+- **两本字典各加 `Text.H1/H2/H3/Body/Small/Label/Code`**：字号、行高、字体族全在样式里，XAML 与代码一律 `{x:Static controls:MarkdownStyle.*}` / `Style="{DynamicResource Text.Body}"`。
+- **字体族也走 token**：四个窗口与 `MarkdownStyle.FromResources()` 共用 `Font.UI` / `Font.Code`，不再各写一遍 `"Segoe UI, Microsoft YaHei UI"`。
+- **清掉散写的字号**：设置页 5 个样式与 9 个 `CheckBox` 的 13、首启页 4 处、更新确认框、顶栏 ⚙/←、气泡徽标 11/12 全部改 token；`PromptDialog` 的输入框改 `SmallSize`。
+
+### 管理台
+
+- **新增 `src/styles/typography.css`**：两个字体族、六档字号/行高、三级文字色，`--el-font-size-*` 全部指过来；必须在 `element-plus` 之后引入（同权重后写的赢）。`App.vue` 只留清零，字体族不再两处写。
+- **表格统一节奏**：13px 正文 + 600 表头 + 11px 上下内边距（实测行高 44px），表格内按钮跟随行字号。原来表头与正文同重同色、行内只留 8px。
+- **收掉表外的两个数**：Dashboard 的 30px 数字降到 H1 20/28；定时任务预览正文的 14/1.6 改成 15/23（与两端气泡同一档）。
+- **副文本提对比度**：`--el-text-color-secondary` 从 `#909399`（白底 2.9:1）改 `#5f5f5f`（5.9:1），与两端色板的 `Fg.Secondary` 同值；标识符加 `.pb-mono`（等宽 + `tabular-nums`）。
+
+### 验证
+
+- `./gradlew :app:testDebugUnitTest`：通过（`src/test` 下目前只有这一份 JVM 单测，3 条：15 槽位逐比字号与行高、行高按表、会话行/正文/摘要/时间戳四个值单独钉）。
+- `dotnet test apps/windows/PushBox.sln`：**581/581 通过**（`TypographyTest` 新增 6 条：两本字典逐条比表、XAML/C# 里没有数字 `FontSize`、聊天标题走同一张表、四个窗口字体族走 token、六档覆盖字典与聊天体、更新确认框在 STA 线程上真构造）。复跑时有一次 `SyncEngineTest.StatesWalkFromConnectingToOnlineThenOfflineWithTheNextWait` 的 `Until` 超时，单跑与整跑复跑均绿——时序抖动，与本轮改动无关。
+- `npm run build`（`vue-tsc -b && vite build`）：通过。
+- **管理台在真浏览器里量过 computed style**（dev 7403 + 本地 mock 8081）：body 15/23、页面标题 18/25/700、表头 13/600、单元格 13/18、行高 44px、副文本 `#5f5f5f`、预览正文 15/23、发送者 ID 12px 等宽。**截不了图**——当前内嵌浏览器的视口不可用（`NATIVE_BROWSER_VIEWPORT_UNAVAILABLE`），所以证据是 computed style 而不是像素。
+- **没跑的**：Windows 的界面只过了 `dotnet test`，没有起窗口看——开发构建会顶掉装机版实例锁并改写 HKCU 自启项（见 `docs/Windows开发环境安装教程.md` 的坑），这轮不做。Android 只跑了 JVM 单测，没装机。三端的"看起来是否舒服"仍要人眼过一遍。
+
+---
+
 ## 未发布 —— Windows：换了头像不必等进程重启
 
 > 起因一条：服务端换头像不换 token（`sha256(sender_id)`），PC 的头像缓存又只进内存、没有 TTL——只要进程不重启，`avatar#{token}` 那一格命中之后就一直返回旧字节。Android 那边已经靠"回到前台复核 + 10 分钟有效期"补上了，PC 还停在原地。
