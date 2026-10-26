@@ -9,6 +9,28 @@
 
 ---
 
+## 未发布 —— Windows：设置页输入控件入 token，键盘与长文本收口
+
+> 起因三条：① 设置页是最后一处 token 孤岛——`TextBox` 与 `ComboBox` 用系统默认模板，深色模式下是白底弹层配浅字，悬停/聚焦/禁用三态一概没有；正文里还散着 8 处 `FontSize` 字面量。② 键盘走不通：会话行与设置页的焦点框被吃掉（没有 `FocusVisualStyle`），⚙ 与返回这类纯图标按钮没有可达路径，中文标签也没法用 `AccessKey`。③ 会话名一长就把整行撑宽、把时间挤出去，摘要不限行；1920×1080 的 125% 缩放下，1024×768 的初始尺寸会被任务栏切掉一截。
+
+### Windows
+
+- **设置页输入控件换模板**：`TextBox` 自定义模板（`PART_ContentHost` + token 前景/背景/光标/选区色，悬停、聚焦、禁用三态）；`ComboBox` 自定义模板（`PART_Popup`、深色 `Bg.Elevated` 弹层、`MaxDropDownHeight`、下拉最小宽度跟住控件自身），`ComboBoxItem` 选中与悬停分别走 `Bg.AccentTint` 与 `OnAccent`，深色下不再是系统白底。
+- **字号归位**：设置页所有 `TextBlock` 改用 `Text.H1/H2/H3/Body/Small/Label/Code`，正文里不再有 `FontSize` 字面量（仅 `CheckBox` 保留 13，控件本体不属于 `TextBlock` 档位）。
+- **焦点框回来**：新增 `Focus.Visual`（2px `Accent`、圆角 6）到两份字典，会话行、设置页导航与按钮统一挂上；`{DynamicResource}` 是因为测试线程没有 `Application`，`StaticResource` 在 App 级键上会静默失效。
+- **键盘可达**：主窗 `Alt+S` 打开设置、`Alt+←` 关闭会话（`PreviewKeyDown` 读 `SystemKey`，因为 Alt 组合在 WPF 里报到 `Key.System` 上）；设置窗 `Alt+1..4` 切四个分区、`Esc` 关闭，导航按钮补上 `ToolTip` 说明快捷键。中文标签下 `AccessKey` 无从按下，所以走窗口级快捷键而不是 `_` 标记。
+- **长文本截断**：会话行把名字放进独立 `Grid` 列 + `TextTrimming=CharacterEllipsis` 与 `ToolTip`，时间不再被挤走；摘要 `Wrap` + `MaxHeight=36`（`Text.Small` 行高 18 正好两行）后省略并带完整 `ToolTip`；对话页标题同样省略、悬停看全名。
+- **初始窗口夹进工作区**：`MainModel.FitToWorkArea` 取 `min(设计尺寸, 工作区 × 0.9)`，`WorkArea <= 0` 时原样返回；主窗构造时用它算宽高，窄屏不再把窗口摆出屏幕。
+
+### 测试
+
+- `dotnet test apps/windows/PushBox.sln`：**566/566 通过**（本轮新增 5 条）。
+- `MainModelTest` 新增一条工作区夹取（910→819、512→461、1920/1040 不动、工作区为 0 时不变）；`ThemeTest` 新增四条：设置页 `TextBlock` 必须挂字号档位、输入控件自带主题模板、会话行必须省略而不是撑宽、两份字典里都要有 `Focus.Visual`（`DynamicResource` 缺键时不报错，只有断言能钉住）。
+- `ci.yml` 的 `$CS_BASELINE` 与五处文档现值 `561` → `566`；`CHANGELOG.md` 里上一批的 `561` 是历史记录，不改写。
+- **没跑的**：没有启动 GUI 目视键盘焦点圈与深色下拉弹层——开发构建会顶掉实例锁并把 `HKCU\...\Run` 改指 `bin\Debug`（见 `docs/软件设计方案.md` §8.2），本轮只做了构建与 xunit。装机复验时重点看 `Alt+S`/`Alt+1..4`、`Esc`、以及深色下 `ComboBox` 弹层的底色与选中态。
+
+---
+
 ## 未发布 —— 管理台：删掉模板残留，窄窗口侧栏收起，空态与危险确认收口
 
 > 起因三条：① 脚手架留下的 `src/style.css` 与 `assets/hero.png`、`vite.svg`、`vue.svg` 一个都没被引用，`index.html` 还挂着 `lang="en"` 和模板标题；② 侧栏写死 200px，主区左右各 20px，窗口一窄就给表格剩不下几列；③ 四处"列表为空"用的是表格外的 `el-empty`，表头和列宽整块消失；删除/吊销这类不可逆操作，确认框的主按钮仍是默认蓝色。

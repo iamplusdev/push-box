@@ -59,6 +59,8 @@ public class ThemeTest
     private const string Light = "Themes/Tokens.xaml";
     private const string Dark = "Themes/Tokens.Dark.xaml";
 
+    private static readonly XNamespace X = "http://schemas.microsoft.com/winfx/2006/xaml";
+
     /// <summary>§9.1 表格的浅色那一列，逐格抄下来。
     /// 底色是分层的：页面 <c>Bg.Page</c> 最浅的一档灰，菜单与卡片 <c>Bg.Elevated</c> 是白、
     /// 会话列表 <c>Bg.SenderList</c> 再深一档——微信 PC 那三块本来就肉眼可分。
@@ -256,5 +258,97 @@ public class ThemeTest
         // §9.1 的克制：info 什么都不给，于是竖条和小圆点都不会出现
         Assert.Null(PushBox.Windows.Views.TimeFormat.LevelAccent("info"));
         Assert.Null(PushBox.Windows.Views.TimeFormat.LevelAccent(null));
+    }
+
+    /// <summary>
+    /// §9.2 的字号档位只有六档。设置页原来每个 TextBlock 自带 FontSize（还夹着 14/11），
+    /// 换字典时字号不跟着走，也没法一眼看出哪一档是哪一档；这里钉住"再也别写回字面量"。
+    /// </summary>
+    [Fact]
+    public void EveryTextBlockInSettingsUsesATypeScaleStyle()
+    {
+        var doc = XDocument.Parse(TokenFiles.Text("Views/SettingsWindow.xaml"));
+        var offenders = doc.Descendants()
+            .Where(e => e.Name.LocalName == "TextBlock")
+            .Where(e => e.Attribute("Style") is null || e.Attribute("FontSize") is not null)
+            .Select(e => (string?)e.Attribute("Text") ?? (string?)e.Attribute(X + "Name") ?? "(无文本)")
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// 输入框与下拉框要自带模板：默认模板的 hover/焦点描边是系统浅蓝，下拉弹层在深色下是系统白底，
+    /// 三态与弹层都没法靠 token 换。这里钉的是"模板里真写了"而不是"看起来差不多"。
+    /// </summary>
+    [Fact]
+    public void TheSettingsInputsCarryTheirOwnThemedTemplate()
+    {
+        var doc = XDocument.Parse(TokenFiles.Text("Views/SettingsWindow.xaml"));
+        string Template(string target) => doc.Descendants()
+            .Single(e => e.Name.LocalName == "Style"
+                         && (string?)e.Attribute("TargetType") == target
+                         && e.Attribute(X + "Key") is null)
+            .ToString();
+
+        var box = Template("TextBox");
+        Assert.Contains("IsMouseOver", box);
+        Assert.Contains("IsKeyboardFocusWithin", box);
+        Assert.Contains("IsEnabled", box);
+        Assert.Contains("PART_ContentHost", box);
+
+        // 弹层底色、选项高亮也在模板里，不能让下拉那一层落回系统白
+        var combo = Template("ComboBox");
+        Assert.Contains("PART_Popup", combo);
+        Assert.Contains("Bg.Elevated", combo);
+        Assert.Contains("IsKeyboardFocusWithin", combo);
+        var item = Template("ComboBoxItem");
+        Assert.Contains("IsHighlighted", item);
+    }
+
+    /// <summary>
+    /// §9.3 的长文本规则：名称与标题一行省略、摘要最多两行且末行省略。
+    /// 名称原来塞在横向 StackPanel 里，按内容取宽——TextTrimming 永远不触发，长名字会把右边的时间挤出去。
+    /// </summary>
+    [Fact]
+    public void LongConversationTextTrimsInsteadOfPushingTheRowWide()
+    {
+        var doc = XDocument.Parse(TokenFiles.Text("MainWindow.xaml"));
+        XElement ByBinding(string binding) => doc.Descendants()
+            .Single(e => e.Name.LocalName == "TextBlock" && (string?)e.Attribute("Text") == binding);
+
+        var name = ByBinding("{Binding DisplayName}");
+        Assert.Equal("CharacterEllipsis", (string?)name.Attribute("TextTrimming"));
+        Assert.Equal("{Binding DisplayName}", (string?)name.Attribute("ToolTip"));
+        // 横排 StackPanel 里 TextTrimming 是死代码：那条路必须已经改成星号列
+        Assert.DoesNotContain(name.Ancestors(), a =>
+            a.Name.LocalName == "StackPanel" && (string?)a.Attribute("Orientation") == "Horizontal");
+
+        var summary = ByBinding("{Binding Summary}");
+        Assert.Equal("Wrap", (string?)summary.Attribute("TextWrapping"));
+        Assert.Equal("CharacterEllipsis", (string?)summary.Attribute("TextTrimming"));
+        // Text.Small 行高 18：36 就是两行
+        Assert.Equal("36", (string?)summary.Attribute("MaxHeight"));
+
+        var title = doc.Descendants().Single(e =>
+            e.Name.LocalName == "TextBlock" && (string?)e.Attribute(X + "Name") == "ConversationTitle");
+        Assert.Equal("CharacterEllipsis", (string?)title.Attribute("TextTrimming"));
+        Assert.NotNull(title.Attribute("ToolTip"));
+    }
+
+    /// <summary>会话行原来把 FocusVisualStyle 置成 null，键盘走过去看不出焦点停在哪。</summary>
+    [Fact]
+    public void TheConversationRowKeepsAKeyboardFocusRing()
+    {
+        var doc = XDocument.Parse(TokenFiles.Text("MainWindow.xaml"));
+        var row = doc.Descendants().Single(e =>
+            e.Name.LocalName == "Style" && (string?)e.Attribute(X + "Key") == "ConversationRowStyle");
+        var focus = row.Elements().Single(e =>
+            e.Name.LocalName == "Setter" && (string?)e.Attribute("Property") == "FocusVisualStyle");
+
+        Assert.Equal("{DynamicResource Focus.Visual}", (string?)focus.Attribute("Value"));
+        // 焦点框本身也得在字典里（DynamicResource 拿不到键时不会报错，只是又变回"看不见"）
+        Assert.Contains("Focus.Visual", TokenFiles.AllKeys("Themes/Tokens.xaml"));
+        Assert.Contains("Focus.Visual", TokenFiles.AllKeys("Themes/Tokens.Dark.xaml"));
     }
 }

@@ -299,7 +299,7 @@ jobs:
         env:
           DOTNET_OUTCOME: ${{ steps.dotnet.outcome }}
         run: |
-          $CS_BASELINE = 561
+          $CS_BASELINE = 566
           $trx = Get-ChildItem -Path TestResults -Recurse -Filter crypto.trx -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $trx) {
             Write-Output "::error::没有 crypto.trx（dotnet test 这步 outcome=$env:DOTNET_OUTCOME）：还原或编译就断了，不是用例红——去看上面那步"

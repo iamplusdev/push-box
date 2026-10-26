@@ -50,6 +50,10 @@ public partial class MainWindow : Window
         SearchService search, DeleteReporter deletions, MediaLoader media, SyncEngine? engine = null)
     {
         InitializeComponent();
+        // 写死的 1080×680 在 1366×768@150% 上比工作区还大（可见区约 910×512），开窗就把内容推到屏幕外。
+        // 只在启动时夹一次：之后用户自己拖大/最大化都按他的来
+        Width = MainModel.FitToWorkArea(Width, SystemParameters.WorkArea.Width);
+        Height = MainModel.FitToWorkArea(Height, SystemParameters.WorkArea.Height);
         _model = new MainModel(db, identities, reporter, search, deletions, new FulltextService(db, identities));
         Prompt = AskForText;
         PickImageFile = PickImageFromDisk;
@@ -239,6 +243,25 @@ public partial class MainWindow : Window
     /// <summary>空会话列表时引导用户打开设置创建频道。</summary>
     private void OnOpenSettingsFromEmpty(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke();
 
+    /// <summary>
+    /// 齿轮与箭头是字形，没法像带文字的按钮那样挂 AccessKey，所以用窗口级组合键补上键盘入口：
+    /// Alt+S 开设置、Alt+← 退回"没选中"。<c>Alt</c> 按住时实际键码在 <see cref="KeyEventArgs.SystemKey"/> 上。
+    /// </summary>
+    private void OnPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (Keyboard.Modifiers != ModifierKeys.Alt) return;
+        if (e.SystemKey == Key.S)
+        {
+            SettingsRequested?.Invoke();
+            e.Handled = true;
+        }
+        else if (e.SystemKey == Key.Left && _model.Selected is not null)
+        {
+            _model.CloseConversation();
+            e.Handled = true;
+        }
+    }
+
     /// <summary>菜单项收到的只有 <see cref="MenuItem"/>，那一行的数据要从弹出树反查回来。
     /// <c>DataContext</c> 与 <c>PlacementTarget.DataContext</c> 两条都试：ContextMenu 住在弹出树上，
     /// 它的数据上下文是从放置目标继承来的，两处都认一次就不必赌 WPF 的版本行为。</summary>
@@ -330,6 +353,7 @@ public partial class MainWindow : Window
         BackButton.Click += (_, _) => _model.CloseConversation();
         TimelineScroll.ScrollChanged += OnTimelineScrollChanged;
         SizeChanged += (_, _) => ApplyPaneWidth();
+        PreviewKeyDown += OnPreviewKeyDown;
 
         // 模型的"变了"可能来自线程池（搜索的服务端那半段就是 ConfigureAwait(false) 回来的），
         // 所以订阅的这一层负责把重画送回 UI 线程

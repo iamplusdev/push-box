@@ -99,4 +99,17 @@
         <Setter Property="FontFamily" Value="{StaticResource Font.Code}" />
     </Style>
 
+    <!-- 键盘焦点框：2px Accent 内描边。会话行原来把 FocusVisualStyle 置成 null，
+         Tab 过去完全看不出焦点停在哪；这条替代 WPF 默认那圈点线，深浅两套都用主色 -->
+    <Style x:Key="Focus.Visual">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border Margin="1" CornerRadius="6" BorderThickness="2"
+                            BorderBrush="{DynamicResource Accent}" SnapsToDevicePixels="True" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
 </ResourceDictionary>

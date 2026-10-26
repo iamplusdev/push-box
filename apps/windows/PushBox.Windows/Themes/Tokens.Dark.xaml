@@ -90,4 +90,16 @@
         <Setter Property="FontFamily" Value="{StaticResource Font.Code}" />
     </Style>
 
+    <!-- 键盘焦点框：与浅色那份同一套（Accent 换字典时自己跟着走） -->
+    <Style x:Key="Focus.Visual">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border Margin="1" CornerRadius="6" BorderThickness="2"
+                            BorderBrush="{DynamicResource Accent}" SnapsToDevicePixels="True" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
 </ResourceDictionary>

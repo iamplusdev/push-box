@@ -427,6 +427,19 @@ public sealed class MainModelTest : IDisposable
     }
 
     [Fact]
+    public void TheStartupWindowIsClampedToTheWorkArea()
+    {
+        // 1366×768@150% 的可见区约 910×512：写死的 1080×680 开窗就超出屏幕
+        Assert.Equal(819, MainModel.FitToWorkArea(1080, 910));
+        Assert.Equal(461, MainModel.FitToWorkArea(680, 512));
+        // 屏幕够大时不该被缩小
+        Assert.Equal(1080, MainModel.FitToWorkArea(1080, 1920));
+        Assert.Equal(680, MainModel.FitToWorkArea(680, 1040));
+        // 读不到工作区（无头环境/系统没给）时原样返回，不能把窗口压成 0
+        Assert.Equal(1080, MainModel.FitToWorkArea(1080, 0));
+    }
+
+    [Fact]
     public void ConnectionStateBecomesOneSentence()
     {
         // 左侧菜单只有 60px 宽，正文一律两字：原来的"离线，正在重连（socket 断了）"会把这一栏撑成字墙

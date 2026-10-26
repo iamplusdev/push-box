@@ -278,6 +278,13 @@ public sealed class MainModel
                 0, PaneLayout.NoMaxWidth, right);
     }
 
+    /// <summary>开窗尺寸按工作区的这个比例封顶：写死的 1080×680 在 1366×768@150% 的可见区（约 910×512）里装不下。</summary>
+    public const double WindowFitFraction = 0.9;
+
+    /// <summary>把一个期望尺寸夹进工作区。工作区读不到（≤0）时原样返回，免得窗口被压成 0 宽。</summary>
+    public static double FitToWorkArea(double desired, double workArea) =>
+        workArea <= 0 ? desired : Math.Min(desired, Math.Round(workArea * WindowFitFraction));
+
     /// <summary>
     /// 打开一条会话：先出内容、再把红点清掉。已读上报是"本地立刻清 + 攒批上报"两件事（W9 的口径），
     /// 所以这里只调 MarkRead，不等网络。

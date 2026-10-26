@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using PushBox.Windows.Data;
 using PushBox.Windows.Net;
@@ -58,6 +59,7 @@ public partial class SettingsWindow : Window
         _update = update ?? new UpdateModel();
         _beforeExit = beforeExit;
         InitializeComponent();
+        PreviewKeyDown += OnPreviewKeyDown;
         ApplyToControls();
         AboutVersion.Text = "版本 " + UpdateClient.CurrentVersion();
         // 一开扇就去服务端取一次，而不是等人再点一下"刷新"：这一页的全部价值都在"看得见现在的治理位"，
@@ -89,6 +91,34 @@ public partial class SettingsWindow : Window
     // ---- 导航 ----------------------------------------------------------------------------------------
 
     private void OnNavChanged(object sender, RoutedEventArgs e) => ShowPanel((sender as RadioButton)?.Tag as string);
+
+    /// <summary>
+    /// Alt+1..4 直接跳那一页、Esc 关窗。左侧导航是中文标签，挂 AccessKey 没有意义
+    /// （Alt+汉字在标准键盘上按不出来），所以用数字组合键；快捷键只改 RadioButton 的选中，
+    /// 换页仍然走 <see cref="OnNavChanged"/> 那一条，不另开一套状态。
+    /// </summary>
+    private void OnPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            Close();
+            e.Handled = true;
+            return;
+        }
+
+        if (Keyboard.Modifiers != ModifierKeys.Alt) return;
+        RadioButton? target = e.SystemKey switch
+        {
+            Key.D1 or Key.NumPad1 => NavChannels,
+            Key.D2 or Key.NumPad2 => NavDevices,
+            Key.D3 or Key.NumPad3 => NavNotify,
+            Key.D4 or Key.NumPad4 => NavAbout,
+            _ => null
+        };
+        if (target is null) return;
+        target.IsChecked = true;
+        e.Handled = true;
+    }
 
     /// <summary>切到哪一块面板。选中态由那一列的 RadioButton 拿着，这里只负责让对应那一屏出现。
     ///

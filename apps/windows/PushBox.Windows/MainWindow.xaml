@@ -15,11 +15,12 @@
         <views:NullOrEmptyToVisibilityConverter x:Key="HasValue" />
 
         <!-- 会话行的选中态：整条铺 Accent（§9.1 的微信口径），hover 比列表底色浅一档。
-             颜色一律走 token，深色主题换字典时这一行才会跟着反色。 -->
+             颜色一律走 token，深色主题换字典时这一行才会跟着反色。
+             焦点框也走 token：这一行原来把 FocusVisualStyle 置空，键盘走过去看不出焦点在哪。 -->
         <Style x:Key="ConversationRowStyle" TargetType="ListBoxItem">
             <Setter Property="Padding" Value="0" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource Focus.Visual}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
@@ -84,22 +85,37 @@
                     <controls:AvatarBox Grid.Column="0" Width="44" Height="44" Side="44"
                                         DisplayName="{Binding DisplayName}" Token="{Binding AvatarToken}"
                                         LocalPath="{Binding AvatarPath}" />
-                    <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
-                        <StackPanel Orientation="Horizontal">
+                    <!-- 名称必须是"星号列 + 省略号"：塞在横向 StackPanel 里时它按内容取宽，
+                         TextTrimming 永远不触发，长名字会把右边的置顶/静音和时间挤出去 -->
+                    <Grid Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid Grid.Row="0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
                             <!-- §9.1 的会话行小圆点：只有 warning/error 才有 -->
-                            <Ellipse Width="8" Height="8" Margin="0,0,6,0" VerticalAlignment="Center"
+                            <Ellipse Grid.Column="0" Width="8" Height="8" Margin="0,0,6,0" VerticalAlignment="Center"
                                      Fill="{Binding LevelDotKey, Converter={StaticResource TokenBrush}}"
                                      Visibility="{Binding LevelDotKey, Converter={StaticResource HasValue}}" />
-                            <TextBlock Text="{Binding DisplayName}" Style="{DynamicResource Text.H3}"
-                                       Foreground="{DynamicResource Fg.Primary}" TextTrimming="CharacterEllipsis" />
-                            <TextBlock Text="{Binding FlagsText}" Style="{DynamicResource Text.Label}"
-                                       VerticalAlignment="Center"
+                            <TextBlock Grid.Column="1" Text="{Binding DisplayName}" Style="{DynamicResource Text.H3}"
+                                       Foreground="{DynamicResource Fg.Primary}"
+                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding DisplayName}" />
+                            <TextBlock Grid.Column="2" Text="{Binding FlagsText}" Style="{DynamicResource Text.Label}"
+                                       VerticalAlignment="Center" Margin="2,0,0,0"
                                        Foreground="{DynamicResource Fg.Secondary}" />
-                        </StackPanel>
-                        <TextBlock Text="{Binding Summary}" Style="{DynamicResource Text.Small}"
-                                   Margin="0,2,0,0" MaxHeight="36" TextTrimming="CharacterEllipsis"
+                        </Grid>
+                        <!-- 摘要限两行：Text.Small 行高 18，36 正好两行；开 Wrap 之后
+                             截断才落在第二行末尾，而不是把整段压成一行 -->
+                        <TextBlock Grid.Row="1" Text="{Binding Summary}" Style="{DynamicResource Text.Small}"
+                                   Margin="0,2,0,0" MaxHeight="36" TextWrapping="Wrap"
+                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding Summary}"
                                    Foreground="{DynamicResource Fg.Secondary}" />
-                    </StackPanel>
+                    </Grid>
                     <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
                                 Margin="10,0,0,0">
                         <TextBlock Text="{Binding ClockText}" Style="{DynamicResource Text.Label}"
@@ -154,7 +170,7 @@
                         <Button x:Name="SettingsButton" Content="⚙" FontSize="18"
                                 Background="Transparent" BorderThickness="0"
                                 Foreground="{DynamicResource Fg.Secondary}"
-                                ToolTip="设置" Click="OnOpenSettings" />
+                                ToolTip="设置（Alt+S）" Click="OnOpenSettings" />
                     </Border>
                     <!-- 顶部：连接状态指示。正文只有两字（"在线/离线/异常"），原因挂在整块的悬停提示上——
                          挂在 10px 那颗点上等于没有，鼠标很难正好停在上面 -->
@@ -241,11 +257,13 @@
                     </Grid.ColumnDefinitions>
                     <Button x:Name="BackButton" Grid.Column="0" Content="←" Width="28" Height="28"
                             Padding="0" Visibility="Collapsed" Background="Transparent"
-                            BorderThickness="0" FontSize="16"
+                            BorderThickness="0" FontSize="16" ToolTip="返回（Alt+←）"
                             Foreground="{DynamicResource Fg.Primary}" />
                     <TextBlock x:Name="ConversationTitle" Grid.Column="1" Margin="10,0,0,0"
                                Style="{DynamicResource Text.H3}" VerticalAlignment="Center"
-                               Foreground="{DynamicResource Fg.Primary}" />
+                               Foreground="{DynamicResource Fg.Primary}"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
                 </Grid>
 
                 <ScrollViewer Grid.Row="1" x:Name="TimelineScroll" 

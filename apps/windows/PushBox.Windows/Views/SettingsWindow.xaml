@@ -11,11 +11,12 @@
          左边一列窄导航、右边一屏内容（微信 PC 设置那一屏的形状），三块面板叠在同一格靠 Visibility 切换。
          这里只放控件与文案：留空算不算提交、按钮该不该出现在这一行、这段话怎么说，全在 SettingsModel。 -->
     <Window.Resources>
-        <!-- 导航项样式：增加圆角和过渡效果 -->
+        <!-- 导航项样式：增加圆角、过渡效果与键盘焦点框（Tab 到哪一项要看得见） -->
         <Style x:Key="NavItemStyle" TargetType="RadioButton">
             <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="Medium" />
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource Focus.Visual}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="RadioButton">
@@ -46,18 +47,135 @@
             <Setter Property="Foreground" Value="{DynamicResource Fg.Secondary}" />
         </Style>
         
-        <!-- 输入框样式：增加圆角和内边距。底色与前景必须跟主题走——
-             不写的话深色模式下这里是一片系统白底、字却是浅灰的 -->
+        <!-- 输入框：圆角 + 主题底色，hover 深描边、聚焦 accent 描边、禁用减淡。
+             不给模板的话深色模式下这里是一片系统白底、字却是浅灰的；默认模板的
+             hover/焦点描边也全是系统浅蓝，与两套色板都对不上 -->
         <Style TargetType="TextBox">
             <Setter Property="FontSize" Value="13" />
             <Setter Property="Height" Value="32" />
             <Setter Property="Padding" Value="10,0" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="BorderBrush" Value="{DynamicResource Divider}" />
-            <Setter Property="Background" Value="{DynamicResource Bg.Page}" />
             <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
-            <Setter Property="CaretBrush" Value="{DynamicResource Fg.Primary}" />
+            <Setter Property="CaretBrush" Value="{DynamicResource Accent}" />
+            <Setter Property="SelectionBrush" Value="{DynamicResource Accent}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Bd" Background="{DynamicResource Bg.Page}"
+                                BorderBrush="{DynamicResource Divider}" BorderThickness="1"
+                                CornerRadius="4" SnapsToDevicePixels="True">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
+                                          VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Fg.Secondary}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.55" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        
+        <!-- 下拉框：表面与输入框同一套。默认模板的下拉弹层在深色下仍是系统白底，
+             这里连弹层与选项高亮一起换 token -->
+        <Style TargetType="ComboBox">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
+            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <Border x:Name="Shell" Background="{DynamicResource Bg.Page}"
+                                    BorderBrush="{DynamicResource Divider}" BorderThickness="1"
+                                    CornerRadius="4" SnapsToDevicePixels="True">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="24" />
+                                    </Grid.ColumnDefinitions>
+                                    <ContentPresenter Grid.Column="0" Margin="{TemplateBinding Padding}"
+                                                      VerticalAlignment="Center"
+                                                      Content="{TemplateBinding SelectionBoxItem}"
+                                                      ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                                      ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                                      ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}" />
+                                    <Path Grid.Column="1" Data="M0,0 L4,4 8,0"
+                                          Stroke="{DynamicResource Fg.Secondary}" StrokeThickness="1.5"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Grid>
+                            </Border>
+                            <ToggleButton x:Name="Toggle" Focusable="False" IsTabStop="False"
+                                          Background="Transparent" BorderThickness="0" ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="Transparent" />
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <Popup x:Name="PART_Popup" Placement="Bottom" Focusable="False"
+                                   AllowsTransparency="True" PopupAnimation="Fade"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}">
+                                <Border Background="{DynamicResource Bg.Elevated}"
+                                        BorderBrush="{DynamicResource Divider}" BorderThickness="1"
+                                        CornerRadius="4" Margin="0,2,0,0" Padding="2"
+                                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                        MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <ItemsPresenter />
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Shell" Property="BorderBrush" Value="{DynamicResource Fg.Secondary}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Shell" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Shell" Property="Opacity" Value="0.55" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 下拉选项：悬停/选中铺浅绿底，选中加粗 -->
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
+            <Setter Property="Padding" Value="8,6" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="Shell" Background="Transparent" CornerRadius="4" Margin="2,1"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Shell" Property="Background"
+                                        Value="{DynamicResource Bg.AccentTint}" />
+                                <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         
         <!-- 按钮样式：增加圆角和主色 -->
@@ -94,18 +212,18 @@
                 BorderBrush="{DynamicResource Divider}" BorderThickness="0,0,1,0">
             <StackPanel Margin="0,16,0,16">
                 <!-- 标题 -->
-                <TextBlock Text="设置" FontSize="18" FontWeight="SemiBold" 
+                <TextBlock Text="设置" Style="{DynamicResource Text.H2}"
                            Foreground="{DynamicResource Fg.Primary}"
                            Margin="16,0,16,16"/>
                 
                 <RadioButton x:Name="NavChannels" Content="频道" GroupName="nav" IsChecked="True" Tag="channels"
-                             Style="{StaticResource NavItemStyle}" Checked="OnNavChanged" />
+                             ToolTip="Alt+1" Style="{StaticResource NavItemStyle}" Checked="OnNavChanged" />
                 <RadioButton x:Name="NavDevices" Content="设备" GroupName="nav" Tag="devices"
-                             Style="{StaticResource NavItemStyle}" Checked="OnNavChanged" />
+                             ToolTip="Alt+2" Style="{StaticResource NavItemStyle}" Checked="OnNavChanged" />
                 <RadioButton x:Name="NavNotify" Content="通知与外观" GroupName="nav" Tag="notify"
-                             Style="{StaticResource NavItemStyle}" Checked="OnNavChanged" />
+                             ToolTip="Alt+3" Style="{StaticResource NavItemStyle}" Checked="OnNavChanged" />
                 <RadioButton x:Name="NavAbout" Content="关于与更新" GroupName="nav" Tag="about"
-                             Style="{StaticResource NavItemStyle}" Checked="OnNavChanged" />
+                             ToolTip="Alt+4" Style="{StaticResource NavItemStyle}" Checked="OnNavChanged" />
             </StackPanel>
         </Border>
 
@@ -133,14 +251,12 @@
                             <TextBlock Text="✅ 接入信息（密钥只显示这一次）"
                                        Style="{DynamicResource Text.H3}"
                                        Foreground="{DynamicResource Accent}" />
-                            <TextBlock x:Name="IssuedNo" FontSize="13" Margin="0,10,0,0"
-                                       FontFamily="Consolas, Microsoft YaHei UI"
+                                    <TextBlock x:Name="IssuedNo" Style="{DynamicResource Text.Code}" Margin="0,10,0,0"
                                        Foreground="{DynamicResource Fg.Primary}" />
-                            <TextBlock x:Name="IssuedSecret" FontSize="13" Margin="0,6,0,0"
-                                       FontFamily="Consolas, Microsoft YaHei UI"
+                            <TextBlock x:Name="IssuedSecret" Style="{DynamicResource Text.Code}" Margin="0,6,0,0"
                                        Foreground="{DynamicResource Fg.Primary}" />
-                            <TextBlock x:Name="IssuedCurl" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"
-                                       FontFamily="Consolas, Microsoft YaHei UI"
+                            <TextBlock x:Name="IssuedCurl" Style="{DynamicResource Text.Label}" Margin="0,8,0,0"
+                                       TextWrapping="Wrap" FontFamily="{DynamicResource Font.Code}"
                                        Foreground="{DynamicResource Fg.Secondary}" />
                             <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                                 <Button Content="复制频道号" Height="30" Click="OnCopyChannelNo" />
@@ -150,15 +266,15 @@
                                         Background="Transparent" Foreground="{DynamicResource Fg.Secondary}" 
                                         BorderThickness="1" BorderBrush="{DynamicResource Divider}"/>
                             </StackPanel>
-                            <TextBlock Text="⚠️ 密钥只显示这一次，请立即复制保存。" FontSize="12" Margin="0,10,0,0"
-                                       Foreground="{DynamicResource Level.Error}" />
+                            <TextBlock Text="⚠️ 密钥只显示这一次，请立即复制保存。" Style="{DynamicResource Text.Label}"
+                                       Margin="0,10,0,0" Foreground="{DynamicResource Level.Error}" />
                         </StackPanel>
                     </Border>
 
                     <!-- 加入频道 Section -->
                     <TextBlock Text="加入频道" Style="{DynamicResource Text.H3}"
                                Foreground="{DynamicResource Fg.Primary}" Margin="0,16,0,8" />
-                    <TextBlock FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap"
+                    <TextBlock Style="{DynamicResource Text.Label}" Margin="0,4,0,0" TextWrapping="Wrap"
                                Text="填别人给你的频道号与密钥即可接收该频道的消息。密钥只用来确认号码写对了，它不是读取凭据；跨 Space 的频道号服务端一律回 404。"
                                Foreground="{DynamicResource Fg.Secondary}" />
                     <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
@@ -174,18 +290,18 @@
                         <CheckBox x:Name="FilterOnly" Content="只接收已接入的频道" FontSize="13"
                                   Foreground="{DynamicResource Fg.Primary}"
                                   Checked="OnToggleFilterOnly" Unchecked="OnToggleFilterOnly" />
-                        <TextBlock x:Name="FilterOnlyLabel" FontSize="12" Margin="12,0,0,0"
+                        <TextBlock x:Name="FilterOnlyLabel" Style="{DynamicResource Text.Label}" Margin="12,0,0,0"
                                    VerticalAlignment="Center" Text="未开启"
                                    Foreground="{DynamicResource Fg.Secondary}" />
                     </StackPanel>
                     <TextBlock Text="开启后这台电脑只收已接入频道的消息；其余频道仍在服务器上好着，只是这台不弹。关掉即恢复全收，接入关系不会丢。"
-                               FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Style="{DynamicResource Text.Label}" Margin="0,6,0,0" TextWrapping="Wrap"
                                Foreground="{DynamicResource Fg.Secondary}" />
-                    <TextBlock x:Name="FilterWarning" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"
-                               Foreground="{DynamicResource Level.Error}" />
+                    <TextBlock x:Name="FilterWarning" Style="{DynamicResource Text.Label}" Margin="0,6,0,0"
+                               TextWrapping="Wrap" Foreground="{DynamicResource Level.Error}" />
 
-                    <TextBlock x:Name="ChannelNotice" FontSize="12" Margin="0,12,0,0" TextWrapping="Wrap"
-                               Foreground="{DynamicResource Level.Error}" />
+                    <TextBlock x:Name="ChannelNotice" Style="{DynamicResource Text.Label}" Margin="0,12,0,0"
+                               TextWrapping="Wrap" Foreground="{DynamicResource Level.Error}" />
 
                     <!-- 我的频道列表 -->
                     <TextBlock Text="我的频道" Style="{DynamicResource Text.H3}"
@@ -198,29 +314,32 @@
                                 <Border Padding="10,8" Margin="0,4" CornerRadius="6"
                                         Background="{DynamicResource Bg.Page}">
                                     <StackPanel Margin="4,2">
-                                        <TextBlock Text="{Binding TitleText}" FontSize="13" FontWeight="Medium"
+                                        <TextBlock Text="{Binding TitleText}" Style="{DynamicResource Text.Small}"
+                                                   FontWeight="Medium"
                                                    Foreground="{DynamicResource Fg.Primary}" />
-                                        <TextBlock Text="{Binding ChannelNo}" FontSize="12"
-                                                   FontFamily="Consolas, Microsoft YaHei UI"
+                                        <TextBlock Text="{Binding ChannelNo}" Style="{DynamicResource Text.Label}"
+                                                   FontFamily="{DynamicResource Font.Code}"
                                                    Foreground="{DynamicResource Fg.Secondary}" />
-                                        <TextBlock Text="{Binding SummaryText}" FontSize="12" TextWrapping="Wrap"
+                                        <TextBlock Text="{Binding SummaryText}" Style="{DynamicResource Text.Label}"
+                                                   TextWrapping="Wrap"
                                                    Foreground="{DynamicResource Fg.Secondary}" />
                                         <!-- 接入状态是本机这一台的事，另一台设备上同一张列表可以全是"未接入" -->
-                                        <TextBlock Text="{Binding SubscriptionBadge}" FontSize="12"
+                                        <TextBlock Text="{Binding SubscriptionBadge}" Style="{DynamicResource Text.Label}"
                                                    Foreground="{DynamicResource Level.Highlight}" />
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
-                    <TextBlock x:Name="ChannelEmpty" FontSize="13" Margin="0,10,0,0" Visibility="Collapsed"
+                    <TextBlock x:Name="ChannelEmpty" Style="{DynamicResource Text.Small}" Margin="0,10,0,0"
+                               Visibility="Collapsed"
                                Text="还没有频道，点上方「新建频道」创建，或用频道号+密钥「加入频道」"
                                Foreground="{DynamicResource Fg.Secondary}" />
 
                     <!-- 选中一条才出现：治理位、白名单、容量都在"这一条频道"的作用域里 -->
                     <Border x:Name="GovernanceCard" Visibility="Collapsed" Style="{StaticResource CardStyle}">
                         <StackPanel>
-                            <TextBlock Text="频道治理" FontSize="15" FontWeight="SemiBold" 
+                            <TextBlock Text="频道治理" Style="{DynamicResource Text.H3}"
                                        Foreground="{DynamicResource Fg.Primary}" />
                             <Grid Margin="0,14,0,0">
                                 <Grid.ColumnDefinitions>
@@ -240,7 +359,7 @@
                                 <TextBox Grid.Row="0" Grid.Column="1" x:Name="GovName" />
                                 <TextBlock Grid.Row="0" Grid.Column="2" Text="提醒强度上限" Margin="20,0,12,0"
                                            Style="{StaticResource FieldLabelStyle}" />
-                                <ComboBox Grid.Row="0" Grid.Column="3" x:Name="GovLevel" Height="32" FontSize="13" />
+                                <ComboBox Grid.Row="0" Grid.Column="3" x:Name="GovLevel" />
                                 <TextBlock Grid.Row="1" Grid.Column="0" Text="单次最多图片数"
                                            Style="{StaticResource FieldLabelStyle}" />
                                 <TextBox Grid.Row="1" Grid.Column="1" x:Name="GovMaxImages" />
@@ -268,9 +387,11 @@
                                 <CheckBox x:Name="GovWhitelist" Content="只允许白名单发送者" FontSize="13"
                                           Margin="20,0,0,0" Foreground="{DynamicResource Fg.Primary}" />
                             </StackPanel>
-                            <TextBlock Text="填 0 表示沿用服务端默认值；留空表示这一项不动。" FontSize="12"
+                            <TextBlock Text="填 0 表示沿用服务端默认值；留空表示这一项不动。"
+                                       Style="{DynamicResource Text.Label}"
                                        Margin="0,8,0,0" Foreground="{DynamicResource Fg.Secondary}" />
-                            <TextBlock x:Name="GovSubscriptionLine" FontSize="12" Margin="0,6,0,0"
+                            <TextBlock x:Name="GovSubscriptionLine" Style="{DynamicResource Text.Label}"
+                                       Margin="0,6,0,0"
                                        TextWrapping="Wrap" Foreground="{DynamicResource Fg.Secondary}" />
                             <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
                                 <Button Content="保存" Click="OnSaveGovernance" />
@@ -302,7 +423,7 @@
                                         <TextBox x:Name="SenderIdInput" Width="240" />
                                         <Button Content="添加" Margin="10,0,0,0" Height="32" Click="OnAddSender" />
                                     </StackPanel>
-                                    <TextBlock x:Name="SendersHint" FontSize="12" Margin="0,8,0,0"
+                                    <TextBlock x:Name="SendersHint" Style="{DynamicResource Text.Label}" Margin="0,8,0,0"
                                                TextWrapping="Wrap" Foreground="{DynamicResource Level.Error}" />
                                     <ItemsControl x:Name="SenderList" Margin="0,10,0,0">
                                         <ItemsControl.ItemTemplate>
@@ -310,12 +431,11 @@
                                                 <Border Padding="10,8" Margin="0,3" CornerRadius="6"
                                                         Background="{DynamicResource Bg.Elevated}">
                                                     <StackPanel Orientation="Horizontal">
-                                                        <TextBlock Text="{Binding SenderId}" FontSize="13" Width="240"
-                                                                   TextTrimming="CharacterEllipsis"
-                                                                   FontFamily="Consolas, Microsoft YaHei UI"
+                                                        <TextBlock Text="{Binding SenderId}" Style="{DynamicResource Text.Code}"
+                                                                   Width="240" TextTrimming="CharacterEllipsis"
                                                                    Foreground="{DynamicResource Fg.Primary}" />
-                                                        <TextBlock Text="{Binding StatusText}" FontSize="12" Width="80"
-                                                                   VerticalAlignment="Center"
+                                                        <TextBlock Text="{Binding StatusText}" Style="{DynamicResource Text.Label}"
+                                                                   Width="80" VerticalAlignment="Center"
                                                                    Foreground="{DynamicResource Fg.Secondary}" />
                                                         <!-- Tag 交的是这一行那个对象本身：停用与启用是同一个动作的两个方向 -->
                                                         <Button Content="切换状态" Tag="{Binding}" Height="28"
@@ -338,28 +458,28 @@
             <ScrollViewer x:Name="DevicesPanel" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="设备" FontSize="16" VerticalAlignment="Center"
+                        <TextBlock Text="设备" Style="{DynamicResource Text.H3}" VerticalAlignment="Center"
                                    Foreground="{DynamicResource Fg.Primary}" />
                         <Button Content="刷新" Margin="12,0,0,0" Click="OnReloadDevices" />
                     </StackPanel>
-                    <TextBlock x:Name="DeviceNotice" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"
-                               Foreground="{DynamicResource Level.Error}" />
+                    <TextBlock x:Name="DeviceNotice" Style="{DynamicResource Text.Label}" Margin="0,8,0,0"
+                               TextWrapping="Wrap" Foreground="{DynamicResource Level.Error}" />
                     <ListBox x:Name="DeviceList" Height="220" Margin="0,8,0,0" Background="Transparent"
                              BorderBrush="{DynamicResource Divider}">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <StackPanel Orientation="Horizontal" Margin="4,3">
-                                    <TextBlock Text="{Binding Name}" FontSize="13" Width="170"
+                                    <TextBlock Text="{Binding Name}" Style="{DynamicResource Text.Small}" Width="170"
                                                TextTrimming="CharacterEllipsis"
                                                Foreground="{DynamicResource Fg.Primary}" />
-                                    <TextBlock Text="{Binding DeviceId}" FontSize="12" Width="190"
-                                               FontFamily="Consolas, Microsoft YaHei UI"
+                                    <TextBlock Text="{Binding DeviceId}" Style="{DynamicResource Text.Label}" Width="190"
+                                               FontFamily="{DynamicResource Font.Code}"
                                                Foreground="{DynamicResource Fg.Secondary}" />
-                                    <TextBlock Text="{Binding Platform}" FontSize="12" Width="80"
+                                    <TextBlock Text="{Binding Platform}" Style="{DynamicResource Text.Label}" Width="80"
                                                Foreground="{DynamicResource Fg.Secondary}" />
-                                    <TextBlock Text="{Binding LastSeenText}" FontSize="12" Width="80"
+                                    <TextBlock Text="{Binding LastSeenText}" Style="{DynamicResource Text.Label}" Width="80"
                                                Foreground="{DynamicResource Fg.Secondary}" />
-                                    <TextBlock Text="{Binding StatusText}" FontSize="12"
+                                    <TextBlock Text="{Binding StatusText}" Style="{DynamicResource Text.Label}"
                                                Foreground="{DynamicResource Accent}" />
                                 </StackPanel>
                             </DataTemplate>
@@ -370,22 +490,24 @@
                                 Background="Transparent" BorderBrush="{DynamicResource Level.Error}"
                                 Foreground="{DynamicResource Level.Error}" />
                     </StackPanel>
-                    <TextBlock x:Name="DeviceEmpty" FontSize="13" Margin="0,8,0,0" Visibility="Collapsed"
+                    <TextBlock x:Name="DeviceEmpty" Style="{DynamicResource Text.Small}" Margin="0,8,0,0"
+                               Visibility="Collapsed"
                                Text="没有其他设备" Foreground="{DynamicResource Fg.Secondary}" />
 
-                    <TextBlock Text="恢复码" FontSize="16" Margin="0,22,0,0"
+                    <TextBlock Text="恢复码" Style="{DynamicResource Text.H3}" Margin="0,22,0,0"
                                Foreground="{DynamicResource Fg.Primary}" />
-                    <TextBlock x:Name="RecoveryText" FontSize="13" Margin="0,8,0,0" TextWrapping="Wrap"
-                               FontFamily="Consolas, Microsoft YaHei UI"
+                    <TextBlock x:Name="RecoveryText" Style="{DynamicResource Text.Code}" Margin="0,8,0,0"
+                               TextWrapping="Wrap"
                                Foreground="{DynamicResource Fg.Primary}" />
                     <TextBlock Text="它是找回全部历史与设备的唯一凭据，泄露等于任何人可读你的消息。"
-                               FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap"
+                               Style="{DynamicResource Text.Label}" Margin="0,4,0,0" TextWrapping="Wrap"
                                Foreground="{DynamicResource Fg.Secondary}" />
                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                         <Button Content="轮换恢复码" Click="OnRotateRecovery" />
                         <Button Content="复制" Margin="8,0,0,0" Click="OnCopyRecovery" />
                     </StackPanel>
-                    <TextBlock x:Name="RecoveryHint" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"
+                    <TextBlock x:Name="RecoveryHint" Style="{DynamicResource Text.Label}" Margin="0,6,0,0"
+                               TextWrapping="Wrap"
                                Visibility="Collapsed" Foreground="{DynamicResource Level.Error}" />
                     <!-- §7.3 退出空间：清空所有数据回到首启，与 Android "更换服务器"同效 -->
                     <Button Content="退出空间（清空数据）" Margin="0,16,0,0" Click="OnLogout"
@@ -395,17 +517,18 @@
             </ScrollViewer>
 
             <StackPanel x:Name="NotifyPanel" Visibility="Collapsed">
-                <TextBlock Text="通知" FontSize="16" Foreground="{DynamicResource Fg.Primary}" />
+                <TextBlock Text="通知" Style="{DynamicResource Text.H3}" Foreground="{DynamicResource Fg.Primary}" />
                 <CheckBox x:Name="NotifyOn" Content="新消息通知" FontSize="13" Margin="0,14,0,0"
                           Foreground="{DynamicResource Fg.Primary}" Click="OnToggleNotifications" />
                 <CheckBox x:Name="QuietOn" Content="静默时段" FontSize="13" Margin="0,10,0,0"
                           Foreground="{DynamicResource Fg.Primary}" Click="OnToggleQuiet" />
                 <StackPanel Orientation="Horizontal" Margin="24,8,0,0">
                     <TextBox x:Name="QuietStart" Width="70" LostFocus="OnQuietWindowEdited" />
-                    <TextBlock Text="—" FontSize="13" Margin="6,0" VerticalAlignment="Center"
+                    <TextBlock Text="—" Style="{DynamicResource Text.Small}" Margin="6,0" VerticalAlignment="Center"
                                Foreground="{DynamicResource Fg.Secondary}" />
                     <TextBox x:Name="QuietEnd" Width="70" LostFocus="OnQuietWindowEdited" />
-                    <TextBlock x:Name="QuietLabel" FontSize="12" Margin="10,0,0,0" VerticalAlignment="Center"
+                    <TextBlock x:Name="QuietLabel" Style="{DynamicResource Text.Label}" Margin="10,0,0,0"
+                               VerticalAlignment="Center"
                                Foreground="{DynamicResource Fg.Secondary}" />
                 </StackPanel>
                 <CheckBox x:Name="AutoStartOn" Content="开机自启" FontSize="13" Margin="0,14,0,0"
@@ -413,25 +536,27 @@
                 <CheckBox x:Name="CloseToTrayOn" Content="关闭窗口时最小化到托盘" FontSize="13" Margin="0,10,0,0"
                           Foreground="{DynamicResource Fg.Primary}" Click="OnToggleCloseToTray" />
                 <TextBlock Text="这几项与托盘菜单上的是同一份设置，改哪边都一样。静默时段内只有 error 还会出声。"
-                           FontSize="12" Margin="0,14,0,0" TextWrapping="Wrap"
+                           Style="{DynamicResource Text.Label}" Margin="0,14,0,0" TextWrapping="Wrap"
                            Foreground="{DynamicResource Fg.Secondary}" />
             </StackPanel>
 
             <ScrollViewer x:Name="AboutPanel" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
-                    <TextBlock Text="关于" FontSize="16" Foreground="{DynamicResource Fg.Primary}" />
-                    <TextBlock x:Name="AboutVersion" FontSize="13" Margin="0,12,0,0"
+                    <TextBlock Text="关于" Style="{DynamicResource Text.H3}" Foreground="{DynamicResource Fg.Primary}" />
+                    <TextBlock x:Name="AboutVersion" Style="{DynamicResource Text.Small}" Margin="0,12,0,0"
                                Foreground="{DynamicResource Fg.Primary}" />
                     <TextBlock Text="更新检查走 GitHub Releases 的公开接口，与你在「通知」之外配置的业务服务器无关；未登录限额 60 次/小时，所以下载这一步要你亲手点。发现新版会先弹确认框，点「下载并安装」才会取包，装完再点一次系统安装。"
-                               FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"
+                               Style="{DynamicResource Text.Label}" Margin="0,10,0,0" TextWrapping="Wrap"
                                Foreground="{DynamicResource Fg.Secondary}" />
-                    <CheckBox x:Name="AutoCheckOn" Content="启动时自动检查更新" Margin="0,12,0,0"
+                    <CheckBox x:Name="AutoCheckOn" Content="启动时自动检查更新" FontSize="13" Margin="0,12,0,0"
                               Click="OnToggleAutoCheck" Foreground="{DynamicResource Fg.Primary}" />
                     <Button x:Name="CheckUpdateButton" Content="检查更新" Margin="0,10,0,0"
                             HorizontalAlignment="Left" Click="OnCheckUpdate" />
-                    <TextBlock x:Name="UpdateStatus" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"
+                    <TextBlock x:Name="UpdateStatus" Style="{DynamicResource Text.Label}" Margin="0,10,0,0"
+                               TextWrapping="Wrap"
                                Foreground="{DynamicResource Fg.Primary}" />
-                    <TextBlock x:Name="UpdateHint" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"
+                    <TextBlock x:Name="UpdateHint" Style="{DynamicResource Text.Label}" Margin="0,6,0,0"
+                               TextWrapping="Wrap"
                                Foreground="{DynamicResource Level.Error}" />
                 </StackPanel>
             </ScrollViewer>
