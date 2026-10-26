@@ -1189,9 +1189,11 @@ onMounted(() => {
 .variable-group-label {
   flex: none;
   width: 56px;
-  padding-top: 2px;
   font-size: var(--pb-font-label);
-  line-height: 20px;
+  /* 这里是 el-form-item__content 里面，行高继承的是 Element 的 32px，不写就会比 20px 高的
+     el-tag（size=small）低 6px。写 18px（--pb-line-small）后实测文字中心比 chip 高 1px；
+     原来钉的是 line-height: 20px + padding-top: 2px（实测低 1px），对齐差不多，但 20 不在行高表里 */
+  line-height: var(--pb-line-small);
   color: var(--el-text-color-secondary);
 }
 
@@ -1266,7 +1268,6 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  line-height: 1.9;
 }
 
 .preview-next-row code {
