@@ -70,6 +70,8 @@ public class ThemeTest
         ["Bg.Page"] = "#FAFAFA",
         ["Bg.Elevated"] = "#FFFFFF",
         ["Bg.Bubble.In"] = "#E8E8EA",
+        // 行内码与代码块的底：比气泡底深一档，同色时"码片"就没有边界
+        ["Bg.Code"] = "#D8D8DC",
         ["Bg.SenderList"] = "#EEEFF0",
         // 选中行是比列表底深一档的灰（微信 PC 那档），整行染绿太吵；accent 只留在 3px 竖条上
         ["Bg.Selected"] = "#E2E2E2",
@@ -101,6 +103,8 @@ public class ThemeTest
         ["Bg.Page"] = "#1A1A1A",
         ["Bg.Elevated"] = "#2A2A2A",
         ["Bg.Bubble.In"] = "#2A2A2C",
+        // 深色下代码底反而比气泡亮一档：抬升方向与浅色相反
+        ["Bg.Code"] = "#3A3A3E",
         ["Bg.SenderList"] = "#1E1E1E",
         ["Bg.Selected"] = "#2E2E2E",
         ["Bg.AccentTint"] = "#223B2C",
@@ -152,6 +156,30 @@ public class ThemeTest
         // §7.4 的命中色两端、两主题都只有一个值，Android 那边也是硬编码——它靠加粗而不是靠底色说话
         Assert.Equal("#1A73E8", TokenFiles.Read(Light)["Level.Highlight"]);
         Assert.Equal("#1A73E8", TokenFiles.Read(Dark)["Level.Highlight"]);
+    }
+
+    /// <summary>
+    /// 行内码与代码块的底必须与气泡底分开一档——两端同色时"码片"根本没有边界，
+    /// 屏幕上看起来就是"Markdown 没上样式"（2026-10-26 之前 PC 的实际症状）。
+    /// </summary>
+    [Fact]
+    public void CodeHasItsOwnBackgroundAPartFromTheBubble()
+    {
+        var light = TokenFiles.Read(Light);
+        var dark = TokenFiles.Read(Dark);
+        Assert.NotEqual(light["Bg.Bubble.In"], light["Bg.Code"]);
+        Assert.NotEqual(dark["Bg.Bubble.In"], dark["Bg.Code"]);
+        // 浅色向下压（码片比气泡深）、深色向上抬（更"浮起来"就更亮）；方向反了同样等于没画
+        Assert.True(Luminance(light["Bg.Code"]) < Luminance(light["Bg.Bubble.In"]));
+        Assert.True(Luminance(dark["Bg.Code"]) > Luminance(dark["Bg.Bubble.In"]));
+    }
+
+    private static double Luminance(string hex)
+    {
+        var r = Convert.ToInt32(hex.Substring(1, 2), 16);
+        var g = Convert.ToInt32(hex.Substring(3, 2), 16);
+        var b = Convert.ToInt32(hex.Substring(5, 2), 16);
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
     }
 
     [Fact]

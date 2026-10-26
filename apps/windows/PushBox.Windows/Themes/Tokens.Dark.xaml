@@ -7,6 +7,8 @@
     <SolidColorBrush x:Key="Bg.Page" Color="#1A1A1A" />
     <SolidColorBrush x:Key="Bg.Elevated" Color="#2A2A2A" />
     <SolidColorBrush x:Key="Bg.Bubble.In" Color="#2A2A2C" />
+    <!-- 代码底比气泡底亮一档：深色下"浮起来"的方向仍是变亮，和浅色那份正好相反 -->
+    <SolidColorBrush x:Key="Bg.Code" Color="#3A3A3E" />
     <SolidColorBrush x:Key="Bg.SenderList" Color="#1E1E1E" />
     <SolidColorBrush x:Key="Bg.Selected" Color="#2E2E2E" />
     <SolidColorBrush x:Key="Bg.AccentTint" Color="#223B2C" />

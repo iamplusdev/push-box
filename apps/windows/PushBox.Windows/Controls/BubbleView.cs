@@ -94,10 +94,10 @@ public static class BubbleView
 
         if (item.MsgTypeLabel is { Length: > 0 } label)
         {
-            // 类型标签改为带背景色的 Badge 样式
+            // 类型标签走 token：原来写死的 #0ABF5E 是已退役的主色，30 透明度的底落在气泡上几乎看不见
             var badge = new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(30, 10, 191, 94)), // 主色半透明
+                Background = style.BadgeBackground,
                 CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(6, 2, 6, 2),
                 Margin = new Thickness(4, 0, 0, 4),
@@ -105,7 +105,7 @@ public static class BubbleView
                 {
                     Text = label,
                     FontSize = 11,
-                    Foreground = new SolidColorBrush(Color.FromRgb(10, 191, 94)),
+                    Foreground = style.BadgeText,
                     FontWeight = FontWeights.Medium
                 }
             };

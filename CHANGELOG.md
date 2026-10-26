@@ -28,6 +28,26 @@
 
 ---
 
+## 未发布 —— Windows：代码片有了自己的底，类型标签走 token
+
+> 起因两条：① 行内码与代码块的底都取 `Bg.Bubble.In`，那正是气泡自己的底色——等宽字落在同色底上，屏幕上看起来就是"Markdown 没上样式"（Android 那边用的是与气泡分开的 `surfaceVariant`）；② 类型标签写死 `#0ABF5E` 的 30% 透明底 + 同色字，是已退役的亮绿，压在灰气泡上底色几乎看不见。
+
+### Windows
+
+- **新增 `Bg.Code` token**（浅色 `#D8D8DC` / 深色 `#3A3A3E`）：浅色比气泡底深一档、深色比气泡底亮一档，抬升方向仍统一为"越浮起来越亮"。
+- **`MarkdownStyle` 多三支画刷**：`Code` 给行内码与代码块，`BadgeBackground`/`BadgeText` 给类型标签；`FromResources()` 分别读 `Bg.Code`、`Bg.AccentTint`、`Accent`。
+- **改三处渲染**：行内码 `Run` 的背景、代码块 `Border` 的背景改 `style.Code`；类型标签的底与字从硬编码改 token。
+- 标题与引用条没动：它们本来就与 Android 同源（`Fg.Primary` + 加粗、`Divider` 竖条 + `Fg.Secondary` 字），这轮只补了缺失的底。
+
+### 测试
+
+- `dotnet test apps/windows/PushBox.sln`：**567/567 通过**（本轮新增 1 条）。
+- 新增 `ThemeTest.CodeHasItsOwnBackgroundAPartFromTheBubble`：两份字典都要有 `Bg.Code`、且与气泡底不同，浅色更暗、深色更亮（方向反了同样等于没画）。`MarkdownViewTest` 两条断言从"等于气泡底"改成"等于 `Code`"，`BubbleViewTest` 的类型标签补上底/字两支画刷的断言。
+- `ci.yml` 的 `$CS_BASELINE` 与五处文档现值 `566` → `567`。
+- **没跑的**：没有启动 GUI 目视浅色/深色下的码片与类型标签（开发构建会顶掉实例锁并改 HKCU Run，见 `docs/软件设计方案.md` §8.2），本轮只做了构建与 xunit。装机复验时重点看深色下代码块的底色是否与气泡分得开、类型标签的绿底是否还偏淡。
+
+---
+
 ## 未发布 —— 管理台：关键标识可复制，三张表前端分页
 
 > 起因两条：① 频道号码与设备 ID 是要抄进客户端或命令行的标识，页面上却只能在表格里拖选，设备 ID 还会被列宽截成半截；② 频道、设备、定时任务三张表一次把全部行渲进 DOM，条目一多就得靠整页滚动找，计数行里也看不出还有没有下一页。

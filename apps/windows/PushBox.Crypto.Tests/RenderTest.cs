@@ -128,7 +128,7 @@ internal static class Tree
         node is null ? Enumerable.Empty<DependencyObject>() : new[] { node };
 }
 
-/// <summary>八个角色各给一个可辨认的颜色，断言"落到了哪一支画刷"就不会靠巧合通过。</summary>
+/// <summary>十一个角色各给一个可辨认的颜色，断言"落到了哪一支画刷"就不会靠巧合通过。</summary>
 internal static class Paint
 {
     private static SolidColorBrush Brush(byte v)
@@ -140,8 +140,8 @@ internal static class Paint
 
     /// <summary>每次给一棵新的：画刷本身可以共享，但每个用例都拿自己那份，互不干扰。</summary>
     public static MarkdownStyle Style() => new(
-        Brush(1), Brush(2), Brush(3), Brush(4), Brush(5), Brush(6), Brush(7), Brush(8),
-        new FontFamily("Segoe UI"), new FontFamily("Consolas"));
+        Brush(1), Brush(2), Brush(3), Brush(4), Brush(5), Brush(6), Brush(7), Brush(8), Brush(9), Brush(10),
+        Brush(11), new FontFamily("Segoe UI"), new FontFamily("Consolas"));
 }
 
 /// <summary>§9.2 的块级与内联渲染：字号、行高、缩进、竖条，逐条对着 Android 的 MarkdownBody 断。</summary>
@@ -191,9 +191,10 @@ public class MarkdownViewTest
             Assert.Equal(new[] { "看 ", "重点", " 与 ", "code" }, runs.Select(r => r.Text).ToArray());
             Assert.Equal(FontWeights.Normal, runs[0].FontWeight);
             Assert.Equal(FontWeights.Bold, runs[1].FontWeight);
-            // 行内码：等宽 + 底色，字号与颜色都跟着正文（与 Android 的 surfaceVariant 底同口径）
+            // 行内码：等宽 + 底色，字号与颜色都跟着正文。底色必须是 Code 那支而不是气泡底，
+            // 否则码片与气泡同色、看起来就是"没有样式"（与 Android 的 surfaceVariant 同口径）
             Assert.Equal(Style.Monospace.Source, runs[3].FontFamily.Source);
-            Assert.Same(Style.BlockBackground, runs[3].Background);
+            Assert.Same(Style.Code, runs[3].Background);
             Assert.Equal(FontWeights.Normal, runs[3].FontWeight);
         });
     }
@@ -230,7 +231,8 @@ public class MarkdownViewTest
             Assert.Equal(ScrollBarVisibility.Auto, scroll.HorizontalScrollBarVisibility);
             var plate = (Border)frame;
             Assert.Equal(6d, plate.CornerRadius.TopLeft);
-            Assert.Same(Style.BlockBackground, plate.Background);
+            // 代码块与行内码同一支 Code 底：它若等于气泡底，整块代码就没有"被框起来"的观感
+            Assert.Same(Style.Code, plate.Background);
         });
     }
 
@@ -421,6 +423,9 @@ public class BubbleViewTest
             var badge = (Border)column.Children[0];
             var label = (TextBlock)badge.Child;
             Assert.Equal("Markdown", label.Text);
+            // 标签底与字都走 token：原来写死的 #0ABF5E 是退役主色，浅色气泡上几乎看不出底色
+            Assert.Same(Style.BadgeBackground, badge.Background);
+            Assert.Same(Style.BadgeText, label.Foreground);
             Assert.IsType<Grid>(column.Children[1]);
             // 正文是拼进 Inlines 的，TextBlock.Text 那个 getter 在这种写法下回空串，所以断言读 Run
             Assert.Equal("正文", string.Concat(Tree.First<TextBlock>(Body(built)).Inlines

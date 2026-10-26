@@ -14,9 +14,12 @@ namespace PushBox.Windows.Controls;
 /// 直接断言一棵树的字号与颜色，而窗口侧只需要 <see cref="MarkdownStyle.FromResources"/> 一次。
 /// 两支 level 色也在这儿（<see cref="LevelError"/> / <see cref="LevelWarning"/>）：气泡左侧那根竖条
 /// 认的是 <c>AccentKey</c> 这个**键名**，把键名翻译成颜色是渲染层的事，模型因此不碰画刷。
+/// <see cref="Code"/> 单独一支而不是复用 <see cref="BlockBackground"/>：后者就是气泡自己的底，
+/// 拿它给行内码/代码块铺底等于没画（2026-10-26 前的实际症状）。
 /// </summary>
-public sealed record MarkdownStyle(Brush Text, Brush Muted, Brush BlockBackground, Brush Bar,
-    Brush Link, Brush Highlight, Brush LevelError, Brush LevelWarning, FontFamily Body, FontFamily Monospace)
+public sealed record MarkdownStyle(Brush Text, Brush Muted, Brush BlockBackground, Brush Code, Brush Bar,
+    Brush Link, Brush Highlight, Brush BadgeBackground, Brush BadgeText,
+    Brush LevelError, Brush LevelWarning, FontFamily Body, FontFamily Monospace)
 {
     // §9.2 的字号与行高，数值直接沿用 Android 的 Typography（15/23、13/18、12/16、16/22）：
     // WPF 的 1/96 英寸与 dp 不同基准，同数值在 PC 上略大，验收按"观感一致"而不是"像素一致"（§8.2）
@@ -34,8 +37,9 @@ public sealed record MarkdownStyle(Brush Text, Brush Muted, Brush BlockBackgroun
     public const double ListIndent = 8;
 
     public static MarkdownStyle FromResources() => new(
-        Brush("Fg.Primary"), Brush("Fg.Secondary"), Brush("Bg.Bubble.In"), Brush("Divider"),
-        Brush("Accent"), Brush("Level.Highlight"), Brush("Level.Error"), Brush("Level.Warning"),
+        Brush("Fg.Primary"), Brush("Fg.Secondary"), Brush("Bg.Bubble.In"), Brush("Bg.Code"), Brush("Divider"),
+        Brush("Accent"), Brush("Level.Highlight"), Brush("Bg.AccentTint"), Brush("Accent"),
+        Brush("Level.Error"), Brush("Level.Warning"),
         new FontFamily("Segoe UI, Microsoft YaHei UI"), new FontFamily("Consolas, Microsoft YaHei UI"));
 
     private static Brush Brush(string key) =>
@@ -122,7 +126,8 @@ public static class MarkdownView
             if (span.Style == InlineStyle.Code)
             {
                 run.FontFamily = style.Monospace;
-                run.Background = style.BlockBackground;
+                // 与气泡底同色时这枚"码片"根本看不出来，必须走单独的 Code 画刷
+                run.Background = style.Code;
             }
             text.Inlines.Add(run);
         }
@@ -199,7 +204,7 @@ public static class MarkdownView
         };
         return new Border
         {
-            Background = style.BlockBackground,
+            Background = style.Code,
             CornerRadius = new CornerRadius(MarkdownStyle.CodeRadius),
             Child = scroll
         };
