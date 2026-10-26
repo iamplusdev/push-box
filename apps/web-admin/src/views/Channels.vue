@@ -19,13 +19,17 @@
     <el-table v-loading="loading" :data="paged" stripe border style="width: 100%">
       <el-table-column prop="channel_no" label="频道号码" width="130">
         <template #default="{ row }">
-          <router-link :to="`/channels/${row.channel_no}`" class="channel-link">
+          <router-link :to="`/channels/${row.channel_no}`" class="channel-link pb-mono">
             {{ row.channel_no }}
           </router-link>
         </template>
       </el-table-column>
       <el-table-column prop="name" label="名称" min-width="150" show-overflow-tooltip />
-      <el-table-column prop="group_id" label="所属空间" width="180" show-overflow-tooltip />
+      <el-table-column label="所属空间" width="180" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span class="pb-mono">{{ row.group_id }}</span>
+        </template>
+      </el-table-column>
       <el-table-column label="级别上限" width="100" align="center">
         <template #default="{ row }">
           <el-tag :type="levelTagType(row.max_level)" size="small">{{ row.max_level }}</el-tag>
@@ -40,7 +44,9 @@
         </template>
       </el-table-column>
       <el-table-column label="创建时间" width="170">
-        <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+        <template #default="{ row }">
+          <span class="pb-mono">{{ formatTime(row.created_at) }}</span>
+        </template>
       </el-table-column>
       <el-table-column label="操作" width="100" fixed="right">
         <template #default="{ row }">

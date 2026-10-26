@@ -35,7 +35,7 @@
       </el-table-column>
       <el-table-column label="目标频道" width="180">
         <template #default="{ row }">
-          <router-link :to="`/channels/${row.channel_no}`" class="channel-link">
+          <router-link :to="`/channels/${row.channel_no}`" class="channel-link pb-mono">
             {{ row.channel_no }}
           </router-link>
           <span class="channel-name">{{ row.channel_name }}</span>
@@ -48,13 +48,15 @@
             placement="top"
             :disabled="!isMultiCron(row.cron_expr)"
           >
-            <span>{{ cronSummary(row.cron_expr) }}</span>
+            <span class="pb-mono">{{ cronSummary(row.cron_expr) }}</span>
           </el-tooltip>
         </template>
       </el-table-column>
       <el-table-column prop="timezone" label="时区" width="150" show-overflow-tooltip />
-      <el-table-column label="正文预览" min-width="160" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.content_head }}</template>
+      <el-table-column label="正文预览" min-width="160">
+        <template #default="{ row }">
+          <div class="pb-clamp2" :title="row.content_head">{{ row.content_head }}</div>
+        </template>
       </el-table-column>
       <el-table-column label="级别" width="80" align="center">
         <template #default="{ row }">
@@ -74,7 +76,7 @@
       </el-table-column>
       <el-table-column label="下次触发" width="170">
         <template #default="{ row }">
-          {{ row.enabled === 1 ? formatTime(row.next_fire_at) : '-' }}
+          <span class="pb-mono">{{ row.enabled === 1 ? formatTime(row.next_fire_at) : '-' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="上次执行" width="120" align="center">
@@ -89,7 +91,9 @@
         </template>
       </el-table-column>
       <el-table-column label="上次时间" width="170">
-        <template #default="{ row }">{{ formatTime(row.last_fire_at) }}</template>
+        <template #default="{ row }">
+          <span class="pb-mono">{{ formatTime(row.last_fire_at) }}</span>
+        </template>
       </el-table-column>
       <el-table-column label="操作" width="130" fixed="right">
         <template #default="{ row }">
@@ -135,6 +139,7 @@
             v-model="jsonDraft"
             type="textarea"
             :rows="4"
+            class="pb-mono"
             placeholder='{"channel":"32941977","sender_id":"…","title":"…","content":"…"}'
           />
           <div class="paste-actions">
@@ -221,7 +226,7 @@
                       :content="v.desc"
                       placement="top"
                     >
-                      <el-tag size="small" class="variable-tag" @click="insertVariable(v.token)">
+                      <el-tag size="small" class="variable-tag pb-mono" @click="insertVariable(v.token)">
                         {{ v.token }}
                       </el-tag>
                     </el-tooltip>
@@ -358,7 +363,7 @@
         </div>
         <div v-if="preview.next_fires && preview.next_fires.length > 1" class="preview-next">
           <div v-for="fire in preview.next_fires" :key="fire.cron" class="preview-next-row">
-            <code>{{ fire.cron }}</code>
+            <code class="pb-mono">{{ fire.cron }}</code>
             <span>{{ formatInZone(fire.next_fire_at, preview.timezone) }}</span>
           </div>
         </div>
@@ -375,7 +380,7 @@
               {{ form.level || 'info' }}
             </el-tag>
             <span>{{ form.senderName || '（未填发送者）' }}</span>
-            <span class="preview-sender-id">sender_id：{{ form.senderId || 'scheduled' }}</span>
+            <span class="preview-sender-id pb-mono">sender_id：{{ form.senderId || 'scheduled' }}</span>
           </div>
           <div v-if="form.title" class="preview-title">{{ form.title }}</div>
           <div class="preview-content">{{ preview.content || '（正文为空）' }}</div>
@@ -1201,7 +1206,6 @@ onMounted(() => {
 
 .variable-tag {
   cursor: pointer;
-  font-family: var(--pb-font-mono);
   color: var(--el-color-primary);
   background: #eef4ff;
   border-color: #d6e4ff;
@@ -1269,7 +1273,6 @@ onMounted(() => {
 }
 
 .preview-next-row code {
-  font-family: var(--pb-font-mono);
   color: var(--el-color-primary);
 }
 
@@ -1292,7 +1295,6 @@ onMounted(() => {
 }
 
 .preview-sender-id {
-  font-family: var(--pb-font-mono);
   color: var(--el-text-color-secondary);
 }
 

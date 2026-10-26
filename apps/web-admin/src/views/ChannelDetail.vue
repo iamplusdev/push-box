@@ -9,13 +9,13 @@
     <el-descriptions v-if="channel" :column="2" border>
       <el-descriptions-item label="频道号码">
         <div class="copy-row">
-          <el-input :model-value="channel.channel_no" readonly size="small" class="copy-input" />
+          <el-input :model-value="channel.channel_no" readonly size="small" class="copy-input pb-mono" />
           <CopyButton :text="channel.channel_no" label="频道号码" />
         </div>
       </el-descriptions-item>
       <el-descriptions-item label="名称">{{ channel.name || '-' }}</el-descriptions-item>
-      <el-descriptions-item label="所属空间">{{ channel.group_id }}</el-descriptions-item>
-      <el-descriptions-item label="创建时间">{{ formatTime(channel.created_at) }}</el-descriptions-item>
+      <el-descriptions-item label="所属空间"><span class="pb-mono">{{ channel.group_id }}</span></el-descriptions-item>
+      <el-descriptions-item label="创建时间"><span class="pb-mono">{{ formatTime(channel.created_at) }}</span></el-descriptions-item>
       <el-descriptions-item label="级别上限">
         <el-tag :type="levelTagType(channel.max_level)" size="small">{{ channel.max_level }}</el-tag>
       </el-descriptions-item>
@@ -38,7 +38,7 @@
       <el-table-column label="设备 ID" min-width="260">
         <template #default="{ row }">
           <div class="id-cell">
-            <span class="id-text" :title="row.device_id">{{ row.device_id }}</span>
+            <span class="id-text pb-mono" :title="row.device_id">{{ row.device_id }}</span>
             <CopyButton :text="row.device_id" label="设备 ID" />
           </div>
         </template>
@@ -46,7 +46,9 @@
       <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip />
       <el-table-column prop="platform" label="平台" width="100" />
       <el-table-column label="最近在线" width="170">
-        <template #default="{ row }">{{ formatTime(row.last_seen_at) }}</template>
+        <template #default="{ row }">
+          <span class="pb-mono">{{ formatTime(row.last_seen_at) }}</span>
+        </template>
       </el-table-column>
       <template #empty>
         <el-empty description="暂无设备接入" />
@@ -115,6 +117,5 @@ onMounted(fetchDetail)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--pb-font-mono);
 }
 </style>

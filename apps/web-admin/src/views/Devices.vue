@@ -20,14 +20,18 @@
       <el-table-column label="设备 ID" min-width="260">
         <template #default="{ row }">
           <div class="id-cell">
-            <span class="id-text" :title="row.device_id">{{ row.device_id }}</span>
+            <span class="id-text pb-mono" :title="row.device_id">{{ row.device_id }}</span>
             <CopyButton :text="row.device_id" label="设备 ID" />
           </div>
         </template>
       </el-table-column>
       <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip />
       <el-table-column prop="platform" label="平台" width="100" />
-      <el-table-column prop="group_id" label="所属空间" width="180" show-overflow-tooltip />
+      <el-table-column label="所属空间" width="180" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span class="pb-mono">{{ row.group_id }}</span>
+        </template>
+      </el-table-column>
       <el-table-column label="状态" width="90" align="center">
         <template #default="{ row }">
           <el-tag v-if="row.revoked_at" type="info" size="small" effect="plain">已吊销</el-tag>
@@ -36,10 +40,14 @@
         </template>
       </el-table-column>
       <el-table-column label="注册时间" width="170">
-        <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+        <template #default="{ row }">
+          <span class="pb-mono">{{ formatTime(row.created_at) }}</span>
+        </template>
       </el-table-column>
       <el-table-column label="最近在线" width="170">
-        <template #default="{ row }">{{ formatTime(row.last_seen_at) }}</template>
+        <template #default="{ row }">
+          <span class="pb-mono">{{ formatTime(row.last_seen_at) }}</span>
+        </template>
       </el-table-column>
       <el-table-column label="操作" width="100" fixed="right">
         <template #default="{ row }">
@@ -178,7 +186,6 @@ onMounted(fetchDevices)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--pb-font-mono);
 }
 
 .muted-dash {

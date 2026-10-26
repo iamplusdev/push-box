@@ -37,21 +37,23 @@
       <el-table-column type="expand">
         <template #default="{ row }">
           <div class="msg-detail">
-            <div class="detail-line"><span class="k">msg_id</span>{{ row.msg_id }}</div>
-            <div class="detail-line"><span class="k">seq</span>{{ row.seq }}</div>
-            <div class="detail-line"><span class="k">发送者</span>{{ row.sender_name || '-' }}（{{ row.sender_id }}）</div>
-            <div class="detail-line"><span class="k">所属空间</span>{{ row.group_id }}</div>
+            <div class="detail-line"><span class="k">msg_id</span><span class="pb-mono">{{ row.msg_id }}</span></div>
+            <div class="detail-line"><span class="k">seq</span><span class="pb-mono">{{ row.seq }}</span></div>
+            <div class="detail-line"><span class="k">发送者</span>{{ row.sender_name || '-' }}（<span class="pb-mono">{{ row.sender_id }}</span>）</div>
+            <div class="detail-line"><span class="k">所属空间</span><span class="pb-mono">{{ row.group_id }}</span></div>
             <div class="detail-line"><span class="k">媒体状态</span>{{ row.media_status }}</div>
             <div class="detail-body">{{ row.body }}</div>
           </div>
         </template>
       </el-table-column>
       <el-table-column label="时间" width="170">
-        <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+        <template #default="{ row }">
+          <span class="pb-mono">{{ formatTime(row.created_at) }}</span>
+        </template>
       </el-table-column>
       <el-table-column label="频道" min-width="180" show-overflow-tooltip>
         <template #default="{ row }">
-          <router-link :to="`/channels/${row.channel_no}`" class="channel-link">{{ row.channel_no }}</router-link>
+          <router-link :to="`/channels/${row.channel_no}`" class="channel-link pb-mono">{{ row.channel_no }}</router-link>
           <span class="chan-name">{{ row.channel_name || '' }}</span>
         </template>
       </el-table-column>
@@ -62,8 +64,12 @@
           <el-tag :type="levelTagType(row.level || '')" size="small">{{ row.level || '-' }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="内容" min-width="240" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.title || row.summary || row.body }}</template>
+      <el-table-column label="内容" min-width="240">
+        <template #default="{ row }">
+          <div class="pb-clamp2" :title="row.title || row.summary || row.body">
+            {{ row.title || row.summary || row.body }}
+          </div>
+        </template>
       </el-table-column>
       <template #empty>
         <el-empty :description="searched ? '没有匹配的消息' : '输入关键词后开始搜索'" />
