@@ -140,6 +140,23 @@
     <string name="app_lock_biometric_desc">允许用指纹 / 面容解锁，PIN 仍作为兜底方式。</string>
     <string name="app_lock_biometric_unavailable">未检测到可用的指纹 / 面容，请先在系统设置中录入。</string>
     <string name="section_notification">通知</string>
+    <!-- 设置首屏与二级页：首屏只留日常项，其余各自成页 -->
+    <string name="section_more">更多</string>
+    <string name="settings_page_connect">接入与设备</string>
+    <string name="settings_page_notify">提醒与频道</string>
+    <string name="settings_page_security">应用锁</string>
+    <string name="settings_page_keepalive">后台常驻</string>
+    <string name="settings_page_data">清理与导出</string>
+    <string name="settings_page_about">关于与帮助</string>
+    <string name="settings_entry_connect_desc">设备、恢复码与更换服务器</string>
+    <string name="settings_entry_notify_desc">默认档位与按频道调整</string>
+    <string name="settings_entry_data_desc">缓存、已读图片与导出</string>
+    <string name="settings_entry_security_desc">PIN 与生物识别</string>
+    <string name="settings_entry_keepalive_desc">电池优化、轮询与自启动</string>
+    <string name="settings_entry_about_desc">版本、更新与接入文档</string>
+    <string name="notif_detail_title">细则</string>
+    <string name="notif_lock_screen_detail">开启后锁屏上显示发送者与摘要；关闭则只显示「收到 1 条新消息」。单独设为私密的会话始终不显示。</string>
+    <string name="notif_quiet_detail">时段内非紧急消息只进通知栏，不响铃、不横幅；error 级别仍可打扰。</string>
     <!-- §7.4 会话内搜索 -->
     <string name="conv_search_entry">在会话中搜索</string>
     <string name="conv_search_hint">搜索本会话消息</string>
@@ -177,7 +194,7 @@
     <string name="reveal">显示</string>
     <string name="hide">隐藏</string>
     <string name="notif_new_message">新消息通知</string>
-    <string name="notif_new_message_desc">关闭后消息仍会接收，只是不再弹出通知。</string>
+    <string name="notif_new_message_desc">关闭后仍会接收，只是不再提醒</string>
     <string name="notif_permission_title">系统通知权限没开</string>
     <string name="notif_permission_desc">消息照常接收并保存，但不会有任何提醒。打开开关只影响应用内的设置，这一项要到系统设置里改。</string>
     <string name="notify_recovery_title">通知权限已被永久拒绝</string>
@@ -185,13 +202,13 @@
     <string name="notify_recovery_open">去设置</string>
     <string name="notify_recovery_later">知道了</string>
     <string name="notif_quiet_title">静默时段</string>
-    <string name="notif_quiet_desc">时段内非紧急消息只进通知栏，不响铃、不横幅；error 级别仍可打扰。</string>
+    <string name="notif_quiet_desc">时段内只进通知栏，不响铃</string>
     <string name="notif_quiet_start">开始</string>
     <string name="notif_quiet_end">结束</string>
     <string name="notif_channel_quiet_name">静默时段消息</string>
     <string name="notif_channel_quiet_desc">静默时段内非紧急消息走这条渠道：只进通知栏，不响铃、不悬浮。</string>
     <string name="notif_lock_screen_title">锁屏显示内容</string>
-    <string name="notif_lock_screen_desc">开启后锁屏上显示发送者与摘要；关闭则只显示「收到 1 条新消息」。单独设为私密的会话始终不显示。</string>
+    <string name="notif_lock_screen_desc">锁屏显示发送者与摘要</string>
     <string name="notif_importance_title">新频道默认提醒</string>
     <string name="notif_importance_desc">只影响之后第一次收到消息的新频道；已有频道请到系统通知设置里逐个调整。</string>
     <string name="notif_importance_high">高：悬浮 + 响铃</string>
@@ -207,7 +224,11 @@
     <string name="notif_manage_importance_none">已关闭</string>
     <string name="notif_manage_channel_no">频道 %1$s</string>
     <string name="about_api_doc_title">第三方接入 API 摘要</string>
+    <string name="about_api_doc_summary">一个入口，凭据只写在 body 里，不进 URL。</string>
+    <string name="about_api_doc_expand">展开全文</string>
+    <string name="about_api_doc_collapse">收起</string>
     <string name="about_api_doc_body">唯一入口：POST {当前服务器}/message（HTTP JSON）。必填 channel/secret/type/content；可选 sender_id/sender_name/sender_avatar/title/level/url/images[]/msg_key/ts。第三方不需要注册设备、不参与帧加密；一次 POST 即完成投递，凭据只写在 body、绝不进 URL 或 header。</string>
+    <string name="about_log_title">日志</string>
     <string name="about_log_desensitized">日志（脱敏）：本机不落消息正文与凭据；异常堆栈只保留 tag 与主机名。</string>
     <!-- 版本自更新（GitHub Releases）：检查→下载→拉起系统安装面板，安装这步系统强制用户确认 -->
     <string name="update_current_version">当前版本</string>

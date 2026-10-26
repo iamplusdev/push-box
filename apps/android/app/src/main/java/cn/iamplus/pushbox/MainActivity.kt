@@ -27,6 +27,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -39,6 +40,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -797,6 +799,11 @@ private fun MainShell(identity: Identity,
     // 旋转/进程回收后要回到原来那一屏。选中的会话只存两把 key 不存整行：
     // 会话行是 Room Flow 推出来的，存一份快照只会在数据变化后变成过期副本。
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    // 设置二级页存名字不存枚举：旋转或进程回收后仍能回到原来那一页
+    var settingsPage by rememberSaveable { mutableStateOf<String?>(null) }
+    val openSettingsPage = settingsPage?.let { name ->
+        SettingsPage.entries.firstOrNull { it.name == name }
+    }
     var openChannel by rememberSaveable { mutableStateOf<String?>(null) }
     var openSender by rememberSaveable { mutableStateOf<String?>(null) }
     var openFocus by rememberSaveable { mutableStateOf<String?>(null) }
@@ -841,16 +848,35 @@ private fun MainShell(identity: Identity,
         return
     }
 
+    // 二级页里系统返回键先回设置首屏，不退到底栏
+    BackHandler(enabled = tab == 2 && openSettingsPage != null) { settingsPage = null }
+
     Scaffold(topBar = {
-        PushBoxTopBar(title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.app_name),
-                    color = MaterialTheme.colorScheme.onSurface)
-                Spacer(Modifier.width(10.dp))
-                // 顶栏读的是 SyncEngine 镜像进来的真实状态，不再写死"连接中"
-                Text(connLabel, style = MaterialTheme.typography.labelSmall, color = connColor)
-            }
-        })
+        val page = openSettingsPage
+        if (tab == 2 && page != null) {
+            PushBoxTopBar(
+                title = {
+                    Text(stringResource(page.title),
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                },
+                navigationIcon = {
+                    IconButton(onClick = { settingsPage = null }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                    }
+                })
+        } else {
+            PushBoxTopBar(title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.app_name),
+                        color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.width(10.dp))
+                    // 顶栏读的是 SyncEngine 镜像进来的真实状态，不再写死"连接中"
+                    Text(connLabel, style = MaterialTheme.typography.labelSmall, color = connColor)
+                }
+            })
+        }
     }, bottomBar = {
         // 接入是日常操作，§7.4 D17 把它收进「我的 → 接入」等于每次点两层。
         // 现在拆成 消息 / 频道 / 设置：频道页只管接入这件事，设置页不再夹频道 CRUD。
@@ -858,7 +884,11 @@ private fun MainShell(identity: Identity,
             BottomTab(stringResource(R.string.tab_messages), Icons.AutoMirrored.Filled.Chat),
             BottomTab(stringResource(R.string.tab_channels), Icons.Filled.Hub),
             BottomTab(stringResource(R.string.tab_settings), Icons.Filled.Settings)),
-            selected = tab, onSelect = { tab = it })
+            selected = tab, onSelect = {
+                // 在二级页里再点一次当前分栏，回到该分栏的首页
+                if (it != tab || tab == 2) settingsPage = null
+                tab = it
+            })
     }) { inset ->
         Column(Modifier.fillMaxSize().padding(inset)) {
             if (polling) {
@@ -872,7 +902,8 @@ private fun MainShell(identity: Identity,
                     onOpen = { row, focus -> showConversation(ConversationTarget(row, focus)) },
                     onNavigateToChannels = { tab = 1 })
                 1 -> ChannelsTab(identity, content)
-                else -> SettingsTab(identity, content, onLogout)
+                else -> SettingsTab(identity, openSettingsPage,
+                    onPage = { settingsPage = it?.name }, modifier = content, onLogout = onLogout)
             }
         }
     }
@@ -2811,9 +2842,44 @@ private fun UpdateConfirmDialog(app: App) {
     )
 }
 
-/** 「我的 → 设置」：连接状态 / 服务器 / 设备信息 / 通知 / 关于，走通用 App 设置页的分组卡片样式。 */
+/**
+ * 「我的 → 设置」：首屏只放每天会动的开关与一层入口，长说明都收进二级页。
+ * 二级页的顶栏与返回键由 MainShell 负责，这里只按页分发内容。
+ */
+private enum class SettingsPage(@param:StringRes val title: Int) {
+    Connect(R.string.settings_page_connect),
+    Notify(R.string.settings_page_notify),
+    Security(R.string.settings_page_security),
+    KeepAlive(R.string.settings_page_keepalive),
+    Data(R.string.settings_page_data),
+    About(R.string.settings_page_about),
+}
+
 @Composable
-private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> Unit) {
+private fun SettingsTab(identity: Identity, page: SettingsPage?, onPage: (SettingsPage?) -> Unit,
+    modifier: Modifier, onLogout: () -> Unit) {
+    when (page) {
+        null -> SettingsRoot(identity, modifier, onPage)
+        SettingsPage.Connect -> SettingsConnectPage(identity, modifier, onLogout)
+        SettingsPage.Notify -> SettingsNotifyPage(identity, modifier)
+        SettingsPage.Security -> SettingsSecurityPage(modifier)
+        SettingsPage.KeepAlive -> SettingsKeepAlivePage(modifier)
+        SettingsPage.Data -> SettingsDataPage(modifier)
+        SettingsPage.About -> SettingsAboutPage(modifier)
+    }
+}
+
+/** 首屏与六个二级页共用的滚动列：16dp 边距、20dp 组间距。 */
+@Composable
+private fun SettingsPageColumn(modifier: Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Column(modifier.verticalScroll(rememberScrollState())
+        .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp), content = content)
+}
+
+/** 设置首屏：连接、通知、外观、存储四组日常项，加一组通往二级页的入口。 */
+@Composable
+private fun SettingsRoot(identity: Identity, modifier: Modifier, onPage: (SettingsPage?) -> Unit) {
     val context = LocalContext.current
     val app = App.get(context)
     val scope = rememberCoroutineScope()
@@ -2822,103 +2888,29 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
     val themeMode by app.themeMode.collectAsState()
     val fontScale by app.fontScale.collectAsState()
     val summaryLines by app.summaryLines.collectAsState()
-    var showConfirm by remember { mutableStateOf(false) }
-    var revealCode by remember { mutableStateOf(false) }
-    var rotating by remember { mutableStateOf(false) }
-    var rotateConfirm by remember { mutableStateOf(false) }
-    var rotationError by remember { mutableStateOf<String?>(null) }
-    var showClear by remember { mutableStateOf(false) }
-    var showClearMedia by remember { mutableStateOf(false) }
-    var clearMediaTick by remember { mutableStateOf(0) }
-    var clearTick by remember { mutableStateOf(0) }
-    val stamp = remember {
-        java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
-            .format(java.util.Date())
-    }
-    val appLock by app.appLockEnabled.collectAsState()
-    val biometric by app.biometricEnabled.collectAsState()
-    var lockDialog by remember { mutableStateOf<String?>(null) }
     val quietOn by app.quietEnabled.collectAsState()
     val quietStart by app.quietStart.collectAsState()
     val quietEnd by app.quietEnd.collectAsState()
     val lockContent by app.lockScreenContent.collectAsState()
-    val importance by app.defaultImportance.collectAsState()
-    var showChannelNotify by remember { mutableStateOf(false) }
-    var devices by remember { mutableStateOf<List<PushBoxApi.DeviceInfo>?>(null) }
-    var devicesTick by remember { mutableStateOf(0) }
-    var devicesError by remember { mutableStateOf<String?>(null) }
-    var busyDevice by remember { mutableStateOf(false) }
-    var revokeTarget by remember { mutableStateOf<PushBoxApi.DeviceInfo?>(null) }
-    LaunchedEffect(devicesTick) {
-        devices = null; devicesError = null
-        runCatching { PushBoxApi(identity.baseUrl, app.http).listDevices(identity) }
-            .onSuccess { devices = it }
-            .onFailure { devicesError = it.message ?: it::class.java.simpleName }
-    }
-    val localCount by produceState(initialValue = -1, clearTick) {
+    val (connLabel, connColor) = connectionLabel(conn)
+    // 每次回到首屏重算一次：二级页里清完缓存返回，这两行会重新量。
+    val localCount by produceState(initialValue = -1) {
         value = withContext(Dispatchers.IO) { app.dao.messageCount() }
     }
-    // §7.6 数据本地占用：Room 库文件（含 -wal/-shm）+ 图片磁盘缓存目录，随消息数与清缓存动作重算
-    val storageBytes by produceState(initialValue = -1L, localCount, clearMediaTick) {
+    val storageBytes by produceState(initialValue = -1L, localCount) {
         value = withContext(Dispatchers.IO) { measureLocalStorage(context) }
     }
-    val (connLabel, connColor) = connectionLabel(conn)
 
-    Column(
-        modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
-    ) {
-        SettingsSection(stringResource(R.string.section_connection)) {
+    SettingsPageColumn(modifier) {
+        SettingsSection(stringResource(R.string.section_connection), heading = true) {
             InfoRow(stringResource(R.string.section_connection), connLabel, connColor)
+            InfoRow(stringResource(R.string.current_server), identity.baseUrl.ifBlank { "-" })
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            GuideRow(stringResource(R.string.settings_page_connect),
+                stringResource(R.string.settings_entry_connect_desc)) { onPage(SettingsPage.Connect) }
         }
 
-        SettingsSection(stringResource(R.string.section_server)) {
-            InfoRow(stringResource(R.string.current_server),
-                identity.baseUrl.ifBlank { "-" })
-            TextButton(enabled = !showConfirm, onClick = { showConfirm = true }) {
-                Text(stringResource(R.string.change_server))
-            }
-        }
-
-        SettingsSection(stringResource(R.string.section_device)) {
-            InfoRow(stringResource(R.string.device_name_label), Build.MODEL ?: "-")
-            CopyableField(stringResource(R.string.device_id_label), identity.deviceId)
-            RecoveryCodeRow(identity.recoveryCode, revealed = revealCode,
-                onToggle = { revealCode = !revealCode })
-            // §14 轮换恢复码：旧码立即作废（已加入的设备不受影响，只影响后续扫码添加）
-            rotationError?.let {
-                Text(it, style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error)
-            }
-            TextButton(enabled = !rotating, onClick = { rotationError = null; rotateConfirm = true }) {
-                Text(stringResource(R.string.recovery_code_rotate))
-            }
-        }
-
-        // §5.2/D26 设备与同步：列出本空间全部设备，可远程吊销他端（作废 token + 踢下线）
-        SettingsSection(stringResource(R.string.section_devices)) {
-            devicesError?.let {
-                Text(it, style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error)
-            }
-            val list = devices
-            when {
-                list == null && devicesError == null ->
-                    Text(stringResource(R.string.devices_loading),
-                        style = MaterialTheme.typography.bodyMedium)
-                list != null && list.isEmpty() ->
-                    Text(stringResource(R.string.devices_none),
-                        style = MaterialTheme.typography.bodyMedium)
-                else -> list?.forEach { dev ->
-                    DeviceRow(dev, busy = busyDevice, onRevoke = { revokeTarget = dev })
-                }
-            }
-            TextButton(enabled = !busyDevice, onClick = { devicesTick++ }) {
-                Text(stringResource(R.string.devices_refresh))
-            }
-        }
-
-        SettingsSection(stringResource(R.string.section_notification)) {
+        SettingsSection(stringResource(R.string.section_notification), heading = true) {
             SwitchRow(stringResource(R.string.notif_new_message),
                 stringResource(R.string.notif_new_message_desc), notif) {
                 app.notificationsEnabled.value = it
@@ -2933,34 +2925,7 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
                 app.setLockScreenContent(it)
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                Text(stringResource(R.string.notif_importance_title),
-                    style = MaterialTheme.typography.titleMedium)
-                Text(stringResource(R.string.notif_importance_desc),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(
-                        "high" to R.string.notif_importance_high,
-                        "default" to R.string.notif_importance_default,
-                        "low" to R.string.notif_importance_low,
-                    ).forEach { (level, label) ->
-                        val selected = importance == level
-                        FilterChip(selected = selected,
-                            onClick = { app.setDefaultImportance(level) },
-                            label = { Text(stringResource(label)) },
-                            leadingIcon = if (selected) {
-                                { Icon(Icons.Filled.Check, null, Modifier.size(18.dp)) }
-                            } else null)
-                    }
-                }
-            }
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            GuideRow(stringResource(R.string.notif_manage_title),
-                stringResource(R.string.notif_manage_entry_desc)) { showChannelNotify = true }
             // §7.4 静默时段：窗口内非 error 消息只静默入通知栏，不响铃不横幅
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
             SwitchRow(stringResource(R.string.notif_quiet_title),
                 stringResource(R.string.notif_quiet_desc), quietOn) {
                 app.setQuiet(it, quietStart, quietEnd)
@@ -2981,61 +2946,12 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
                     }
                 }
             }
-        }
-
-        SettingsSection(stringResource(R.string.section_keepalive)) {
-            KeepAliveBatteryRow()
-            // §7.2 极致省电轮询模式：关掉常驻长连接，改 WorkManager 周期补拉，省电但消息会延迟
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            val polling by app.pollingMode.collectAsState()
-            SwitchRow(stringResource(R.string.keepalive_polling),
-                stringResource(R.string.keepalive_polling_desc), polling) {
-                app.setPollingMode(it)
-            }
-            GuideRow(stringResource(R.string.keepalive_notification),
-                stringResource(R.string.keepalive_notification_desc)) {
-                runCatching {
-                    // §7.2：直达"后台监听"通知渠道，而非整个 App 的通知设置页。
-                    val channelId = cn.iamplus.pushbox.notify.Notifier.SERVICE_CHANNEL
-                    val intent = Intent("android.settings.CHANNEL_NOTIFICATION_SETTINGS").apply {
-                        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-                        putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
-                    }
-                    if (!openDeepLink(context, intent)) {
-                        // 降级：打开 App 级通知设置
-                        context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
-                    }
-                }
-            }
-            GuideRow(stringResource(R.string.keepalive_autostart),
-                stringResource(R.string.keepalive_autostart_desc)) {
-                runCatching {
-                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                        .setData(Uri.parse("package:${context.packageName}")))
-                }
-            }
+            GuideRow(stringResource(R.string.settings_page_notify),
+                stringResource(R.string.settings_entry_notify_desc)) { onPage(SettingsPage.Notify) }
         }
 
-        SettingsSection(stringResource(R.string.section_app_lock)) {
-            SwitchRow(stringResource(R.string.app_lock_enable),
-                stringResource(R.string.app_lock_desc), appLock) {
-                lockDialog = if (it) "enable" else "disable"
-            }
-            // D30 生物识别只在 App 锁开启时可选；无可用硬件时置灰并提示
-            if (appLock) {
-                val context = LocalContext.current
-                val canBiometric = BiometricManager.from(context)
-                    .canAuthenticate(BIOMETRIC_STRONG or BIOMETRIC_WEAK) ==
-                    BiometricManager.BIOMETRIC_SUCCESS
-                SwitchRow(stringResource(R.string.app_lock_biometric_enable),
-                    if (canBiometric) stringResource(R.string.app_lock_biometric_desc)
-                    else stringResource(R.string.app_lock_biometric_unavailable),
-                    biometric, enabled = canBiometric) { app.setBiometric(it) }
-            }
-        }
-
-        SettingsSection(stringResource(R.string.section_appearance)) {
+        SettingsSection(stringResource(R.string.section_appearance), heading = true) {
             ThemeOption(stringResource(R.string.theme_system), themeMode == "system") {
                 app.setThemeMode("system")
             }
@@ -3074,102 +2990,103 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
             }
         }
 
-        SettingsSection(stringResource(R.string.section_data)) {
+        SettingsSection(stringResource(R.string.section_data), heading = true) {
             InfoRow(stringResource(R.string.data_local_count_label),
                 if (localCount < 0) "-" else localCount.toString())
             InfoRow(stringResource(R.string.data_local_size_label),
                 if (storageBytes < 0L) "-"
                 else android.text.format.Formatter.formatShortFileSize(context, storageBytes))
-            TextButton(onClick = { showClear = true }) {
-                Text(stringResource(R.string.data_clear))
-            }
-            Text(stringResource(R.string.data_clear_desc),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            // §7.4 只清已读消息关联的图片磁盘缓存，不动未读消息图片、不动消息本体与身份
-            TextButton(onClick = { showClearMedia = true }) {
-                Text(stringResource(R.string.data_clear_media))
-            }
-            Text(stringResource(R.string.data_clear_media_desc),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            GuideRow(stringResource(R.string.settings_page_data),
+                stringResource(R.string.settings_entry_data_desc)) { onPage(SettingsPage.Data) }
+        }
+
+        SettingsSection(stringResource(R.string.section_more), heading = true) {
+            GuideRow(stringResource(R.string.section_app_lock),
+                stringResource(R.string.settings_entry_security_desc)) { onPage(SettingsPage.Security) }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            // §7.3 导出为 JSON：SAF 新建文档，用户挑位置，避免"存储权限"这套老模型。
-            // 结果回调在 MainActivity 层注册（见 exportLauncher），relock 也不会丢结果，故这里只触发。
-            TextButton(onClick = {
-                (context as? MainActivity)?.startExport("pushbox-export-$stamp.json")
-            }) { Text(stringResource(R.string.data_export)) }
-            Text(stringResource(R.string.data_export_desc),
+            GuideRow(stringResource(R.string.section_keepalive),
+                stringResource(R.string.settings_entry_keepalive_desc)) { onPage(SettingsPage.KeepAlive) }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            GuideRow(stringResource(R.string.settings_page_about),
+                stringResource(R.string.settings_entry_about_desc)) { onPage(SettingsPage.About) }
+        }
+    }
+}
+
+/** 二级页「接入与设备」：当前地址、设备身份与恢复码、本空间全部设备。 */
+@Composable
+private fun SettingsConnectPage(identity: Identity, modifier: Modifier, onLogout: () -> Unit) {
+    val context = LocalContext.current
+    val app = App.get(context)
+    val scope = rememberCoroutineScope()
+    var showConfirm by remember { mutableStateOf(false) }
+    var revealCode by remember { mutableStateOf(false) }
+    var rotating by remember { mutableStateOf(false) }
+    var rotateConfirm by remember { mutableStateOf(false) }
+    var rotationError by remember { mutableStateOf<String?>(null) }
+    var devices by remember { mutableStateOf<List<PushBoxApi.DeviceInfo>?>(null) }
+    var devicesTick by remember { mutableIntStateOf(0) }
+    var devicesError by remember { mutableStateOf<String?>(null) }
+    var busyDevice by remember { mutableStateOf(false) }
+    var revokeTarget by remember { mutableStateOf<PushBoxApi.DeviceInfo?>(null) }
+    LaunchedEffect(devicesTick) {
+        devices = null; devicesError = null
+        runCatching { PushBoxApi(identity.baseUrl, app.http).listDevices(identity) }
+            .onSuccess { devices = it }
+            .onFailure { devicesError = it.message ?: it::class.java.simpleName }
+    }
+
+    SettingsPageColumn(modifier) {
+        SettingsSection(stringResource(R.string.section_server), heading = true) {
+            InfoRow(stringResource(R.string.current_server), identity.baseUrl.ifBlank { "-" })
+            TextButton(enabled = !showConfirm, onClick = { showConfirm = true }) {
+                Text(stringResource(R.string.change_server))
+            }
+            Text(stringResource(R.string.change_server_desc),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
-        SettingsSection(stringResource(R.string.section_about)) {
-            val versionName = remember { cn.iamplus.pushbox.net.UpdateApi.currentVersion(context).versionName }
-            InfoRow(stringResource(R.string.app_name), versionName)
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            UpdateControls(context, app, scope)
-            // §7.4 API 文档摘要：第三方接入只有 POST /message 一个入口，凭据写在 body
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            Text(stringResource(R.string.about_api_doc_title),
-                style = MaterialTheme.typography.titleMedium)
-            Text(stringResource(R.string.about_api_doc_body),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            // §7.4 日志（脱敏）：本机不落消息正文与凭据
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            Text(stringResource(R.string.about_log_desensitized),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SettingsSection(stringResource(R.string.section_device), heading = true) {
+            InfoRow(stringResource(R.string.device_name_label), Build.MODEL ?: "-")
+            CopyableField(stringResource(R.string.device_id_label), identity.deviceId)
+            RecoveryCodeRow(identity.recoveryCode, revealed = revealCode,
+                onToggle = { revealCode = !revealCode })
+            // §14 轮换恢复码：旧码立即作废（已加入的设备不受影响，只影响后续扫码添加）
+            rotationError?.let {
+                Text(it, style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error)
+            }
+            TextButton(enabled = !rotating, onClick = { rotationError = null; rotateConfirm = true }) {
+                Text(stringResource(R.string.recovery_code_rotate))
+            }
+        }
+
+        // §5.2/D26 设备与同步：列出本空间全部设备，可远程吊销他端（作废 token + 踢下线）
+        SettingsSection(stringResource(R.string.section_devices), heading = true) {
+            devicesError?.let {
+                Text(it, style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error)
+            }
+            val list = devices
+            when {
+                list == null && devicesError == null ->
+                    Text(stringResource(R.string.devices_loading),
+                        style = MaterialTheme.typography.bodyMedium)
+                list != null && list.isEmpty() ->
+                    Text(stringResource(R.string.devices_none),
+                        style = MaterialTheme.typography.bodyMedium)
+                else -> list?.forEach { dev ->
+                    DeviceRow(dev, busy = busyDevice, onRevoke = { revokeTarget = dev })
+                }
+            }
+            TextButton(enabled = !busyDevice, onClick = { devicesTick++ }) {
+                Text(stringResource(R.string.devices_refresh))
+            }
         }
     }
-    if (showChannelNotify) {
-        ChannelNotifyDialog(identity, onDismiss = { showChannelNotify = false })
-    }
-    if (showClear) {
-        AlertDialog(
-            onDismissRequest = { showClear = false },
-            title = { Text(stringResource(R.string.data_clear)) },
-            text = { Text(stringResource(R.string.data_clear_confirm)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    showClear = false
-                    scope.launch(Dispatchers.IO) {
-                        app.db.clearAllTables()
-                        withContext(Dispatchers.Main) { clearTick++ }
-                    }
-                }) { Text(stringResource(R.string.confirm_ok)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClear = false }) {
-                    Text(stringResource(R.string.confirm_cancel))
-                }
-            })
-    }
-    // §7.4 清已读图片缓存：仅删已读消息关联的图片文件，消息本体与身份不动
-    if (showClearMedia) {
-        AlertDialog(
-            onDismissRequest = { showClearMedia = false },
-            title = { Text(stringResource(R.string.data_clear_media)) },
-            text = { Text(stringResource(R.string.data_clear_media_confirm)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    showClearMedia = false
-                    scope.launch(Dispatchers.IO) {
-                        val rows = app.dao.readMessagesWithMedia()
-                            .map { it.msgId to it.mediaCount }
-                        cn.iamplus.pushbox.ui.ImageCache.clearForReadMessages(rows)
-                        withContext(Dispatchers.Main) { clearMediaTick++ }
-                    }
-                }) { Text(stringResource(R.string.confirm_ok)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearMedia = false }) {
-                    Text(stringResource(R.string.confirm_cancel))
-                }
-            })
-    }
+
     if (showConfirm) {
         AlertDialog(
             onDismissRequest = { showConfirm = false },
@@ -3185,9 +3102,6 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
                     Text(stringResource(R.string.confirm_cancel))
                 }
             })
-    }
-    lockDialog?.let { mode ->
-        AppLockDialog(app, enabling = mode == "enable", onDismiss = { lockDialog = null })
     }
     revokeTarget?.let { target ->
         AlertDialog(
@@ -3239,6 +3153,262 @@ private fun SettingsTab(identity: Identity, modifier: Modifier, onLogout: () -> 
                     Text(stringResource(R.string.confirm_cancel))
                 }
             })
+    }
+}
+
+/** 二级页「提醒与频道」：新频道默认档位、按频道导航，以及首屏那三个开关的细则。 */
+@Composable
+private fun SettingsNotifyPage(identity: Identity, modifier: Modifier) {
+    val context = LocalContext.current
+    val app = App.get(context)
+    val importance by app.defaultImportance.collectAsState()
+    var showChannelNotify by remember { mutableStateOf(false) }
+
+    SettingsPageColumn(modifier) {
+        SettingsSection(stringResource(R.string.section_notification), heading = true) {
+            Text(stringResource(R.string.notif_importance_desc),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    "high" to R.string.notif_importance_high,
+                    "default" to R.string.notif_importance_default,
+                    "low" to R.string.notif_importance_low,
+                ).forEach { (level, label) ->
+                    val selected = importance == level
+                    FilterChip(selected = selected,
+                        onClick = { app.setDefaultImportance(level) },
+                        label = { Text(stringResource(label)) },
+                        leadingIcon = if (selected) {
+                            { Icon(Icons.Filled.Check, null, Modifier.size(18.dp)) }
+                        } else null)
+                }
+            }
+        }
+
+        SettingsSection(stringResource(R.string.notif_manage_title), heading = true) {
+            GuideRow(stringResource(R.string.notif_manage_title),
+                stringResource(R.string.notif_manage_entry_desc)) { showChannelNotify = true }
+        }
+
+        SettingsSection(stringResource(R.string.notif_detail_title), heading = true) {
+            Text(stringResource(R.string.notif_lock_screen_detail),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.notif_quiet_detail),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+
+    if (showChannelNotify) {
+        ChannelNotifyDialog(identity, onDismiss = { showChannelNotify = false })
+    }
+}
+
+/** 二级页「应用锁」：开关本身在二级页里，生物识别只在锁开启时出现。 */
+@Composable
+private fun SettingsSecurityPage(modifier: Modifier) {
+    val context = LocalContext.current
+    val app = App.get(context)
+    val appLock by app.appLockEnabled.collectAsState()
+    val biometric by app.biometricEnabled.collectAsState()
+    var lockDialog by remember { mutableStateOf<String?>(null) }
+    // D30 生物识别只在 App 锁开启时可选；无可用硬件时置灰并提示
+    val canBiometric = BiometricManager.from(context)
+        .canAuthenticate(BIOMETRIC_STRONG or BIOMETRIC_WEAK) == BiometricManager.BIOMETRIC_SUCCESS
+
+    SettingsPageColumn(modifier) {
+        SettingsSection(stringResource(R.string.section_app_lock), heading = true) {
+            SwitchRow(stringResource(R.string.app_lock_enable),
+                stringResource(R.string.app_lock_desc), appLock) {
+                lockDialog = if (it) "enable" else "disable"
+            }
+            if (appLock) {
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                SwitchRow(stringResource(R.string.app_lock_biometric_enable),
+                    if (canBiometric) stringResource(R.string.app_lock_biometric_desc)
+                    else stringResource(R.string.app_lock_biometric_unavailable),
+                    biometric, enabled = canBiometric) { app.setBiometric(it) }
+            }
+        }
+    }
+
+    lockDialog?.let { mode ->
+        AppLockDialog(app, enabling = mode == "enable", onDismiss = { lockDialog = null })
+    }
+}
+
+/** 二级页「后台常驻」：电池优化、轮询、后台监听渠道与自启动。 */
+@Composable
+private fun SettingsKeepAlivePage(modifier: Modifier) {
+    val context = LocalContext.current
+    val app = App.get(context)
+    val polling by app.pollingMode.collectAsState()
+
+    SettingsPageColumn(modifier) {
+        SettingsSection(stringResource(R.string.section_keepalive), heading = true) {
+            KeepAliveBatteryRow()
+            // §7.2 极致省电轮询模式：关掉常驻长连接，改 WorkManager 周期补拉，省电但消息会延迟
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            SwitchRow(stringResource(R.string.keepalive_polling),
+                stringResource(R.string.keepalive_polling_desc), polling) {
+                app.setPollingMode(it)
+            }
+            GuideRow(stringResource(R.string.keepalive_notification),
+                stringResource(R.string.keepalive_notification_desc)) {
+                runCatching {
+                    // §7.2：直达"后台监听"通知渠道，而非整个 App 的通知设置页。
+                    val channelId = cn.iamplus.pushbox.notify.Notifier.SERVICE_CHANNEL
+                    val intent = Intent("android.settings.CHANNEL_NOTIFICATION_SETTINGS").apply {
+                        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                        putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
+                    }
+                    if (!openDeepLink(context, intent)) {
+                        // 降级：打开 App 级通知设置
+                        context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+                    }
+                }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            GuideRow(stringResource(R.string.keepalive_autostart),
+                stringResource(R.string.keepalive_autostart_desc)) {
+                runCatching {
+                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(Uri.parse("package:${context.packageName}")))
+                }
+            }
+        }
+    }
+}
+
+/** 二级页「清理与导出」：两个危险动作分开写清楚后果，导出不动任何本地数据。 */
+@Composable
+private fun SettingsDataPage(modifier: Modifier) {
+    val context = LocalContext.current
+    val app = App.get(context)
+    val scope = rememberCoroutineScope()
+    var showClear by remember { mutableStateOf(false) }
+    var showClearMedia by remember { mutableStateOf(false) }
+    val stamp = remember {
+        java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+            .format(java.util.Date())
+    }
+
+    SettingsPageColumn(modifier) {
+        SettingsSection(stringResource(R.string.section_data), heading = true) {
+            TextButton(onClick = { showClear = true }) {
+                Text(stringResource(R.string.data_clear), color = MaterialTheme.colorScheme.error)
+            }
+            Text(stringResource(R.string.data_clear_desc),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            // §7.4 只清已读消息关联的图片磁盘缓存，不动未读消息图片、不动消息本体与身份
+            TextButton(onClick = { showClearMedia = true }) {
+                Text(stringResource(R.string.data_clear_media),
+                    color = MaterialTheme.colorScheme.error)
+            }
+            Text(stringResource(R.string.data_clear_media_desc),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            // §7.3 导出为 JSON：SAF 新建文档，用户挑位置，避免"存储权限"这套老模型。
+            // 结果回调在 MainActivity 层注册（见 exportLauncher），relock 也不会丢结果，故这里只触发。
+            TextButton(onClick = {
+                (context as? MainActivity)?.startExport("pushbox-export-$stamp.json")
+            }) { Text(stringResource(R.string.data_export)) }
+            Text(stringResource(R.string.data_export_desc),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+
+    if (showClear) {
+        AlertDialog(
+            onDismissRequest = { showClear = false },
+            title = { Text(stringResource(R.string.data_clear)) },
+            text = { Text(stringResource(R.string.data_clear_confirm)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClear = false
+                    scope.launch(Dispatchers.IO) { app.db.clearAllTables() }
+                }) { Text(stringResource(R.string.confirm_ok)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClear = false }) {
+                    Text(stringResource(R.string.confirm_cancel))
+                }
+            })
+    }
+    // §7.4 清已读图片缓存：仅删已读消息关联的图片文件，消息本体与身份不动
+    if (showClearMedia) {
+        AlertDialog(
+            onDismissRequest = { showClearMedia = false },
+            title = { Text(stringResource(R.string.data_clear_media)) },
+            text = { Text(stringResource(R.string.data_clear_media_confirm)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClearMedia = false
+                    scope.launch(Dispatchers.IO) {
+                        val rows = app.dao.readMessagesWithMedia()
+                            .map { it.msgId to it.mediaCount }
+                        cn.iamplus.pushbox.ui.ImageCache.clearForReadMessages(rows)
+                    }
+                }) { Text(stringResource(R.string.confirm_ok)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearMedia = false }) {
+                    Text(stringResource(R.string.confirm_cancel))
+                }
+            })
+    }
+}
+
+/** 二级页「关于与帮助」：版本与更新、接口摘要（默认折叠）、脱敏日志说明。 */
+@Composable
+private fun SettingsAboutPage(modifier: Modifier) {
+    val context = LocalContext.current
+    val app = App.get(context)
+    val scope = rememberCoroutineScope()
+    var apiOpen by rememberSaveable { mutableStateOf(false) }
+
+    SettingsPageColumn(modifier) {
+        SettingsSection(stringResource(R.string.section_about), heading = true) {
+            val versionName = remember { cn.iamplus.pushbox.net.UpdateApi.currentVersion(context).versionName }
+            InfoRow(stringResource(R.string.app_name), versionName)
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            UpdateControls(context, app, scope)
+        }
+
+        SettingsSection(stringResource(R.string.about_api_doc_title), heading = true) {
+            Row(Modifier.fillMaxWidth().clickable { apiOpen = !apiOpen }
+                .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.about_api_doc_summary), Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(if (apiOpen) R.string.about_api_doc_collapse
+                    else R.string.about_api_doc_expand),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary)
+            }
+            if (apiOpen) {
+                Text(stringResource(R.string.about_api_doc_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        SettingsSection(stringResource(R.string.about_log_title), heading = true) {
+            Text(stringResource(R.string.about_log_desensitized),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -3796,12 +3966,16 @@ private fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** 设置页的一个分组：小标题 + 一张卡片，卡片内竖排若干行。 */
+/** 设置页的一个分组：标题 + 一张卡片，卡片内竖排若干行。heading 用 H2（设置页），其余页仍是小号灰字。 */
 @Composable
-private fun SettingsSection(title: String, content: @Composable () -> Unit) {
+private fun SettingsSection(title: String, heading: Boolean = false,
+    content: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(title, style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(title,
+            style = if (heading) MaterialTheme.typography.headlineMedium
+            else MaterialTheme.typography.labelSmall,
+            color = if (heading) MaterialTheme.colorScheme.onSurface
+            else MaterialTheme.colorScheme.onSurfaceVariant)
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
