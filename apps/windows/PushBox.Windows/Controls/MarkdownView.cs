@@ -123,6 +123,8 @@ public static class MarkdownView
     /// 一段带内联样式的文本。**粗体**/行内码/裸 URL 三种叠在同一个 TextBlock 的 Inlines 上，
     /// 与 Android 的 AnnotatedString 同构：URL 是第二遍扫出来的，所以 <c>**https://x.cn**</c>
     /// 会同时是等宽/粗体 + 蓝下划线，而不是二选一。
+    /// emoji 逐 Run 走 <see cref="EmojiText"/>：行内码这一段刻意跳过，与围栏代码块（<see cref="Code"/>）
+    /// 同一个口径——代码里的字符要原样，不能被换成图形。
     /// </summary>
     public static TextBlock Text(string value, MarkdownStyle style, double size, double line,
         Brush color, bool bold, Thickness? margin = null)
@@ -155,6 +157,8 @@ public static class MarkdownView
                 run.Background = style.Code;
             }
             text.Inlines.Add(run);
+            // 必须在 Add 之后：Run 没有父集合时替换插不进兄弟节点，而且不抛异常、只是什么都不出
+            if (span.Style != InlineStyle.Code) EmojiText.Substitute(run);
         }
         return text;
     }
@@ -185,6 +189,7 @@ public static class MarkdownView
             at = start + length;
         }
         if (at < text.Length) block.Inlines.Add(new Run(text.Substring(at)));
+        EmojiText.Substitute(block);
         return block;
     }
 
@@ -217,7 +222,7 @@ public static class MarkdownView
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Content = new TextBlock
             {
-                Text = value, // 代码块内容一条内联规则都不走
+                Text = value, // 代码块内容一条内联规则都不走，emoji 也刻意保持单色（不走 EmojiText）
                 FontFamily = style.Monospace,
                 FontSize = MarkdownStyle.SmallSize,
                 LineHeight = MarkdownStyle.SmallLine,

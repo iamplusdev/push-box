@@ -209,6 +209,14 @@ public static class AppLog
     public static void UpdateCheckFailed(string exceptionType) =>
         Write(LogEventLevel.Debug, "更新检查没成 {Type}", exceptionType);
 
+    /// <summary>彩色 emoji 的字形表预热没成：只是首条 emoji 消息会卡一下并退回单色，不影响别的。</summary>
+    public static void EmojiPrewarmFailed(string exceptionType) =>
+        Write(LogEventLevel.Warning, "emoji 预热没成 {Type}", exceptionType);
+
+    /// <summary>第三方字形解析器在某段正文上抛了：那一段退回单色显示，正文本身照常渲染。</summary>
+    public static void EmojiSubstituteFailed(string exceptionType) =>
+        Write(LogEventLevel.Warning, "emoji 替换没成 {Type}", exceptionType);
+
     /// <summary>
     /// 崩溃留痕：只把 <see cref="PrivacyGate.ExceptionShapes"/> 那份（类型名 + 堆栈，无 Message）交给日志。
     /// <paramref name="where"/> 是三个挂钩各自的名字，写死在本机代码里，不含任何用户数据。

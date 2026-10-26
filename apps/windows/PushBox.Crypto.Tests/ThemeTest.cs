@@ -240,13 +240,24 @@ public class ThemeTest
                 var key = match.Groups[1].Value.Trim();
                 // 只在 token 字典里定义的样式才查得到目标类型；本文件内的隐式样式没有键，也管不着
                 if (!targets.TryGetValue(key, out var target)) continue;
-                if (e.Name.LocalName == target) continue;
-                offenders.Add($"{file}: <{e.Name.LocalName}> 拿了 TargetType={target} 的 {key}");
+                var tag = e.Name.LocalName;
+                if (tag == target) continue;
+                // 派生类照样套得上基类的样式（TargetType 只要求"是它或它的子类"），标签名不同不算漂移
+                if (DerivedFrom.TryGetValue(tag, out var baseTag) && baseTag == target) continue;
+                offenders.Add($"{file}: <{tag}> 拿了 TargetType={target} 的 {key}");
             }
         }
 
         Assert.Empty(offenders);
     }
+
+    /// <summary>本项目自己写的控件 → 它的 WPF 基类。只有列在这里的配对才被上面那条放行，
+    /// 所以它不是"标签名不认识就跳过"的口子。</summary>
+    private static readonly Dictionary<string, string> DerivedFrom = new()
+    {
+        // 会话摘要那一格：Emoji.Wpf 的 TextBlock.Text 不是依赖属性、绑不上，所以自己写了一个带 Source DP 的
+        ["EmojiTextBlock"] = "TextBlock"
+    };
 
     /// <summary>每一个样式键 → 它的 TargetType，来源是两份 token 字典加各窗口自己那一页资源。</summary>
     private static Dictionary<string, string> StyleTargets()
@@ -358,17 +369,18 @@ public class ThemeTest
     public void LongConversationTextTrimsInsteadOfPushingTheRowWide()
     {
         var doc = XDocument.Parse(TokenFiles.Text("MainWindow.xaml"));
-        XElement ByBinding(string binding) => doc.Descendants()
-            .Single(e => e.Name.LocalName == "TextBlock" && (string?)e.Attribute("Text") == binding);
+        XElement ByBinding(string tag, string property, string binding) => doc.Descendants()
+            .Single(e => e.Name.LocalName == tag && (string?)e.Attribute(property) == binding);
 
-        var name = ByBinding("{Binding DisplayName}");
+        var name = ByBinding("TextBlock", "Text", "{Binding DisplayName}");
         Assert.Equal("CharacterEllipsis", (string?)name.Attribute("TextTrimming"));
         Assert.Equal("{Binding DisplayName}", (string?)name.Attribute("ToolTip"));
         // 横排 StackPanel 里 TextTrimming 是死代码：那条路必须已经改成星号列
         Assert.DoesNotContain(name.Ancestors(), a =>
             a.Name.LocalName == "StackPanel" && (string?)a.Attribute("Orientation") == "Horizontal");
 
-        var summary = ByBinding("{Binding Summary}");
+        // 摘要走的是自己那个 EmojiTextBlock：文本挂在 Source（真依赖属性）上，不是 Text
+        var summary = ByBinding("EmojiTextBlock", "Source", "{Binding Summary}");
         Assert.Equal("Wrap", (string?)summary.Attribute("TextWrapping"));
         Assert.Equal("CharacterEllipsis", (string?)summary.Attribute("TextTrimming"));
         // Text.Small 行高 18：36 就是两行

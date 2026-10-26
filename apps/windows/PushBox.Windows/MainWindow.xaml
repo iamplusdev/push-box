@@ -110,11 +110,14 @@
                                        Foreground="{DynamicResource Fg.Secondary}" />
                         </Grid>
                         <!-- 摘要限两行：Text.Small 行高 18，36 正好两行；开 Wrap 之后
-                             截断才落在第二行末尾，而不是把整段压成一行 -->
-                        <TextBlock Grid.Row="1" Text="{Binding Summary}" Style="{DynamicResource Text.Small}"
-                                   Margin="0,2,0,0" MaxHeight="36" TextWrapping="Wrap"
-                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding Summary}"
-                                   Foreground="{DynamicResource Fg.Secondary}" />
+                             截断才落在第二行末尾，而不是把整段压成一行。
+                             用 EmojiTextBlock 而不是 TextBlock：它的 Source 是真依赖属性，
+                             换绑定的时候顺带把 emoji 换成彩色字形（Emoji.Wpf 那个 Text 不是 DP，绑不上） -->
+                        <controls:EmojiTextBlock Grid.Row="1" Source="{Binding Summary}"
+                                                 Style="{DynamicResource Text.Small}"
+                                                 Margin="0,2,0,0" MaxHeight="36" TextWrapping="Wrap"
+                                                 TextTrimming="CharacterEllipsis" ToolTip="{Binding Summary}"
+                                                 Foreground="{DynamicResource Fg.Secondary}" />
                     </Grid>
                     <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
                                 Margin="10,0,0,0">

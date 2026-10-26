@@ -330,10 +330,82 @@ public class MarkdownViewTest
         });
     }
 
+    /// <summary>
+    /// WPF 的文本栈不认彩色字形表，正文因此逐 Run 过一遍 Emoji.Wpf：emoji 从 Run 里搬进一个
+    /// InlineUIContainer 兄弟节点（画的是 Geometry，不是字符）。这条同时钉住反面——
+    /// 没有 emoji 的正文一个 Inline 都不多，普通消息不为这个特性付任何结构变化。
+    /// </summary>
+    [Fact]
+    public void AnEmojiInTheBodyBecomesAGraphicInlineWhilePlainTextDoesNot()
+    {
+        Sta.Run(() =>
+        {
+            var plain = MarkdownView.Text("部署完成", Style, 15, 23, Style.Text, false);
+            Assert.Empty(plain.Inlines.OfType<InlineUIContainer>());
+            Assert.Equal("部署完成", plain.Inlines.OfType<Run>().Single().Text);
+
+            var body = MarkdownView.Text("部署完成 \U0001F389", Style, 15, 23, Style.Text, false);
+            Assert.Single(body.Inlines.OfType<InlineUIContainer>());
+            // 字形搬走了 Run 里就不该再留着那两枚代理项，否则同一枚 emoji 会画两遍（其中一遍是单色）
+            var rest = string.Concat(body.Inlines.OfType<Run>().Select(r => r.Text));
+            Assert.Contains("部署完成", rest);
+            Assert.DoesNotContain("\U0001F389", rest);
+        });
+    }
+
+    /// <summary>
+    /// 代码里的字符要能选中、能复制，所以围栏代码块与行内 `code` 都<b>不</b>替换：
+    /// 这是刻意留下的单色区，不是漏接。
+    /// </summary>
+    [Fact]
+    public void CodeStaysMonochromeSoItsCharactersSurviveVerbatim()
+    {
+        Sta.Run(() =>
+        {
+            var fence = (TextBlock)((ScrollViewer)((Border)MarkdownView.Build(new MarkdownCode("echo \U0001F389"), Style))
+                .Child).Content;
+            // 走 Text 属性那一路：WPF 自己会把它物化成一个 Run，但绝不经过 EmojiText
+            Assert.Empty(fence.Inlines.OfType<InlineUIContainer>());
+            Assert.Contains("\U0001F389", fence.Text);
+
+            var inline = MarkdownView.Text("`echo \U0001F389`", Style, 15, 23, Style.Text, false);
+            Assert.Empty(inline.Inlines.OfType<InlineUIContainer>());
+            Assert.Contains("\U0001F389", inline.Inlines.OfType<Run>().Single().Text);
+        });
+    }
+
     private static List<string> Bullets(StackPanel list) => list.Children
         .Cast<StackPanel>()
         .Select(row => ((TextBlock)row.Children[0]).Text)
         .ToList();
+}
+
+/// <summary>
+/// 会话列表摘要那一格。文本来自 Binding，而 Emoji.Wpf 那个 <c>TextBlock.Text</c> 是 <c>new</c> 出来的
+/// 普通 CLR 属性、不是依赖属性，XAML 里的 Binding 挂不上去，所以自己写了这个带真 DP 的薄控件。
+/// 这条钉的是"换 Source 就整段重画"：列表滚动会复用行，留着上一条的字形比不出彩色更难查。
+/// </summary>
+public class EmojiTextBlockTest
+{
+    [Fact]
+    public void ChangingTheSourceReplacesTheGlyphsInsteadOfStackingThem()
+    {
+        Sta.Run(() =>
+        {
+            var block = new EmojiTextBlock();
+            Assert.Empty(block.Inlines);
+
+            block.Source = "构建通过 \U0001F389";
+            Assert.Single(block.Inlines.OfType<InlineUIContainer>());
+
+            block.Source = "构建失败";
+            Assert.Empty(block.Inlines.OfType<InlineUIContainer>());
+            Assert.Equal("构建失败", block.Inlines.OfType<Run>().Single().Text);
+
+            block.Source = null;
+            Assert.Empty(block.Inlines);
+        });
+    }
 }
 
 /// <summary>一条消息的气泡：类型标签 → 竖条 + 气泡 → 打开链接 → 时间，顺序与 Android 的 MessageBubble 同。</summary>

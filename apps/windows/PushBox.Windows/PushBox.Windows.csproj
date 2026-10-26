@@ -18,6 +18,10 @@
 
   <ItemGroup>
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
+    <!-- WPF 的文本栈不认 COLR/CPAL、CBDT/CBLC、SVG 任何一类彩色字形表，emoji 只能出单色轮廓。
+         Emoji.Wpf 自己把系统 Segoe UI Emoji 的字形解成 Geometry 塞进 InlineUIContainer，
+         所以正文才画得出彩色。全仓只有 Controls/EmojiText.cs 碰它（WTFPL）。 -->
+    <PackageReference Include="Emoji.Wpf" Version="0.3.4" />
     <PackageReference Include="H.NotifyIcon.Wpf" Version="2.1.4" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.32" />
     <PackageReference Include="Serilog" Version="4.4.0" />
