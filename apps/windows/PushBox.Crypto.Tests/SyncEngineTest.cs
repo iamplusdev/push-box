@@ -445,14 +445,23 @@ public sealed class SyncEngineTest : IDisposable
     public async Task ReconnectStartsFromTheLargestCursorAndWritesItBackOnDisconnect()
     {
         Apply(Item(18490, "m_90"));
-        var harness = Harness(Device(sinceSeq: 0));
-        harness.Enqueue(Handshake(Message(Item(18491, "m_91"))));
+        // 真等退避：这条用例要在"第一次断开之后、第二次重连之前"的窗口里往库里落一条，
+        // 那段窗口在 stub 下只有 1ms，落库与建连会互相抢（回写读的是库里的游标）
+        var harness = Harness(Device(sinceSeq: 0), sleepForReal: true);
+        harness.Enqueue(Handshake());
+        harness.Enqueue(Handshake());
         harness.EnqueueHanging();
         harness.Start();
-        await Until(() => harness.ConnectedCount >= 2, "断开之后要重连");
+
+        // 第一次断开时的回写：库里已经到 18490 而 identity.json 还是 0，副本要取大的那份
+        await Until(() => _identities.Load().LastAppliedSeq == 18490, "断开时要把游标副本回写");
+
+        // 断线期间又落了一条：重连必须从新的游标起，否则这一条（以及 18490 条之前的历史）会被重拉
+        Apply(Item(18491, "m_91"));
+        await Until(() => harness.ConnectedCount >= 2, "退避之后要重连");
+        await Until(() => _identities.Load().LastAppliedSeq == 18491, "第二次断开也要回写");
         harness.Engine.Stop();
 
-        // 第一次：库里已经到 18490 而 identity.json 还是 0 —— 建连取大的那份，否则这 18490 条会被重新拉一遍
         Assert.Equal("?since_seq=18490", harness.Sockets[0].ConnectedTo!.Query);
         Assert.Equal("?since_seq=18491", harness.Sockets[1].ConnectedTo!.Query);
         // 副本回写只为"下次开库之前也要知道从哪续"，权威值始终是 sync_state 那行
