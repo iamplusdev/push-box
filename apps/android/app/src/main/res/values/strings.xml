@@ -27,6 +27,7 @@
     <string name="tab_messages">消息</string>
     <string name="tab_channels">频道</string>
     <string name="tab_settings">设置</string>
+    <string name="action_back">返回</string>
 
     <!-- 复制 -->
     <string name="copy">复制</string>
@@ -298,6 +299,8 @@
     <string name="conv_pinned_flag">置顶</string>
     <string name="conv_muted_flag">静音</string>
     <string name="conv_private_flag">锁屏隐藏</string>
+    <!-- 读屏时红点里的"3"要读成"3 条未读"，否则就是一串没头没尾的数字 -->
+    <string name="conv_unread_count">%1$d 条未读</string>
     <string name="rename_title">重命名会话</string>
     <string name="rename_save">保存</string>
     <string name="clear_dialog_title">清空聊天记录</string>

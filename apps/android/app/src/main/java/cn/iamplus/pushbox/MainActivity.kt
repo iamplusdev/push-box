@@ -36,6 +36,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -98,6 +99,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -893,7 +897,8 @@ private fun MainShell(identity: Identity,
                 },
                 navigationIcon = {
                     IconButton(onClick = { settingsPage = null }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.action_back))
                     }
                 })
         } else {
@@ -979,9 +984,11 @@ private fun PushBoxBottomBar(tabs: List<BottomTab>, selected: Int, onSelect: (In
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
             tabs.forEachIndexed { index, tab ->
                 val active = index == selected
+                // selectable 而不是 clickable：读屏才报得出"已选中/未选中"，
+                // Role.Tab 也让 TalkBack 用"标签页"而不是"按钮"来念这一格。
                 Column(
                     Modifier.weight(1f)
-                        .clickable { onSelect(index) }
+                        .selectable(selected = active, role = Role.Tab, onClick = { onSelect(index) })
                         .padding(vertical = 7.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
@@ -1438,7 +1445,8 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
             },
             navigationIcon = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.action_back))
                 }
             },
             actions = {
@@ -4218,8 +4226,12 @@ private fun ConversationRowView(row: ConversationRow, onOpen: () -> Unit, onLong
             if (row.unreadCount > 0) {
                 // §7.3 微信式未读：红底白字的气泡，而不是一个孤零零的红字——
                 // 列表里数字与时间同为红色小字时根本分不出哪个是未读
+                // 整行是合并语义节点，不加说明读屏只会念一个"3"；这里报真实条数，
+                // 界面上那个"99+"只是排版上的省略
+                val spoken = stringResource(R.string.conv_unread_count, row.unreadCount)
                 Box(Modifier.background(colors.unreadBadge, RoundedCornerShape(9.dp))
-                    .padding(horizontal = 6.dp, vertical = 1.dp)) {
+                    .padding(horizontal = 6.dp, vertical = 1.dp)
+                    .semantics { contentDescription = spoken }) {
                     Text(if (row.unreadCount > 99) "99+" else row.unreadCount.toString(),
                         color = Color.White, style = MaterialTheme.typography.labelSmall)
                 }

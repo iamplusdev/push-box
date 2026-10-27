@@ -46,7 +46,9 @@ private val LightPushBoxColors = PushBoxColors(
     levelWarning = Color(0xFFFF8C00),
     levelInfo = Color(0xFF757575),
     offline = Color(0xFFFF8C00),
-    unreadBadge = Color(0xFFF5222D),
+    // 未读气泡是白字，底色就得压到能让白字站住：#F5222D 上白字只有 4.1:1，
+    // 12sp 的小字不够 AA；#D32F2F 是 4.98:1，肉眼看还是同一个红。
+    unreadBadge = Color(0xFFD32F2F),
 )
 
 private val DarkPushBoxColors = PushBoxColors(
@@ -61,7 +63,8 @@ private val DarkPushBoxColors = PushBoxColors(
     levelWarning = Color(0xFFFFB74D),
     levelInfo = Color(0xFF9E9E9E),
     offline = Color(0xFFFFA726),
-    unreadBadge = Color(0xFFFF4D4F),
+    // 同上：#FF4D4F 上白字只有 3.3:1；#C62828 是 5.6:1，且在 #1F1F1F 的会话行上仍分得出来。
+    unreadBadge = Color(0xFFC62828),
 )
 
 // 微信式中性色：不做 dynamic color，否则一台手机一套配色，"像微信"这件事就没了。
