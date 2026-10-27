@@ -124,7 +124,9 @@ public static class BubbleView
         }
 
         var row = new Grid();
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(AccentBarWidth) });
+        // 竖条那一列走 Auto 而不是写死 3px：info 档整行没有条，写死就等于给每一条普通消息
+        // 留一条看不见的 3px 空槽——它正是"头像离左边列表太远"的一部分
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         // 同上：气泡那一列也得是星号列，Auto 列会把正文量成一条不折行的长条
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.VerticalAlignment = VerticalAlignment.Top; // 与头像顶部对齐（单行消息时关键）
@@ -142,7 +144,10 @@ public static class BubbleView
             });
         }
 
-        var body = new StackPanel { Margin = new Thickness(accent is null ? 0 : AccentBarWidth, 0, 0, 0) };
+        // 正文不为色条让位：条画在气泡外面那一列里，气泡内边距两档都是 12。
+        // 原来这里再补一个 3px 左外边距，等于把同一道条量了两次——warning/error 的字
+        // 比普通消息往里缩 3px，而 Android 那边 padding 恒为 10dp、条画在底边上
+        var body = new StackPanel();
         if (media is not null) body.Children.Add(media);
         // body ?: summary ?: title 三选一（在 MainModel 里已经选完），再按块解析：
         // 非 markdown 类型的正文通常没有语法，但两端走同一条解析路径才不会"手机按块排、PC 挤成一行"

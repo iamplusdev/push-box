@@ -464,14 +464,32 @@ public class BubbleViewTest
         });
     }
 
+    /// <summary>
+    /// 色条画在气泡**外面**那一列，所以正文内边距两档相同（Android 同理：条贴在气泡底边上、
+    /// padding 恒 10dp）。原来还给 body 补了一记 3px 左外边距，等于同一道条量两次。
+    /// 顺带钉住整行的横向落位：普通消息的气泡从 40（头像）+ 8（间距）起，竖条那 3px 只在真有条时
+    /// 才多出来——info 档那格原来是写死的 3px，等于给每一条普通消息留一条看不见的空槽。
+    /// </summary>
     [Fact]
-    public void TheBodyShiftsByTheBarOnlyWhenThereIsABar()
+    public void TheBarIsOneColumnOutsideTheBubbleAndNeverShiftsTheBody()
     {
         Sta.Run(() =>
         {
             Assert.Equal(0d, Body(BubbleView.Build(Item(), Style)).Margin.Left);
-            Assert.Equal(3d, Body(BubbleView.Build(Item(level: "error"), Style)).Margin.Left);
+            Assert.Equal(0d, Body(BubbleView.Build(Item(level: "error"), Style)).Margin.Left);
+
+            Assert.Equal(48d, BubbleLeft(BubbleView.Build(Item(), Style)));
+            Assert.Equal(51d, BubbleLeft(BubbleView.Build(Item(level: "error"), Style)));
         });
+    }
+
+    /// <summary>按 600 宽量排一次，取气泡左边缘相对整行的 x（头像与间距都在它左边）。</summary>
+    private static double BubbleLeft(FrameworkElement node)
+    {
+        node.Measure(new Size(600, double.PositiveInfinity));
+        node.Arrange(new Rect(0, 0, node.DesiredSize.Width, node.DesiredSize.Height));
+        node.UpdateLayout();
+        return Surface(node).TranslatePoint(new Point(0, 0), node).X;
     }
 
     [Fact]

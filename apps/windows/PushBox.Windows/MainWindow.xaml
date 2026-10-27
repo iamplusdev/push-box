@@ -51,10 +51,12 @@
             </Setter>
         </Style>
 
-        <!-- §9.2 的会话行：行高 64、头像 44 圆角 6（微信式方圆形，不是正圆）、左右内边距 16、
-             分割线起于文本起点。名称 16 / 摘要 13 / 时间 12，未读是纯数字而不是红点（与 Android 一致）。 -->
+        <!-- §9.2 的会话行：行高 64、头像 44 圆角 6（微信式方圆形，不是正圆）、左内边距 16 右 8、
+             分割线起于文本起点。名称 16 / 摘要 13 / 时间 12，未读是纯数字而不是红点（与 Android 一致）。
+             右边收到 8 是因为"列表内容与消息头像之间那条空白带"由三段相加（行右边距 + 手柄列 +
+             时间线左内边距），三段各让一档才从 32 降到 20；这条带由 PaneGapTest 钉住。 -->
         <DataTemplate x:Key="ConversationRowTemplate">
-            <Grid Margin="16,0">
+            <Grid Margin="16,0,8,0">
                 <!-- §8.4 W14 的清空入口与 §7.3 的三项本机设置。它们挂在这一行而不是右上角 ⋮ 上，
                      是因为两个菜单的作用域不同：⋮ 那三项管的是"当前打开的那条"，
                      而这里管的是"右键点到的这一行"——没打开的会话也要能改名、置顶、清空。
@@ -294,9 +296,11 @@
                                   VirtualizingPanel.ScrollUnit="Pixel">
                         <ItemsControl.Template>
                             <ControlTemplate TargetType="ItemsControl">
+                                <!-- 左内边距 8（原来四边都是 12）：这一档减的是"头像离列表太远"那三段里的
+                                     第三段，上下右三段不动——上面要与顶栏留呼吸、右面要给滚动条让位。 -->
                                 <ScrollViewer x:Name="TimelineScroll"
                                               CanContentScroll="True"
-                                              Padding="12"
+                                              Padding="8,12,12,12"
                                               VerticalScrollBarVisibility="Auto"
                                               HorizontalScrollBarVisibility="Disabled">
                                     <ItemsPresenter MaxWidth="{TemplateBinding MaxWidth}"
