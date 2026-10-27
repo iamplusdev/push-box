@@ -179,6 +179,59 @@
             </Setter>
         </Style>
         
+        <!-- 列表：默认模板是白底 + 系统蓝选中条，深色下整块发白、选中也还是蓝的。
+             条目做成"页面上的卡片"（item 自带 Bg.Elevated 底、hover 抬起、选中铺浅绿），
+             列表本身只留外框与滚动——频道与设备两处共用这一份，条目模板只管内容 -->
+        <Style TargetType="ListBox">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Divider}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBox">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6" Padding="4" SnapsToDevicePixels="True">
+                            <ScrollViewer Focusable="False" Padding="0"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          VerticalScrollBarVisibility="Auto">
+                                <ItemsPresenter />
+                            </ScrollViewer>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="Margin" Value="0,2" />
+            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource Focus.Visual}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Shell" Background="{DynamicResource Bg.Elevated}" CornerRadius="6"
+                                Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Shell" Property="Background" Value="{DynamicResource Btn.Ghost.Hover}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Shell" Property="Background" Value="{DynamicResource Bg.AccentTint}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- 按钮不再用这一窗自己的隐式样式：五个 Button.* 键在两份 token 字典里（§9.4），
              三态与换肤都在那边，这里每个按钮显式挂 Style -->
         
@@ -303,28 +356,25 @@
                     <!-- 我的频道列表 -->
                     <TextBlock Text="我的频道" Style="{DynamicResource Text.H3}"
                                Foreground="{DynamicResource Fg.Primary}" Margin="0,16,0,8" />
-                    <ListBox x:Name="ChannelList" Height="160" Margin="0,10,0,0" Background="Transparent"
-                             BorderBrush="{DynamicResource Divider}" SelectionChanged="OnChannelSelected"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox x:Name="ChannelList" Height="160" Margin="0,10,0,0"
+                             SelectionChanged="OnChannelSelected">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Border Padding="10,8" Margin="0,4" CornerRadius="6"
-                                        Background="{DynamicResource Bg.Page}">
-                                    <StackPanel Margin="4,2">
-                                        <TextBlock Text="{Binding TitleText}" Style="{DynamicResource Text.Small}"
-                                                   FontWeight="Medium"
-                                                   Foreground="{DynamicResource Fg.Primary}" />
-                                        <TextBlock Text="{Binding ChannelNo}" Style="{DynamicResource Text.Label}"
-                                                   FontFamily="{DynamicResource Font.Code}"
-                                                   Foreground="{DynamicResource Fg.Secondary}" />
-                                        <TextBlock Text="{Binding SummaryText}" Style="{DynamicResource Text.Label}"
-                                                   TextWrapping="Wrap"
-                                                   Foreground="{DynamicResource Fg.Secondary}" />
-                                        <!-- 接入状态是本机这一台的事，另一台设备上同一张列表可以全是"未接入" -->
-                                        <TextBlock Text="{Binding SubscriptionBadge}" Style="{DynamicResource Text.Label}"
-                                                   Foreground="{DynamicResource Level.Highlight}" />
-                                    </StackPanel>
-                                </Border>
+                                <!-- 卡片的底、内边距与选中态都在 ListBoxItem 那份隐式样式里，这里只管内容 -->
+                                <StackPanel>
+                                    <TextBlock Text="{Binding TitleText}" Style="{DynamicResource Text.Small}"
+                                               FontWeight="Medium"
+                                               Foreground="{DynamicResource Fg.Primary}" />
+                                    <TextBlock Text="{Binding ChannelNo}" Style="{DynamicResource Text.Label}"
+                                               FontFamily="{DynamicResource Font.Code}"
+                                               Foreground="{DynamicResource Fg.Secondary}" />
+                                    <TextBlock Text="{Binding SummaryText}" Style="{DynamicResource Text.Label}"
+                                               TextWrapping="Wrap"
+                                               Foreground="{DynamicResource Fg.Secondary}" />
+                                    <!-- 接入状态是本机这一台的事，另一台设备上同一张列表可以全是"未接入" -->
+                                    <TextBlock Text="{Binding SubscriptionBadge}" Style="{DynamicResource Text.Label}"
+                                               Foreground="{DynamicResource Level.Highlight}" />
+                                </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
@@ -514,11 +564,10 @@
                     </StackPanel>
                     <TextBlock x:Name="DeviceNotice" Style="{DynamicResource Text.Label}" Margin="0,8,0,0"
                                TextWrapping="Wrap" Foreground="{DynamicResource Level.Error}" />
-                    <ListBox x:Name="DeviceList" Height="220" Margin="0,8,0,0" Background="Transparent"
-                             BorderBrush="{DynamicResource Divider}">
+                    <ListBox x:Name="DeviceList" Height="220" Margin="0,8,0,0">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <StackPanel Orientation="Horizontal" Margin="4,3">
+                                <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="{Binding Name}" Style="{DynamicResource Text.Small}" Width="170"
                                                TextTrimming="CharacterEllipsis"
                                                Foreground="{DynamicResource Fg.Primary}" />

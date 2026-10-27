@@ -128,7 +128,7 @@ internal static class Tree
         node is null ? Enumerable.Empty<DependencyObject>() : new[] { node };
 }
 
-/// <summary>十一个角色各给一个可辨认的颜色，断言"落到了哪一支画刷"就不会靠巧合通过。</summary>
+/// <summary>十二个角色各给一个可辨认的颜色，断言"落到了哪一支画刷"就不会靠巧合通过。</summary>
 internal static class Paint
 {
     private static SolidColorBrush Brush(byte v)
@@ -138,10 +138,13 @@ internal static class Paint
         return brush;
     }
 
-    /// <summary>每次给一棵新的：画刷本身可以共享，但每个用例都拿自己那份，互不干扰。</summary>
+    /// <summary>每次给一棵新的：画刷本身可以共享，但每个用例都拿自己那份，互不干扰。
+    /// 参数顺序与 <see cref="MarkdownStyle"/> 的位置参数逐格对齐（Text/Muted/BlockBackground/BubbleBorder/
+    /// Code/Bar/Link/Highlight/BadgeBackground/BadgeText/LevelError/LevelWarning + 三支字体族）。</summary>
     public static MarkdownStyle Style() => new(
         Brush(1), Brush(2), Brush(3), Brush(4), Brush(5), Brush(6), Brush(7), Brush(8), Brush(9), Brush(10),
-        Brush(11), new FontFamily("Segoe UI"), new FontFamily("Consolas"));
+        Brush(11), Brush(12), new FontFamily("Segoe UI"), new FontFamily("Consolas"),
+        new FontFamily("Segoe MDL2 Assets"));
 }
 
 /// <summary>§9.2 的块级与内联渲染：字号、行高、缩进、竖条，逐条对着 Android 的 MarkdownBody 断。</summary>
@@ -532,6 +535,25 @@ public class BubbleViewTest
             Assert.Equal(10d, bubble.Padding.Top);
             Assert.Equal(8d, bubble.CornerRadius.TopLeft);
             Assert.Same(Style.BlockBackground, bubble.Background);
+            // 描边走 token：原来那支 20 透明度的黑落在深色气泡上等于没画
+            Assert.Same(Style.BubbleBorder, bubble.BorderBrush);
+        });
+    }
+
+    [Fact]
+    public void TheActionRowIconIsAnIconFontGlyphTintedLikeItsLabel()
+    {
+        Sta.Run(() =>
+        {
+            var column = BubbleContent(BubbleView.Build(Item(link: "https://x.cn/a"), Style, null, _ => { }));
+            var line = column.Children.OfType<StackPanel>().Single();
+            var icon = (TextBlock)line.Children[0];
+            var label = (TextBlock)line.Children[1];
+            // 彩符 🔗 染不上 accent、深色底上还会回退成灰字；换成 MDL2 字形后颜色跟着这一行走
+            Assert.Equal(BubbleView.LinkGlyph, icon.Text);
+            Assert.Equal(Style.Icon.Source, icon.FontFamily.Source);
+            Assert.Same(Style.Link, icon.Foreground);
+            Assert.Same(Style.Link, label.Foreground);
         });
     }
 

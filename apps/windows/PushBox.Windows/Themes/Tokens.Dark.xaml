@@ -10,6 +10,9 @@
     <SolidColorBrush x:Key="Bg.Bubble.In" Color="#2A2A2C" />
     <!-- 代码底比气泡底亮一档：深色下"浮起来"的方向仍是变亮，和浅色那份正好相反 -->
     <SolidColorBrush x:Key="Bg.Code" Color="#3A3A3E" />
+    <!-- 气泡描边：深色下"浮起来"的方向是变亮，所以它比气泡底浅一档（原来是 20 透明度的黑，
+         压在这层深底上等于没画） -->
+    <SolidColorBrush x:Key="Bg.Bubble.Border" Color="#3C3C3E" />
     <SolidColorBrush x:Key="Bg.SenderList" Color="#1E1E1E" />
     <SolidColorBrush x:Key="Bg.Selected" Color="#2E2E2E" />
     <SolidColorBrush x:Key="Bg.AccentTint" Color="#223B2C" />

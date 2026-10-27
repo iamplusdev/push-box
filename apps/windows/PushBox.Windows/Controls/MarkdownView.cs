@@ -17,11 +17,12 @@ namespace PushBox.Windows.Controls;
 /// 两支 level 色也在这儿（<see cref="LevelError"/> / <see cref="LevelWarning"/>）：气泡左侧那根竖条
 /// 认的是 <c>AccentKey</c> 这个**键名**，把键名翻译成颜色是渲染层的事，模型因此不碰画刷。
 /// <see cref="Code"/> 单独一支而不是复用 <see cref="BlockBackground"/>：后者就是气泡自己的底，
-/// 拿它给行内码/代码块铺底等于没画（2026-10-26 前的实际症状）。
+/// 拿它给行内码/代码块铺底等于没画（2026-10-26 前的实际症状）。<see cref="BubbleBorder"/> 不借
+/// <c>Divider</c>（比它更弱，只够勾轮廓），<see cref="Icon"/> 是动作行那颗字形用的字体族。
 /// </summary>
-public sealed record MarkdownStyle(Brush Text, Brush Muted, Brush BlockBackground, Brush Code, Brush Bar,
-    Brush Link, Brush Highlight, Brush BadgeBackground, Brush BadgeText,
-    Brush LevelError, Brush LevelWarning, FontFamily Body, FontFamily Monospace)
+public sealed record MarkdownStyle(Brush Text, Brush Muted, Brush BlockBackground, Brush BubbleBorder, Brush Code,
+    Brush Bar, Brush Link, Brush Highlight, Brush BadgeBackground, Brush BadgeText,
+    Brush LevelError, Brush LevelWarning, FontFamily Body, FontFamily Monospace, FontFamily Icon)
 {
     /// <summary>
     /// 围栏代码块右上角那颗"复制"要交出去的那一段（就是代码原文，不是整条消息）；null = 这棵树里不给这颗按钮。
@@ -56,17 +57,20 @@ public sealed record MarkdownStyle(Brush Text, Brush Muted, Brush BlockBackgroun
     public const double ListIndent = 8;
 
     public static MarkdownStyle FromResources() => new(
-        Brush("Fg.Primary"), Brush("Fg.Secondary"), Brush("Bg.Bubble.In"), Brush("Bg.Code"), Brush("Divider"),
+        Brush("Fg.Primary"), Brush("Fg.Secondary"), Brush("Bg.Bubble.In"), Brush("Bg.Bubble.Border"),
+        Brush("Bg.Code"), Brush("Divider"),
         Brush("Accent"), Brush("Level.Highlight"), Brush("Bg.AccentTint"), Brush("Accent"),
         Brush("Level.Error"), Brush("Level.Warning"),
-        Font("Font.UI"), Font("Font.Code"));
+        Font("Font.UI", "Segoe UI, Microsoft YaHei UI"), Font("Font.Code", "Consolas, Microsoft YaHei UI"),
+        Font("Font.Icon", "Segoe MDL2 Assets"));
 
     private static Brush Brush(string key) =>
         Application.Current?.TryFindResource(key) as Brush ?? Brushes.Gray;
 
-    // 字体族也走 token：窗口级那一份与这里的正文/等宽本来是同一个值写了两遍，改一处就会分叉
-    private static FontFamily Font(string key) =>
-        Application.Current?.TryFindResource(key) as FontFamily ?? new FontFamily("Segoe UI, Microsoft YaHei UI");
+    // 字体族也走 token：窗口级那一份与这里的正文/等宽本来是同一个值写了两遍，改一处就会分叉。
+    // 兜底值逐个写：字形字体与正文字体不能互为兜底，资源缺失时图标会变成豆腐块
+    private static FontFamily Font(string key, string fallback) =>
+        Application.Current?.TryFindResource(key) as FontFamily ?? new FontFamily(fallback);
 }
 
 /// <summary>

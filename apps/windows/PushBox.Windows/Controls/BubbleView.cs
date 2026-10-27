@@ -35,6 +35,9 @@ public static class BubbleView
     public const double BubblePadY = 10;
     public const double BubbleRadius = 8;
 
+    /// <summary>Segoe MDL2 Assets 的 Link 字形（E71B），"打开链接/展开全文"那一行用。</summary>
+    public const string LinkGlyph = "\uE71B";
+
     /// <summary>
     /// <paramref name="media"/> 由窗口那边给（只有窗口有 <see cref="MediaLoader"/> 和设备身份），
     /// 渲染层因此能在没有服务端、没有身份的 STA 用例里被完整断言。
@@ -153,7 +156,7 @@ public static class BubbleView
         row.Children.Add(new Border
         {
             Background = style.BlockBackground,
-            BorderBrush = new SolidColorBrush(Color.FromArgb(20, 0, 0, 0)), // 微弱边框
+            BorderBrush = style.BubbleBorder,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(BubbleRadius),
             Padding = new Thickness(BubblePadX, BubblePadY, BubblePadX, BubblePadY),
@@ -165,12 +168,12 @@ public static class BubbleView
 
         if (expand is not null && item.ExpandLabel is { Length: > 0 } expandLabel)
         {
-            column.Children.Add(ActionLine(expandLabel, style.Link, () => expand(item.MsgId)));
+            column.Children.Add(ActionLine(expandLabel, style, () => expand(item.MsgId)));
         }
 
         if (openLink is not null && item.LinkUrl is { Length: > 0 } target)
         {
-            column.Children.Add(ActionLine("打开链接", style.Link, () => openLink(target)));
+            column.Children.Add(ActionLine("打开链接", style, () => openLink(target)));
         }
 
         // 气泡主体放在第一行
@@ -198,8 +201,9 @@ public static class BubbleView
     /// 气泡下面那一行可点的小动作（"打开链接" / "展开全文"）：改为带图标的小标签样式。
     /// 两行共用一件东西而不是各写一遍，是因为它们必须长得一样——Android 那边也是同一个 TextButton 样式。
     /// </summary>
-    private static FrameworkElement ActionLine(string text, Brush accent, Action run)
+    private static FrameworkElement ActionLine(string text, MarkdownStyle style, Action run)
     {
+        var accent = style.Link;
         // 使用 StackPanel 横向排列图标和文字
         var panel = new StackPanel
         {
@@ -208,11 +212,14 @@ public static class BubbleView
             Cursor = Cursors.Hand
         };
 
-        // 链接图标（小箭头）
+        // 链接图标：Segoe MDL2 的 E71B。彩符 🔗 染不上 accent（在深色底上还会回退成灰字），
+        // 换成字形后颜色跟着那一行走
         var icon = new TextBlock
         {
-            Text = "🔗",
+            Text = LinkGlyph,
+            FontFamily = style.Icon,
             FontSize = MarkdownStyle.LabelSize,
+            Foreground = accent,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 4, 0)
         };
@@ -521,6 +528,7 @@ public static class MediaViewer
 {
     public static void Show(Func<Task<MediaAsset>> load, MarkdownStyle style)
     {
+        // 遮罩刻意不走 token：看图时它盖住两套色板，深浅灰底上都是同一层深色，跟主题无关
         var host = new Grid { Background = new SolidColorBrush(Color.FromArgb(0xF2, 0x14, 0x14, 0x14)) };
         var hint = new TextBlock
         {

@@ -12,6 +12,9 @@
     <!-- 行内码与代码块的底：必须和气泡底分开一档，否则等宽字落在同色底上等于没画
          （Android 那边是白气泡配 #EEEEEE 的 surfaceVariant；PC 的气泡本身已经比白深，所以再往下压一档） -->
     <SolidColorBrush x:Key="Bg.Code" Color="#D8D8DC" />
+    <!-- 气泡那 1px 描边：气泡底与页面底都是灰，"微弱"到和底同色时相邻气泡会糊成一片。
+         比 Divider 浅一档，只够勾出轮廓而不抢正文 -->
+    <SolidColorBrush x:Key="Bg.Bubble.Border" Color="#D6D6D8" />
     <SolidColorBrush x:Key="Bg.SenderList" Color="#EEEFF0" />
     <!-- 会话行选中底：比列表底深一档的灰（微信 PC 那档），不铺 accent——整行染绿太吵 -->
     <SolidColorBrush x:Key="Bg.Selected" Color="#E2E2E2" />

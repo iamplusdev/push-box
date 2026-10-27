@@ -62,38 +62,7 @@
         <!-- 按钮不再各窗自养一份：主/次两键在 token 字典里（Button.Primary / Button.Secondary），
              三态与换肤都在那边，这一窗只挂 DynamicResource -->
 
-        <!-- 复选框：圆角小方井，勾选填 accent 打白勾 -->
-        <Style x:Key="AccentCheck" TargetType="CheckBox">
-            <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
-            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
-            <Setter Property="FontFamily" Value="{DynamicResource Font.UI}" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="CheckBox">
-                        <StackPanel Orientation="Horizontal">
-                            <Grid Width="16" Height="16" VerticalAlignment="Center">
-                                <Border x:Name="Box" Background="{DynamicResource Bg.Elevated}"
-                                        BorderBrush="{DynamicResource Divider}" BorderThickness="1"
-                                        CornerRadius="4" SnapsToDevicePixels="True" />
-                                <Path x:Name="Check" Data="M3.5,8 L6.5,11 L12.5,4.5"
-                                      Stroke="{DynamicResource OnAccent}"
-                                      StrokeThickness="2" Visibility="Collapsed" />
-                            </Grid>
-                            <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center" />
-                        </StackPanel>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Box" Property="Background" Value="{DynamicResource Accent}" />
-                                <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource Accent}" />
-                                <Setter TargetName="Check" Property="Visibility" Value="Visible" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        <!-- 复选框不再在这一窗自养：App.xaml 里那份隐式样式是全控制台共用的 -->
 
         <!-- 忙指示：4px 圆角轨道 + 一段 accent 来回扫 -->
         <Style x:Key="ThinProgress" TargetType="ProgressBar">
@@ -161,7 +130,7 @@
                      HorizontalAlignment="Left" Width="120" Text="7404"
                      ToolTip="默认 7404，留空使用默认端口" />
 
-            <CheckBox x:Name="UseHttpsCheckbox" Style="{StaticResource AccentCheck}"
+            <CheckBox x:Name="UseHttpsCheckbox"
                       Content="使用 HTTPS（SSL/TLS）" Margin="0,0,0,10" />
             <TextBlock x:Name="GeneratedUrlBox" Style="{DynamicResource Text.Code}"
                        Foreground="{DynamicResource Fg.Secondary}" TextWrapping="Wrap"

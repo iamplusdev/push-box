@@ -72,6 +72,8 @@ public class ThemeTest
         ["Bg.Bubble.In"] = "#E8E8EA",
         // 行内码与代码块的底：比气泡底深一档，同色时"码片"就没有边界
         ["Bg.Code"] = "#D8D8DC",
+        // 气泡描边：比 Divider 浅一档，只够勾出轮廓
+        ["Bg.Bubble.Border"] = "#D6D6D8",
         ["Bg.SenderList"] = "#EEEFF0",
         // 选中行是比列表底深一档的灰（微信 PC 那档），整行染绿太吵；accent 只留在 3px 竖条上
         ["Bg.Selected"] = "#E2E2E2",
@@ -113,6 +115,8 @@ public class ThemeTest
         ["Bg.Bubble.In"] = "#2A2A2C",
         // 深色下代码底反而比气泡亮一档：抬升方向与浅色相反
         ["Bg.Code"] = "#3A3A3E",
+        // 气泡描边同理走"变亮"这一侧
+        ["Bg.Bubble.Border"] = "#3C3C3E",
         ["Bg.SenderList"] = "#1E1E1E",
         ["Bg.Selected"] = "#2E2E2E",
         ["Bg.AccentTint"] = "#223B2C",
@@ -359,6 +363,35 @@ public class ThemeTest
         Assert.Contains("IsKeyboardFocusWithin", combo);
         var item = Template("ComboBoxItem");
         Assert.Contains("IsHighlighted", item);
+
+        // 两处列表（频道/设备）共用这一份：条目是卡片，悬停与选中都走 token，不再是系统蓝条
+        var list = Template("ListBox");
+        Assert.Contains("ItemsPresenter", list);
+        var row = Template("ListBoxItem");
+        Assert.Contains("IsMouseOver", row);
+        Assert.Contains("IsSelected", row);
+        Assert.Contains("Bg.AccentTint", row);
+        Assert.Contains("Bg.Elevated", row);
+    }
+
+    /// <summary>
+    /// 复选框与滚动条一样是整个控制台共用的隐式样式：默认模板在深色下是系统白底 + 系统蓝勾。
+    /// 首启原来那份 <c>AccentCheck</c> 已收进 App.xaml，这里钉"它确实在 App 级、且带悬停与勾选两态"。
+    /// </summary>
+    [Fact]
+    public void TheCheckboxIsThemedOnceForTheWholeApp()
+    {
+        var doc = XDocument.Parse(TokenFiles.Text("App.xaml"));
+        var style = doc.Descendants().Single(e => e.Name.LocalName == "Style"
+            && (string?)e.Attribute("TargetType") == "CheckBox" && e.Attribute(X + "Key") is null);
+        var text = style.ToString();
+        Assert.Contains("IsMouseOver", text);
+        Assert.Contains("IsChecked", text);
+        Assert.Contains("OnAccent", text);
+
+        // 各窗不再自养第二份勾选框模板
+        Assert.DoesNotContain("AccentCheck", TokenFiles.Text("Views/FirstLaunchWindow.xaml"));
+        Assert.DoesNotContain("TargetType=\"CheckBox\"", TokenFiles.Text("Views/SettingsWindow.xaml"));
     }
 
     /// <summary>
