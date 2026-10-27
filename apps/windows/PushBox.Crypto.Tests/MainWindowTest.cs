@@ -279,6 +279,68 @@ public sealed class MainWindowTest : IDisposable
         Assert.True(failure is null, failure?.ToString());
     }
 
+    /// <summary>
+    /// 时间线是虚拟化的：这一屏 50 条历史只排看得见的那几行。
+    /// 判据只能落在"生成出来的行数"上——<c>Timeline.Items</c> 是全量的（条目对象本来就在），
+    /// 而且虚拟化这条路最容易被"外面再套一个 ScrollViewer"悄悄弄失效，那种写法下面板照样全量测量。
+    /// </summary>
+    [Fact]
+    public void TheTimelineOnlyLaysOutWhatIsOnScreen()
+    {
+        for (var seq = 1; seq <= 200; seq++) _db.ApplyMessage(Msg(seq, "m" + seq, Grafana));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new MainWindow(_db, _identities,
+                    new ReadReporter(_db, _identities, Offline()),
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader())
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = -10000,
+                    Top = -10000,
+                    ShowActivated = false
+                };
+                window.Show();
+                Sta.PumpUntil(() => window.IsLoaded);
+                window.OpenConversation(Channel, Grafana);
+                // 落底要等布局那一轮走完：虚拟化面板的 extent 是滚到最后一行生成出来才定下的
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0
+                                    && window.TimelineFromBottomProbe <= 1);
+
+                var total = window.TimelineItemCountProbe;
+                var realized = window.TimelineRealizedProbe;
+                Assert.True(total > 40, $"这一屏至少有 40 条可断，实际 {total}");
+                // 打开一屏只取一页：首屏布局时偏移还在 0，那不是"用户翻到顶了"，不该顺手再翻一页
+                Assert.True(total <= 60, $"打开会话连着翻了两页，实际 {total} 条");
+                Assert.True(realized < total,
+                    $"时间线把 {total} 条全排了（虚拟化没生效）");
+                Assert.True(realized <= 40, $"看得见的行数不该是 {realized}");
+                // 打开会话仍然从最新一条看起
+                Assert.True(window.TimelineFromBottomProbe <= 1,
+                    $"没贴底：离底还有 {window.TimelineFromBottomProbe}");
+
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "虚拟化用例没有按时跑完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
     /// <summary>网络这条支路一律当场失败：这里测的是骨架，不是任何一次请求。</summary>
     private static DeviceClient Offline() => new(new HttpClient(new ThrowingHandler(
         new HttpRequestException("骨架用例不该发请求"))));

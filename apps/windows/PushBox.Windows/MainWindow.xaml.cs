@@ -40,6 +40,10 @@ public partial class MainWindow : Window
     /// <summary>刚往上翻出一页历史：下一次布局要把多出来的那段高度补回滚动位置。</summary>
     private bool _restoringScroll;
 
+    /// <summary>这一屏的首次布局已经落到底了。落底之前不许按"到顶了"翻页——
+    /// 虚拟化面板刚开始排的时候偏移还在 0，那不是用户在翻历史，是这一屏还没摆好。</summary>
+    private bool _timelineSettled;
+
     /// <summary>没贴在底部时落进来的新消息数（§9.3 的胶囊），回到底部就清零。</summary>
     private int _newBelow;
 
@@ -174,6 +178,32 @@ public partial class MainWindow : Window
     public string TimelineEmptyTitleProbe => TimelineEmptyTitle.Text;
 
     public Visibility TimelineRetryProbe => TimelineRetryButton.Visibility;
+
+    /// <summary>这一屏时间线里一共多少条（消息 + 日期分隔）。</summary>
+    public int TimelineItemCountProbe => Timeline.Items.Count;
+
+    /// <summary>
+    /// 面板真正生成出来的行数：虚拟化生效时它只跟视口有关、不跟总数走。
+    /// 未生成的那一头 <see cref="ItemContainerGenerator.ContainerFromIndex"/> 给 null，是外面唯一看得见的判据。
+    /// </summary>
+    public int TimelineRealizedProbe
+    {
+        get
+        {
+            var realized = 0;
+            for (var i = 0; i < Timeline.Items.Count; i++)
+            {
+                if (Timeline.ItemContainerGenerator.ContainerFromIndex(i) is not null) realized++;
+            }
+
+            return realized;
+        }
+    }
+
+    /// <summary>离底还有多远（像素）：0 表示正贴着最新一条。</summary>
+    public double TimelineFromBottomProbe => TimelineScroll is { } scroller
+        ? scroller.ScrollableHeight - scroller.VerticalOffset
+        : 0;
 
     public Visibility NoConversationProbe => NoConversationBar.Visibility;
     public Visibility BackButtonProbe => BackButton.Visibility;
@@ -457,10 +487,8 @@ public partial class MainWindow : Window
     {
         _model.ExitSearch();
         _model.Open(channelNo, senderId);
-        _stuckToBottom = true;
-        _newBelow = 0;
         Refresh();
-        _ = ScrollToBottomAsync();
+        SnapToBottom();
     }
 
     /// <summary>画刷是 <c>Application.Resources</c> 那两份 token 字典的快照，所以换主题时要作废重建。</summary>
@@ -486,7 +514,10 @@ public partial class MainWindow : Window
         _wired = true;
         ConversationList.SelectionChanged += OnConversationSelected;
         BackButton.Click += (_, _) => _model.CloseConversation();
-        TimelineScroll.ScrollChanged += OnTimelineScrollChanged;
+        // 滚动条在 ItemsControl 的模板里（虚拟化要求它自己就是滚动内容的宿主），所以用冒泡的事件接：
+        // 直接订阅哪个实例都行，ScrollChanged 会从模板里那个 ScrollViewer 冒上来
+        Timeline.AddHandler(ScrollViewer.ScrollChangedEvent,
+            new ScrollChangedEventHandler(OnTimelineScrollChanged));
         SizeChanged += (_, _) => ApplyPaneWidth();
         PreviewKeyDown += OnPreviewKeyDown;
 
@@ -637,9 +668,7 @@ public partial class MainWindow : Window
         if (_applyingSelection || ConversationList.SelectedItem is not ConversationItem item) return;
         _model.Open(item.ChannelNo, item.SenderId);
         // 换会话就是新的一屏，从底部看起：上一屏攒的"新消息"数带走没意义
-        _stuckToBottom = true;
-        _newBelow = 0;
-        _ = ScrollToBottomAsync();
+        SnapToBottom();
     }
 
     // ---- 引擎状态 ---------------------------------------------------------------------------------
@@ -676,27 +705,40 @@ public partial class MainWindow : Window
     }
 
     /// <summary>点胶囊：回到底部，顺带清掉攒下的计数。</summary>
-    private void OnNewBelowClicked(object sender, MouseButtonEventArgs e)
-    {
-        _stuckToBottom = true;
-        _newBelow = 0;
-        PaintNewBelow();
-        _ = ScrollToBottomAsync();
-    }
+    private void OnNewBelowClicked(object sender, MouseButtonEventArgs e) => SnapToBottom();
 
     // ---- 滚动与栏宽 -------------------------------------------------------------------------------
 
+    private ScrollViewer? _scroller;
+
+    /// <summary>
+    /// 时间线那根滚动条。虚拟化要求 ScrollViewer 就是 <see cref="ItemsControl"/> 的宿主，
+    /// 于是它被搬进了控件模板，只能等模板套上再按名字取；还没布局过时给 null，几处调用都只是"没得滚"。
+    /// </summary>
+    private ScrollViewer? TimelineScroll
+    {
+        get
+        {
+            if (_scroller is not null) return _scroller;
+            Timeline.ApplyTemplate();
+            return _scroller = Timeline.Template?.FindName("TimelineScroll", Timeline) as ScrollViewer;
+        }
+    }
+
     private void OnTimelineScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        var scroller = TimelineScroll;
+        if (scroller is null) return;
+
         // 往上翻历史刚补了一页：把新长出来的那段高度补回偏移，眼睛盯着的那条消息才不会被推走
         if (_restoringScroll && e.ExtentHeightChange > 0)
         {
             _restoringScroll = false;
-            TimelineScroll.ScrollToVerticalOffset(e.ExtentHeightChange);
+            scroller.ScrollToVerticalOffset(scroller.VerticalOffset + e.ExtentHeightChange);
             return;
         }
 
-        _stuckToBottom = TimelineScroll.ScrollableHeight - TimelineScroll.VerticalOffset <= 1;
+        _stuckToBottom = scroller.ScrollableHeight - scroller.VerticalOffset <= 1;
         // 用户自己滚回到底了：胶囊那句"3 条新消息"已经过时，屏幕上正看着的就是最新的一条
         if (_stuckToBottom && _newBelow > 0)
         {
@@ -704,18 +746,41 @@ public partial class MainWindow : Window
             PaintNewBelow();
         }
 
+        // 这一屏还没摆好就先别翻页：虚拟化面板在首次布局时偏移本来就是 0，那不是"用户翻到顶了"
+        if (!_timelineSettled) return;
         if (e.VerticalOffset > 0 || e.ExtentHeight <= e.ViewportHeight) return;
         if (!_model.LoadEarlier()) return;
         _restoringScroll = true;
     }
 
-    private Task ScrollToBottomAsync()
+    /// <summary>换一屏（打开会话、切会话、点胶囊）：回到最新一条，上一屏的"新消息"数不带过来。</summary>
+    private void SnapToBottom()
     {
-        // 内容是一棵树，Measure 要等这一轮布局走完才有效，所以排进 Render 而不是当场滚
-        return Dispatcher.BeginInvoke(new Action(() =>
+        _stuckToBottom = true;
+        _newBelow = 0;
+        _timelineSettled = false;
+        PaintNewBelow();
+        _ = ScrollToBottomAsync(force: true);
+    }
+
+    /// <summary>
+    /// 滚到底。<paramref name="force"/> 是"换了一屏、必须落底"；不带它时只在用户本来就贴在底部才跟。
+    /// 必须等布局走完：虚拟化面板在排之前连 extent 都没有，当场滚只会滚到一个还不存在的底。
+    /// 而它的 extent 又是估出来的——真把最后几行生成出来高度还会再变一次，所以落底之后要再补一次。
+    /// </summary>
+    private async Task ScrollToBottomAsync(bool force = false)
+    {
+        await Dispatcher.Yield(DispatcherPriority.Loaded);
+        var scroller = TimelineScroll;
+        if (scroller is null) return;
+        if (!force && !_stuckToBottom) return;
+        for (var attempt = 0; attempt < 2; attempt++)
         {
-            if (_stuckToBottom) TimelineScroll.ScrollToEnd();
-        }), DispatcherPriority.Render).Task;
+            scroller.ScrollToEnd();
+            await Dispatcher.Yield(DispatcherPriority.Loaded);
+        }
+
+        _timelineSettled = true;
     }
 
     /// <summary>§8.1 的窄窗口退化单栏：判定与数值都由模型算（<see cref="MainModel.PaneLayoutFor"/>），

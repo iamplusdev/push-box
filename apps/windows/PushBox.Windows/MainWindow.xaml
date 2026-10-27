@@ -272,38 +272,51 @@
                                ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
                 </Grid>
 
-                <ScrollViewer Grid.Row="1" x:Name="TimelineScroll" 
-                              controls:ScrollReveal.Attach="True"
-                              VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Disabled"
-                              Padding="12">
-                    <Grid>
-                        <ItemsControl x:Name="Timeline" MaxWidth="900" HorizontalAlignment="Left">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <StackPanel Orientation="Vertical" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemContainerStyle>
-                                <Style TargetType="FrameworkElement">
-                                    <Setter Property="Margin" Value="0,0,0,8" />
-                                </Style>
-                            </ItemsControl.ItemContainerStyle>
-                        </ItemsControl>
-                        <!-- 空态三句：正在取 / 确实没有 / 没取回来。回放没结束之前不许说"还没有消息"——
-                             那台机器可能只是还没取回来。失败时底下那颗按钮是唯一能做的事 -->
-                        <StackPanel x:Name="TimelineEmpty" Visibility="Collapsed"
-                                    VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,48,0,0">
-                            <TextBlock x:Name="TimelineEmptyTitle" Style="{DynamicResource Text.Small}"
-                                       HorizontalAlignment="Center" TextWrapping="Wrap"
-                                       Foreground="{DynamicResource Fg.Secondary}" />
-                            <Button x:Name="TimelineRetryButton" Content="重试" Visibility="Collapsed"
-                                    Margin="0,12,0,0" HorizontalAlignment="Center"
-                                    Style="{DynamicResource Button.Secondary}"
-                                    Click="OnTimelineRetry" />
-                        </StackPanel>
-                    </Grid>
-                </ScrollViewer>
+                <Grid Grid.Row="1">
+                    <!-- 虚拟化：滚动条必须长在 ItemsControl 自己的模板里。外面再套一个 ScrollViewer 的话，
+                         面板会被按无限高测量，虚拟化整个失效——几千条历史就会在每次切会话时全量排版一遍 -->
+                    <ItemsControl x:Name="Timeline" MaxWidth="900"
+                                  controls:ScrollReveal.Attach="True"
+                                  VirtualizingPanel.IsVirtualizing="True"
+                                  VirtualizingPanel.VirtualizationMode="Recycling"
+                                  VirtualizingPanel.ScrollUnit="Pixel">
+                        <ItemsControl.Template>
+                            <ControlTemplate TargetType="ItemsControl">
+                                <ScrollViewer x:Name="TimelineScroll"
+                                              CanContentScroll="True"
+                                              Padding="12"
+                                              VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsPresenter MaxWidth="{TemplateBinding MaxWidth}"
+                                                    HorizontalAlignment="Left" />
+                                </ScrollViewer>
+                            </ControlTemplate>
+                        </ItemsControl.Template>
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <VirtualizingStackPanel Orientation="Vertical" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemContainerStyle>
+                            <Style TargetType="FrameworkElement">
+                                <Setter Property="Margin" Value="0,0,0,8" />
+                            </Style>
+                        </ItemsControl.ItemContainerStyle>
+                    </ItemsControl>
+
+                    <!-- 空态三句：正在取 / 确实没有 / 没取回来。回放没结束之前不许说"还没有消息"——
+                         那台机器可能只是还没取回来。失败时底下那颗按钮是唯一能做的事 -->
+                    <StackPanel x:Name="TimelineEmpty" Visibility="Collapsed"
+                                VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,48,0,0">
+                        <TextBlock x:Name="TimelineEmptyTitle" Style="{DynamicResource Text.Small}"
+                                   HorizontalAlignment="Center" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource Fg.Secondary}" />
+                        <Button x:Name="TimelineRetryButton" Content="重试" Visibility="Collapsed"
+                                Margin="0,12,0,0" HorizontalAlignment="Center"
+                                Style="{DynamicResource Button.Secondary}"
+                                Click="OnTimelineRetry" />
+                    </StackPanel>
+                </Grid>
 
                 <!-- §9.3 空会话/未选中：插画 + 文案。这一块是**要**居中的（它不是消息列表，是一句提示） -->
                 <Border Grid.Row="1" x:Name="NoConversationBar" Background="{DynamicResource Bg.Page}">
