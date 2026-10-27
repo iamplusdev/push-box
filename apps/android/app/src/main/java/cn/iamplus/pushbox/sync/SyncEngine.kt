@@ -4,6 +4,7 @@ import cn.iamplus.pushbox.data.Identity
 import cn.iamplus.pushbox.data.IdentityStore
 import cn.iamplus.pushbox.data.MessageRow
 import cn.iamplus.pushbox.data.PushBoxDao
+import cn.iamplus.pushbox.data.ViewedConversation
 import cn.iamplus.pushbox.net.MessageFrame
 import cn.iamplus.pushbox.net.MediaReadyFrame
 import cn.iamplus.pushbox.net.toSlotBlob
@@ -27,6 +28,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * §6.2 接收 → 入库 → 通知的唯一入口，并持有重连状态机（§7.2：1s→2s→…→60s）。
@@ -189,19 +192,55 @@ class SyncEngine(
         // 帧里带了 sender_avatar＝服务端已转存好这人的头像，本机那条 24h 的 404 结论
         // 当场作废；不这么做的代价是"事后补的头像"要等标记过期才可能出现
         if (message.senderAvatar != null) AvatarCache.invalidate(message.senderId)
+        // 人正盯着这条会话（前台 + 详情页开着）：这条当场就算读过。
+        // 照常入库，但不涨红点、不弹通知——用户已经看见屏幕上的字了，
+        // 再在通知栏报一遍同一条，等于自己跟自己抢注意力。
+        val viewing = ViewedConversation.isViewing(message.channelNo, message.senderId)
         // 通知只看"这条是不是首次入库"：补拉与实时下发是同一消息的两个副本，
         // msg_id 去重失败就不通知，这正是验收②要的"补齐且无重复"
-        if (dao.apply(message.toRow(), message.displayName)) {
+        if (dao.apply(message.toRow(), message.displayName, asRead = viewing)) {
             val cursor = maxOf(dao.lastAppliedSeq() ?: 0L, message.seq)
             store.saveLastSeq(cursor)
+            // 本机当场读了，别的端那头的红点也得跟着灭
+            if (viewing) reportViewedRead(message.channelNo, message.senderId, message.seq)
             // 免打扰（§7.3）：照常入库，只是不弹通知；静音状态来自会话行
-            if (allowNotify && message.notify &&
+            if (allowNotify && !viewing && message.notify &&
                 dao.isMuted(message.channelNo, message.senderId) != true) {
                 notifier.post(message,
                     lockPrivate = dao.isLockPrivate(message.channelNo, message.senderId) == true)
             }
         }
         state.value = State.Online(message.seq)
+    }
+
+    /** 后台排队的已读游标：[Pair] 是 (channel_no, sender_id)，值是待报的最大 seq。 */
+    private val pendingReads = LinkedHashMap<Pair<String, String>, Long>()
+    private val pendingReadsLock = Mutex()
+    private var readFlush: Job? = null
+
+    /**
+     * 正在看的会话逐条上报会把活跃频道变成一秒一个 PUT，所以在内存里攒：
+     * 一个安静期过后只把每个会话最大的 seq 报一次。进程被杀丢掉未发的整批没关系，
+     * 下次进这条会话时详情页自己还会再报一次。
+     */
+    private suspend fun reportViewedRead(channelNo: String, senderId: String, seq: Long) {
+        pendingReadsLock.withLock {
+            val key = channelNo to senderId
+            if (seq > (pendingReads[key] ?: 0L)) pendingReads[key] = seq
+            if (readFlush?.isActive == true) return
+            readFlush = scope.launch {
+                delay(READ_REPORT_DELAY_MILLIS)
+                val batch = pendingReadsLock.withLock {
+                    pendingReads.toMap().also { pendingReads.clear() }
+                }
+                val live = store.load() ?: return@launch
+                runCatching {
+                    api(live).reportRead(live, batch.map { (key, seq) ->
+                        PushBoxApi.ReadEntry(key.first, key.second, seq)
+                    })
+                }
+            }
+        }
     }
 
     /** 验收③：重装后凭恢复码 join，再用 after_seq=0 分页把历史全部拉回来。 */
@@ -326,5 +365,7 @@ class SyncEngine(
         private const val REASON_CHANNEL_NO_RESET = "channel_no_reset"
         /** 连着几个心跳没收到对面任何帧就判链路已死。 */
         private const val STALE_HEARTBEATS = 2L
+        /** 正在看的会话里连来几条消息，等这么久只报一次已读游标。 */
+        private const val READ_REPORT_DELAY_MILLIS = 1_000L
     }
 }

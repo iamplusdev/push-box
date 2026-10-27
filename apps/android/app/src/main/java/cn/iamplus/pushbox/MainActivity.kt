@@ -164,6 +164,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import cn.iamplus.pushbox.data.ConversationRow
 import cn.iamplus.pushbox.data.Identity
+import cn.iamplus.pushbox.data.ViewedConversation
 import cn.iamplus.pushbox.notify.Notifier
 import cn.iamplus.pushbox.ui.MediaGrid
 import cn.iamplus.pushbox.ui.AvatarCache
@@ -275,11 +276,25 @@ class MainActivity : FragmentActivity() {
 private fun AppLockGate(app: App, content: @Composable () -> Unit) {
     val owner = LocalLifecycleOwner.current
     DisposableEffect(owner) {
+        val lifecycle = owner.lifecycle
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) app.relock()
+            when (event) {
+                Lifecycle.Event.ON_START -> ViewedConversation.setForeground(true)
+                Lifecycle.Event.ON_STOP -> {
+                    // 人已经切走了：正在看的会话不再算"当场读过"，消息该进通知栏进通知栏
+                    ViewedConversation.setForeground(false)
+                    app.relock()
+                }
+                else -> {}
+            }
         }
-        owner.lifecycle.addObserver(observer)
-        onDispose { owner.lifecycle.removeObserver(observer) }
+        lifecycle.addObserver(observer)
+        // 观察者是组合时才挂上的，冷启那次 ON_START 早就过去了，按当前状态补一次
+        ViewedConversation.setForeground(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+        onDispose {
+            lifecycle.removeObserver(observer)
+            ViewedConversation.setForeground(false)
+        }
     }
     content()
 }
@@ -1312,6 +1327,13 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
         app.dao.messagesFlow(conversation.channelNo, conversation.senderId, query)
     }.collectAsState(initial = null)
     val rows = rowsState.orEmpty()
+
+    // 告诉收消息那条链路"这一屏正开着"：它据此不弹通知、不给这条涨红点。
+    // 键只用两把 id，行本身每来一条消息就是一个新对象，挂上去会来回重注册。
+    DisposableEffect(conversation.channelNo, conversation.senderId) {
+        ViewedConversation.open(conversation.channelNo, conversation.senderId)
+        onDispose { ViewedConversation.close(conversation.channelNo, conversation.senderId) }
+    }
 
     LaunchedEffect(conversation) {
         withContext(Dispatchers.IO) {

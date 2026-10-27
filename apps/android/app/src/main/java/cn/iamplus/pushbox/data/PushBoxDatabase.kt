@@ -164,19 +164,23 @@ interface PushBoxDao {
     @Query("UPDATE sync_state SET last_applied_seq = :seq, last_sync_at = :now WHERE id = 1")
     suspend fun updateCursor(seq: Long, now: Long)
 
+    /**
+     * [unreadDelta] 允许为 0：消息落到"正打开着的会话"里时那条已经当场读掉了，
+     * 红点不该先涨一格再被清掉（用户会看见闪一下）。
+     */
     @Query("""
         INSERT INTO conversations (channel_no, sender_id, name, pinned, muted, lock_private,
                                    unread_count, last_seq, last_msg_at, last_summary_cached)
-        VALUES (:channelNo, :senderId, :name, 0, 0, 0, 1, :seq, :createdAt, :summary)
+        VALUES (:channelNo, :senderId, :name, 0, 0, 0, :unreadDelta, :seq, :createdAt, :summary)
         ON CONFLICT(channel_no, sender_id) DO UPDATE SET
           name = excluded.name,
-          unread_count = unread_count + 1,
+          unread_count = unread_count + :unreadDelta,
           last_seq = MAX(last_seq, excluded.last_seq),
           last_msg_at = excluded.last_msg_at,
           last_summary_cached = excluded.last_summary_cached
     """)
     suspend fun bumpConversation(channelNo: String, senderId: String, name: String, seq: Long,
-        createdAt: Long, summary: String?)
+        createdAt: Long, summary: String?, unreadDelta: Int)
 
     @Query("UPDATE conversations SET unread_count = 0 WHERE channel_no = :channelNo " +
         "AND sender_id = :senderId")
@@ -342,12 +346,15 @@ interface PushBoxDao {
      * 消息、会话行、游标必须同事务：进程在两步之间被杀的话红点数会永久对不上（§6.2）。
      * 返回 false 表示 msg_id 已存在 —— 补拉与实时下发是同一条消息的两个副本（验收②），
      * 调用方据此决定"要不要发通知"，比看 seq 游标更准。
+     *
+     * [asRead]：这条落的会话正开着，入库时就带 read_state=1、且不涨红点。
+     * 先写 0 再补一次 UPDATE 也能对，但界面有一次机会画到那个 1。
      */
     @Transaction
-    suspend fun apply(message: MessageRow, displayName: String): Boolean {
-        if (insertIgnore(message) == 0L) return false
+    suspend fun apply(message: MessageRow, displayName: String, asRead: Boolean = false): Boolean {
+        if (insertIgnore(if (asRead) message.copy(readState = 1) else message) == 0L) return false
         bumpConversation(message.channelNo, message.senderId, displayName, message.seq,
-            message.createdAt, message.summary ?: message.title)
+            message.createdAt, message.summary ?: message.title, unreadDelta = if (asRead) 0 else 1)
         ensureCursor()
         val current = lastAppliedSeq()
         if (current == null || message.seq > current) {
