@@ -35,6 +35,10 @@ public sealed class ClientSettingsTest : IDisposable
         Assert.False(settings.QuietEnabled);
         // 开机自启默认**关**：从 bin\Debug 跑起来的开发实例不该在下次开机时自己爬起来
         Assert.False(settings.AutoStartEnabled);
+        // 几何没记过就是 null，而不是 0：0 会被恢复逻辑当成"用户把窗口停在 (0,0)"
+        Assert.Null(settings.WindowLeft);
+        Assert.Null(settings.ListWidth);
+        Assert.False(settings.WindowMaximized);
     }
 
     [Fact]
@@ -47,7 +51,13 @@ public sealed class ClientSettingsTest : IDisposable
             QuietStartMinute = 23 * 60 + 30,
             QuietEndMinute = 6 * 60 + 15,
             AutoStartEnabled = true,
-            CloseToTray = false
+            CloseToTray = false,
+            WindowLeft = 128.5,
+            WindowTop = -40,
+            WindowWidth = 1080,
+            WindowHeight = 680,
+            ListWidth = 320,
+            WindowMaximized = true
         };
         written.Save(_dir);
 
@@ -90,6 +100,25 @@ public sealed class ClientSettingsTest : IDisposable
         Assert.True(settings.AutoStartEnabled);
         Assert.False(settings.QuietEnabled); // 这一项是字符串 "yes"：读不动就退回默认（默认关）
         Assert.Equal(ClientSettings.DefaultQuietStart, settings.QuietStartMinute);
+    }
+
+    /// <summary>
+    /// 几何那一项读不动时退回 null（"没记过"），而不是 0：0 会被恢复逻辑当成"用户把窗口停在屏幕左上角"，
+    /// 而且 0 宽 0 高会被顶到最小尺寸——一处手改坏的文件不该把窗口形状也改掉。
+    /// </summary>
+    [Fact]
+    public void GeometryThatIsNotANumberReadsAsNeverSaved()
+    {
+        File.WriteAllText(ClientSettings.FilePathIn(_dir),
+            "{\"window_left\":\"left\",\"window_top\":null,\"window_width\":1080," +
+            "\"window_height\":680,\"list_width\":320}");
+
+        var settings = ClientSettings.Load(_dir);
+        Assert.Null(settings.WindowLeft);
+        Assert.Null(settings.WindowTop);
+        // 同一次读取里合法的那几项照常生效：一条坏字段不该把整份几何带走
+        Assert.Equal(1080d, settings.WindowWidth!.Value);
+        Assert.Equal(320d, settings.ListWidth!.Value);
     }
 
     [Theory]

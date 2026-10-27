@@ -271,7 +271,16 @@ public partial class App : Application
 
         var window = new MainWindow(db, identities, reporter,
             new SearchService(db, identities, _client), new DeleteReporter(db, identities, _client, media),
-            media, engine);
+            media, engine, GeometryOf(_settings));
+        window.GeometryChanged += geometry => Update(_settings with
+        {
+            WindowLeft = geometry.Left,
+            WindowTop = geometry.Top,
+            WindowWidth = geometry.Width,
+            WindowHeight = geometry.Height,
+            ListWidth = geometry.ListWidth,
+            WindowMaximized = geometry.Maximized
+        });
         window.Closing += OnWindowClosing;
         window.TrayRefresh += () => RefreshTray(window);
         window.SettingsRequested += OpenSettings;
@@ -299,6 +308,19 @@ public partial class App : Application
                 TaskContinuationOptions.OnlyOnFaulted);
         }
     }
+
+    /// <summary>
+    /// settings.json 里那五个数只有凑齐了才算"记过"：缺一个就整体按没记过处理，
+    /// 由主窗走默认尺寸再夹工作区。分开判会让半份几何拼出一个不存在的窗口。
+    /// </summary>
+    private static WindowGeometry? GeometryOf(ClientSettings settings) =>
+        settings is
+        {
+            WindowLeft: { } left, WindowTop: { } top, WindowWidth: { } width,
+            WindowHeight: { } height, ListWidth: { } list
+        }
+            ? new WindowGeometry(left, top, width, height, list, settings.WindowMaximized)
+            : null;
 
     /// <summary>§8.1：关闭按钮 = 最小化到托盘，可设为退出。这一句就是那个"可设为退出"的分支。</summary>
     private void OnWindowClosing(object? sender, CancelEventArgs e)

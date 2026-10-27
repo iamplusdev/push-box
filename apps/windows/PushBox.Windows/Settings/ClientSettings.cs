@@ -45,6 +45,24 @@ public sealed record ClientSettings
     /// 点"下载并安装"才动手，绝不自动下、自动装。关掉它只是不再主动查，设置里的「检查更新」按钮不受影响。</summary>
     public bool AutoCheckUpdate { get; init; } = true;
 
+    /// <summary>
+    /// 主窗几何（<c>Views.WindowGeometry</c> 的五个数）。用可空是因为"没记过"和"记成 0,0"含义不同：
+    /// 前者该走默认尺寸再夹工作区，后者是用户真的把窗口拖到了左上角。五项要么都有、要么都没有，
+    /// 恢复时缺一项就整体按没记过处理（见 <c>App.GeometryOf</c>）。
+    /// </summary>
+    public double? WindowLeft { get; init; }
+
+    public double? WindowTop { get; init; }
+
+    public double? WindowWidth { get; init; }
+
+    public double? WindowHeight { get; init; }
+
+    /// <summary>会话列表那一栏的宽度：用户拖过手柄就记下来，下次开窗仍是他拖到的值。</summary>
+    public double? ListWidth { get; init; }
+
+    public bool WindowMaximized { get; init; }
+
     public static readonly ClientSettings Defaults = new();
 
     /// <summary>与 pushbox.db / identity.json 同目录（§8.1），测试注入临时目录。</summary>
@@ -91,7 +109,13 @@ public sealed record ClientSettings
             QuietEndMinute = ClampMinute(Int(root, "quiet_end_minute", Defaults.QuietEndMinute)),
             AutoStartEnabled = Bool(root, "auto_start", Defaults.AutoStartEnabled),
             CloseToTray = Bool(root, "close_to_tray", Defaults.CloseToTray),
-            AutoCheckUpdate = Bool(root, "auto_check_update", Defaults.AutoCheckUpdate)
+            AutoCheckUpdate = Bool(root, "auto_check_update", Defaults.AutoCheckUpdate),
+            WindowLeft = Number(root, "window_left"),
+            WindowTop = Number(root, "window_top"),
+            WindowWidth = Number(root, "window_width"),
+            WindowHeight = Number(root, "window_height"),
+            ListWidth = Number(root, "list_width"),
+            WindowMaximized = Bool(root, "window_maximized", Defaults.WindowMaximized)
         };
     }
 
@@ -100,7 +124,7 @@ public sealed record ClientSettings
     {
         var path = FilePathIn(directory);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, JsonSerializer.Serialize(new Dictionary<string, object>
+        File.WriteAllText(path, JsonSerializer.Serialize(new Dictionary<string, object?>
         {
             ["v"] = 1,
             ["notifications_enabled"] = NotificationsEnabled,
@@ -109,7 +133,14 @@ public sealed record ClientSettings
             ["quiet_end_minute"] = QuietEndMinute,
             ["auto_start"] = AutoStartEnabled,
             ["close_to_tray"] = CloseToTray,
-            ["auto_check_update"] = AutoCheckUpdate
+            ["auto_check_update"] = AutoCheckUpdate,
+            // 没记过时写 null：读回来还是 null，不会被当成"窗口在 (0,0)"或"列宽 0"
+            ["window_left"] = WindowLeft,
+            ["window_top"] = WindowTop,
+            ["window_width"] = WindowWidth,
+            ["window_height"] = WindowHeight,
+            ["list_width"] = ListWidth,
+            ["window_maximized"] = WindowMaximized
         }));
     }
 
@@ -126,4 +157,10 @@ public sealed record ClientSettings
         root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n)
             ? n
             : fallback;
+
+    /// <summary>几何那五项没有默认值：读不到就是"没记过"，而不是回落到某个写死的坐标。</summary>
+    private static double? Number(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d)
+            ? d
+            : null;
 }

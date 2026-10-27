@@ -444,15 +444,21 @@ public static class MediaViewer
         };
         host.Children.Add(hint);
 
+        var work = SystemParameters.WorkArea;
+        var owner = Application.Current?.MainWindow;
         var viewer = new Window
         {
-            Owner = Application.Current?.MainWindow,
+            Owner = owner,
             WindowStyle = WindowStyle.None,
             ResizeMode = ResizeMode.NoResize,
             ShowInTaskbar = false,
-            WindowStartupLocation = WindowStartupLocation.CenterScreen,
-            Width = 960,
-            Height = 680,
+            // 有主窗就叠在它上面（CenterScreen 在多显示器上会把图开到另一块屏去），没有才回到屏幕中央
+            WindowStartupLocation = owner is null
+                ? WindowStartupLocation.CenterScreen
+                : WindowStartupLocation.CenterOwner,
+            // 960×680 在 1366×768@150% 上比工作区还大，同主窗/设置窗一个口径
+            Width = MainModel.FitToWorkArea(960, work.Width),
+            Height = MainModel.FitToWorkArea(680, work.Height),
             Content = host
         };
         viewer.PreviewMouseLeftButtonDown += (_, args) =>

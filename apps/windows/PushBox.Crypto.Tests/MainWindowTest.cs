@@ -101,6 +101,58 @@ public sealed class MainWindowTest : IDisposable
     }
 
     /// <summary>
+    /// 恢复几何这条路要真的落到窗口上：模型算得再对，忘了把结果抄给 <c>Width</c>/<c>Left</c> 就等于没做。
+    /// 用的矩形刻意与默认值（1080×680 再夹工作区）不同，否则"根本没恢复"也能过。
+    /// </summary>
+    [Fact]
+    public void ARestoredGeometryIsAppliedToTheWindow()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var saved = new WindowGeometry(120, 80, 700, 500, 320, false);
+                var reporter = new ReadReporter(_db, _identities, Offline());
+                var window = new MainWindow(_db, _identities, reporter,
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader(),
+                    engine: null, restore: saved);
+
+                // 这一台的工作区装得下 700×500，所以恢复值应当原样落上去；被夹掉了说明抄错了地方
+                var expected = WindowPlacement.Restore(saved, SystemParameters.WorkArea,
+                    new Rect(SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop,
+                        SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight),
+                    window.MinWidth, window.MinHeight);
+                Assert.Equal(expected.Width, window.Width);
+                Assert.Equal(expected.Height, window.Height);
+                Assert.Equal(expected.Left, window.Left);
+                Assert.Equal(expected.Top, window.Top);
+
+                // 关窗（这里没有"收到托盘"那一层）要把它当前这一份几何交出去，否则下一版永远是默认尺寸
+                WindowGeometry? reported = null;
+                window.GeometryChanged += g => reported = g;
+                window.Close();
+                Assert.True(reported is { }, "关窗没有把几何交出去");
+                Assert.Equal(320d, reported!.Value.ListWidth);
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "恢复几何没有按时完成");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    /// <summary>
     /// 窄屏收列表的根因在 WPF 这一侧：<c>ColumnDefinition.Width=0</c> 会被 <c>MinWidth=200</c> 夹回 200px，
     /// 于是"收掉列表"只是纸面上的，对话区白让 200px。这条用例把模型算出来的列宽与上下限真摆进 Grid，
     /// 断的是字面上的 0——只断模型数值的话，把 Min/Max 忘了抄上去照样能过。

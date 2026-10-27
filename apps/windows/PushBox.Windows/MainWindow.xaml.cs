@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
@@ -47,13 +48,11 @@ public partial class MainWindow : Window
     private double _listWidth = MainModel.ListDefaultWidth;
 
     public MainWindow(DeviceStore db, IdentityStore identities, ReadReporter reporter,
-        SearchService search, DeleteReporter deletions, MediaLoader media, SyncEngine? engine = null)
+        SearchService search, DeleteReporter deletions, MediaLoader media, SyncEngine? engine = null,
+        WindowGeometry? restore = null)
     {
         InitializeComponent();
-        // 写死的 1080×680 在 1366×768@150% 上比工作区还大（可见区约 910×512），开窗就把内容推到屏幕外。
-        // 只在启动时夹一次：之后用户自己拖大/最大化都按他的来
-        Width = MainModel.FitToWorkArea(Width, SystemParameters.WorkArea.Width);
-        Height = MainModel.FitToWorkArea(Height, SystemParameters.WorkArea.Height);
+        ApplyGeometry(restore);
         _model = new MainModel(db, identities, reporter, search, deletions, new FulltextService(db, identities));
         Prompt = AskForText;
         PickImageFile = PickImageFromDisk;
@@ -73,6 +72,56 @@ public partial class MainWindow : Window
         // 而托盘要读的未读数、连接状态，以及"引擎每落一条就重画"都挂在这里。
         // 放在渲染回调里等于把"后台启动能不能收消息"寄托在"装配层别忘了补一次"上
         Wire();
+    }
+
+    /// <summary>关窗（含"收到托盘"那次被取消的关窗）前把当前几何交出去，由装配层落盘。</summary>
+    public event Action<WindowGeometry>? GeometryChanged;
+
+    /// <summary>
+    /// 尺寸与位置：记过就恢复，没记过就把默认值按工作区夹一次。恢复值也要再夹一遍——
+    /// 上次那块显示器可能已经拔了（见 <see cref="WindowPlacement.Restore"/>）。
+    /// </summary>
+    private void ApplyGeometry(WindowGeometry? restore)
+    {
+        var work = SystemParameters.WorkArea;
+        var screen = new Rect(SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
+        if (restore is { } saved)
+        {
+            var placed = WindowPlacement.Restore(saved, work, screen, MinWidth, MinHeight);
+            Width = placed.Width;
+            Height = placed.Height;
+            Left = placed.Left;
+            Top = placed.Top;
+            _listWidth = saved.ListWidth;
+            if (saved.Maximized) WindowState = WindowState.Maximized;
+            return;
+        }
+
+        // 写死的 1080×680 在 1366×768@150% 上比工作区还大（可见区约 910×512），开窗就把内容推到屏幕外。
+        // 只在启动时夹一次：之后用户自己拖大/最大化都按他的来
+        Width = MainModel.FitToWorkArea(Width, work.Width);
+        Height = MainModel.FitToWorkArea(Height, work.Height);
+    }
+
+    /// <summary>
+    /// 交出去的那一份。最大化时 <c>Width</c>/<c>Height</c> 报的是最大化之后的尺寸，
+    /// 那要按 <see cref="Window.RestoreBounds"/> 记，否则下次还原会还原成一屏铺满的大小。
+    /// </summary>
+    private WindowGeometry CurrentGeometry()
+    {
+        var bounds = RestoreBounds;
+        if (bounds.IsEmpty || bounds.Width <= 0 || bounds.Height <= 0)
+            bounds = new Rect(Left, Top, Width, Height);
+        return new WindowGeometry(bounds.Left, bounds.Top, bounds.Width, bounds.Height, _listWidth,
+            WindowState == WindowState.Maximized);
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        base.OnClosing(e);
+        // 先让装配层决定这次是"收到托盘"还是真退出，再记账：两种走法都该记住用户拖过的位置
+        GeometryChanged?.Invoke(CurrentGeometry());
     }
 
     /// <summary>
