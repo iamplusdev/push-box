@@ -70,8 +70,8 @@ android {
         // 且 NotificationChannel 全可用"是错的）；留 24 只会在 Android 7/7.1 上首帧即崩。
         minSdk = 26
         targetSdk = 36
-        versionCode = 10102
-        versionName = "1.1.2"
+        versionCode = 10103
+        versionName = "1.1.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
