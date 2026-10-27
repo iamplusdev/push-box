@@ -22,6 +22,7 @@
     <string name="state_connected">已连接</string>
     <string name="empty_conversations">还没有会话，去「频道」创建第一个频道</string>
     <string name="empty_conversations_hint">每个频道、每位发送者各成一条会话</string>
+    <string name="empty_create_first_channel">创建第一个频道</string>
     <string name="empty_messages">还没有消息</string>
     <string name="empty_messages_hint">这个频道有推送时会出现在这里</string>
     <string name="tab_messages">消息</string>
@@ -373,10 +374,4 @@
     <string name="recovery_code_rotate">轮换恢复码</string>
     <string name="recovery_code_rotate_title">轮换恢复码？</string>
     <string name="recovery_code_rotate_desc">旧恢复码即刻失效，已经用它登录的设备不受影响；新码只显示这一次。</string>
-
-    <!-- 本地即时搜索（§7.4：服务端 /search 到位前离线可查缓存消息） -->
-    <string name="search_hint">搜索消息</string>
-    <string name="search_none">没有匹配的消息</string>
-    <string name="search_from_local">本机</string>
-    <string name="search_from_server">服务端</string>
 </resources>

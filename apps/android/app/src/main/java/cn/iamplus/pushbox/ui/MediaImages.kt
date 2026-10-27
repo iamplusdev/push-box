@@ -50,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -66,12 +67,15 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import cn.iamplus.pushbox.App
 import cn.iamplus.pushbox.R
 import cn.iamplus.pushbox.net.MediaSlot
@@ -328,6 +332,18 @@ private fun ImageViewer(msgId: String, count: Int, start: Int, mediaStatus: Stri
     Dialog(onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false,
             decorFitsSystemWindows = false)) {
+        // 看图页永远是黑底，系统栏图标就得永远走深色底那套。Dialog 有独立的窗口，
+        // 主窗口里按主题设过的 isAppearanceLightStatusBars 管不到它：浅色主题下不放这一句，
+        // 状态栏那几个图标在黑色背景上就是几个看不见的深灰点。
+        // 这一跳必须在 Dialog 自己的子组合里做——外面的 LocalView 还是主窗口的根视图。
+        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+        SideEffect {
+            dialogWindow?.let { window ->
+                val controller = WindowCompat.getInsetsController(window, window.decorView)
+                controller.isAppearanceLightStatusBars = false
+                controller.isAppearanceLightNavigationBars = false
+            }
+        }
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             HorizontalPager(state = pager, userScrollEnabled = !zoomed,
                 modifier = Modifier.fillMaxSize()) { page ->

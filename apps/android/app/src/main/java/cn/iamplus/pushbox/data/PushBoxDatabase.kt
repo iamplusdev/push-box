@@ -130,12 +130,6 @@ interface PushBoxDao {
     @Query("SELECT last_applied_seq FROM sync_state WHERE id = 1")
     suspend fun lastAppliedSeq(): Long?
 
-    /** §7.4 本地即时搜索：先命中缓存消息正文/摘要/标题，服务端 /search 到位前离线可用。
-     * 搜索结果按时间倒序（最新优先），相同时间再按 seq 倒序。 */
-    @Query("SELECT * FROM messages WHERE body LIKE '%'||:q||'%' OR summary LIKE '%'||:q||'%' " +
-        "OR title LIKE '%'||:q||'%' ORDER BY created_at DESC, seq DESC LIMIT 100")
-    suspend fun searchMessages(q: String): List<MessageRow>
-
     @Query("SELECT * FROM conversations WHERE channel_no = :channelNo AND sender_id = :senderId")
     suspend fun conversation(channelNo: String, senderId: String): ConversationRow?
 

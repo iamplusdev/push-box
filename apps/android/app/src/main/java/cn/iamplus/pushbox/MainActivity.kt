@@ -110,7 +110,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
@@ -1100,7 +1099,7 @@ private fun MessagesTab(identity: Identity, conversations: List<ConversationRow>
                     textAlign = TextAlign.Center)
                 Spacer(Modifier.height(16.dp))
                 OutlinedButton(onClick = { onNavigateToChannels?.invoke() }) {
-                    Text("创建第一个频道")
+                    Text(stringResource(R.string.empty_create_first_channel))
                 }
             }
         } else {
@@ -4297,49 +4296,6 @@ private fun persistAvatar(context: Context, row: ConversationRow, uri: Uri): Str
         AvatarCache.put(row.senderId, jpeg)
         out.absolutePath
     }.getOrNull()
-
-/** 一条搜索命中：本地与服务端结果统一成这个形状，才能合并、去重、并排渲染。 */
-private data class SearchEntry(val msgId: String, val channelNo: String, val senderId: String,
-    val senderName: String, val text: String, val createdAt: Long, val fromServer: Boolean)
-
-/** 搜索结果行：命中片段（查询词高亮）+ 归属会话 + 时间，点击进入所属会话（§7.4 D19）。 */
-@Composable
-private fun SearchResultRow(entry: SearchEntry, query: String, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick)
-        .padding(horizontal = 16.dp, vertical = 10.dp)) {
-        Text(highlighted(entry.text, query), maxLines = 2,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface)
-        val where = stringResource(if (entry.fromServer) R.string.search_from_server
-        else R.string.search_from_local)
-        Text("${entry.senderName} · ${dateSectionLabel(entry.createdAt)} · $where",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-/** 把 text 里所有（大小写不敏感的）query 命中片段刷成主色，其余保持默认色。 */
-private fun highlighted(text: String, query: String): AnnotatedString = buildAnnotatedString {
-    if (query.isBlank()) {
-        append(text)
-        return@buildAnnotatedString
-    }
-    val lower = text.lowercase()
-    val needle = query.lowercase()
-    var i = 0
-    while (i < text.length) {
-        val at = lower.indexOf(needle, i)
-        if (at < 0) {
-            append(text.substring(i))
-            break
-        }
-        append(text.substring(i, at))
-        withStyle(SpanStyle(color = Color(0xFF1A73E8), fontWeight = FontWeight.Bold)) {
-            append(text.substring(at, at + needle.length))
-        }
-        i = at + needle.length
-    }
-}
 
 /**
  * 首启的服务器地址一律由用户自己填：预填一个开发机的内网 IP，等于让每一个装上手的人
