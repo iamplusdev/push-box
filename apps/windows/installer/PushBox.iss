@@ -22,7 +22,7 @@
 ; 下面这个默认值只是"直接双击 ISCC 编译这一页"的兜底。日志里"启动 {Version}"打的是程序集版本，
 ; 两处一旦错开就说明装的是手工编译的包，别拿它当发布物。
 #ifndef MyAppVersion
-  #define MyAppVersion "1.1.2"
+  #define MyAppVersion "1.1.3"
 #endif
 
 ; publish 输出目录（build-installer.sh 的 -o）。相对本 .iss 所在目录解析，所以从哪儿调 ISCC 都一样。
