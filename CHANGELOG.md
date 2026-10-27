@@ -9,6 +9,59 @@
 
 ---
 
+## 未发布 —— PC 的 emoji 出彩色：正文与会话摘要走 Emoji.Wpf，代码区刻意保持单色
+
+> 起因一条（2026-10-26 用户报）："PC 升级后，消息依然是纯黑色，没有和 App 一样支持彩色图标"。查下来不是配错，是平台限制：**WPF 的文本栈不认 COLR/CPAL、CBDT/CBLC、SVG 任何一类彩色字形表**，所以系统里那枚 Segoe UI Emoji 被 WPF 拿去排成的是**单色轮廓**。Android 之所以彩色，是它的文本栈原生渲染 Noto Color Emoji（CBDT 位图）。
+
+### 先证明"改字体族没用"
+
+- **离屏 `RenderTargetBitmap` + 逐像素数彩色**（临时探针，跑完已删）：😀 在四种字体族下彩色像素**都是 0**——当前 token `Segoe UI, Microsoft YaHei UI`、`Segoe UI Emoji` 打头、只有 `Segoe UI Emoji`、只有 `Microsoft YaHei UI`。
+- **前两行的墨迹分布与 advance 完全一致**（1011 墨点、43×43 bbox、advance 54.9）⇒ WPF 的字体回退早就落到 Segoe UI Emoji 了，**往 `Font.UI` 里补这枚字体名不会改变任何东西**（全仓确实没有它，补上是白费）。
+- 画出来的是**真字形轮廓、不是缺字方框**：😀 的 border/interior 墨点 = 112/899，对照组未分配码位 U+E0FF 是 176/120（空心框特征）。字色也不是问题：两端正文色本来就一致（Windows `#19191A`、Android `#161415`）。
+
+### 做法
+
+- **接 `Emoji.Wpf` 0.3.4**（samhocevar，WTFPL，2022-11）：它用包里自带的 `Typography.*` 把系统字形解成 Geometry，以 `EmojiInline : InlineUIContainer` 插到 `Run` 旁边。包体近 1.74 MB（Emoji.Wpf 1051 KB + Typography.OpenFont 640 KB + Typography.GlyphLayout 27 KB + Stfu 19 KB），`netcoreapp3.1` 的资产在 `net8.0-windows` 下还原零警告。
+- **全仓只有新增的 `Controls/EmojiText.cs` 碰这个包**：`Substitute(TextBlock)` / `Substitute(Run)` 负责替换，`EmojiTextBlock` 是会话列表那半用的薄控件，`Prewarm()` 负责预热。
+- **正文在 `MarkdownView.Text` 里逐 Run 替换**：`SubstituteGlyphs(Run)` 认的是普通 `TextBlock`，所以渲染层的返回类型没变，`RenderTest` 里那 17 处 `(TextBlock)`/`IsType<TextBlock>` 一处都不用改。
+- **会话摘要换成自己写的 `EmojiTextBlock`**（`Source` 是真依赖属性）：包里那个 `Emoji.Wpf.TextBlock` 的 `Text` 是 `new` 出来的普通 CLR 属性、**不是依赖属性**，XAML 里 `Text="{Binding …}"` 挂不上去（实测：绑基类 `TextBlock.TextProperty` 恒为 0 彩色，派生 CLR 属性才出彩色）。实测契约：换 `Source` 是整段重画，不会叠着上一条的字形。
+- **启动时在后台 STA 线程预热**：一次性初始化约 500 ms，落在哪个线程哪个线程就卡。专门起一条 STA 线程做 `EmojiData.Load()` + 一次丢掉的替换（整轮 1.1–1.6 s 全在 UI 线程之外），UI 线程首次替换降到 7–12 ms；稳态约 1.8–3.4 ms/单 Run、约 8 ms/四 Run 气泡。
+- **两条失败路径只降级不崩**：替换抛异常 → 那一段退回单色；预热失败 → 首条 emoji 消息卡一下。都只留异常类型名（`AppLog.EmojiSubstituteFailed` / `EmojiPrewarmFailed`）。
+
+### 三条刻意的边界
+
+- **行内 `code` 与围栏代码块保持单色**：代码里的字符要能选中、能复制，被换成图形就没了。`MarkdownView.Code` 整段走 `Text` 属性、一条内联规则都不碰；`Text()` 里对 `InlineStyle.Code` 的 Run 跳过替换。
+- **没有 emoji 的正文一个 `Inline` 都不多**：不必先判有没有 emoji，也不给普通消息增加任何结构。
+- **顺序不能反**：必须先 `Inlines.Add(run)` 再替换。反着来不抛异常，只是什么都不出。
+
+### 用例
+
+- **`MarkdownViewTest` +2**：正文里的 emoji 变成一个 `InlineUIContainer` 且 Run 里不再留着那两枚代理项（否则同一枚画两遍，其中一遍单色）；代码区那条同时判"围栏代码块没有图形内联且字符还在"与"行内码同理"。这一条验证了一个容易写错的假设：`TextBlock.Text = …` 那一路 WPF 自己会物化成一个 `Run`，所以断言要数 `InlineUIContainer` 而不是"`Inlines` 为空"。
+- **`EmojiTextBlockTest` +1**：换 `Source` 是整段重画（`构建通过 🎉` → `构建失败` 之后图形内联归零、Run 文本正确），最后置 null 清空。
+- **`ThemeTest` 两条跟着改口径（不增数）**：`EveryStyleReferenceMatchesTheControlItIsPutOn` 原来只认标签名等于 `TargetType`，现在放行一张**写死的派生配对表**（只有 `EmojiTextBlock → TextBlock` 一项，不是"不认识就跳过"）；`LongConversationTextTrimsInsteadOfPushingTheRowWide` 改成按元素名 + 属性名找绑定（摘要挂在 `Source` 上，已不是 `Text`），三档（Wrap / CharacterEllipsis / MaxHeight 36）一条没放宽。
+- **反向验证**：把 `MarkdownView.Text` 与 `EmojiTextBlock.Render` 两处替换调用注掉 → 前两条与摘要那条**当场判红**（`Assert.Single() Failure: The collection was empty`），代码区那条照旧绿。两处都当场还原。
+
+### 像素判据
+
+用生产路径构造可视对象、`RenderTargetBitmap` 逐像素数（正文色取近黑，所以彩色只可能来自 emoji）：
+正文 chromatic=293 / ink=729；会话摘要 92 / 451；围栏代码块 0 / 2358；行内码 0 / 1500；纯文本对照 0 / 781。
+
+### 计数基线
+
+- C# **582 → 585**（`ci.yml` 的 `$CS_BASELINE` 与七份文档同步），Debug 与 Release 各 585/585。
+
+### 本步没做（另排）
+
+- **工具提示里的 emoji 仍是单色**：`ToolTip="{Binding Summary}"` 是字符串，由系统再渲染一遍，那一层没有接 `EmojiTextBlock`。
+- **Android 端的 emoji 没动**：它本来就是彩色的，这一轮只修 PC。
+
+### 验证
+
+- `dotnet test`（Debug）：**585/585 通过**；`dotnet test -c Release`：**585/585 通过**。
+- `dotnet build`：0 警告 0 错误。
+
+---
+
 ## 未发布 —— 外链头像按 256 归一化：服务端不再"第三方给多大就存多大"
 
 > 起因一条：`sender_avatar` 的转存链路只做了 SSRF、Content-Type + 魔数双重校验与 512KB 上限，字节本身是一字不动落桶的。第三方给一张 1024×1024 的头像，服务端就存 1024×1024，而客户端只把它画进 40dp（Android）/44px（Windows）的圆角框——最密那档 40dp × 3.5 倍密度 ≈ 140px，存下来的边长是它的七倍多，而且每次回源复核都要重传一遍。
