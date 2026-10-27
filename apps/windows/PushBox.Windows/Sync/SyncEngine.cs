@@ -154,6 +154,33 @@ public sealed class SyncEngine : IPushObserver
         }
     }
 
+    /// <summary>等循环收工最多等这么久。等不到也照常往下走：删文件那一步会把"还被攥着"如实报出来，
+    /// 而卡在这里等于"退出空间"按下去没反应。</summary>
+    private static readonly TimeSpan StopWait = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// 停掉循环并<b>等它真的收工</b>。退出空间紧接着就要删库文件，而 <see cref="Stop"/> 只是把取消信号递出去，
+    /// 循环可能还夹在一次写里——旧实现正是在这儿静默失败，留下"身份没了、库还在"的半退出。
+    /// </summary>
+    public async Task StopAsync()
+    {
+        Task? loop;
+        lock (_gate) loop = _loop;
+        Stop();
+        if (loop is null || loop.IsCompleted) return;
+
+        var finished = await Task.WhenAny(loop, Task.Delay(StopWait)).ConfigureAwait(false);
+        if (!ReferenceEquals(finished, loop)) return;
+        try
+        {
+            await loop.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // 循环里的非协议异常已经由装配层那个观察者落过痕（AppLog.SyncLoopCrashed）；这里只负责等它结束
+        }
+    }
+
     /// <summary>停掉循环并断开当前连接。没落库的那几条不算丢：游标停在原地，下次连接照样补得回来。</summary>
     public void Stop()
     {

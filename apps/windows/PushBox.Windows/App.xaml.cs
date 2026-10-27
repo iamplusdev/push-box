@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
@@ -44,9 +45,13 @@ public partial class App : Application
     private InstanceHandoff? _handoff;
     private TrayIcon? _tray;
     private SettingsWindow? _settingsWindow;
+    private FirstLaunchWindow? _firstLaunch;
 
     /// <summary>托盘"退出"和真退出之间的区分句柄：关窗默认只是藏起来，唯独这一次要真关。</summary>
     private bool _exiting;
+
+    /// <summary>退出空间也在关主窗：那一次不是"最小化到托盘"，是把这个空间收掉。</summary>
+    private bool _loggingOut;
 
     /// <summary>引擎那条 Task 的观察者只挂一次：<see cref="OpenMainWindow"/> 会被"点通知时窗口还没开"
     /// 再走一遍，而 <c>Start</c> 是幂等的，重复挂就成了同一次崩溃写两行。</summary>
@@ -112,7 +117,7 @@ public partial class App : Application
         // 赶在任何窗口 Show 之前在后台 STA 线程上把它付掉，UI 线程首次替换因此降到 7–12 ms。
         EmojiText.Prewarm();
         if (enrolled) OpenMainWindow(show: !background);
-        else if (!background) new FirstLaunchWindow(model).Show();
+        else if (!background) OpenFirstLaunch();
         else
         {
             // 自启但本机没有身份（退出过空间、身份文件又丢了）：没有可收的消息，也没有可画的界面。
@@ -325,7 +330,8 @@ public partial class App : Application
     /// <summary>§8.1：关闭按钮 = 最小化到托盘，可设为退出。这一句就是那个"可设为退出"的分支。</summary>
     private void OnWindowClosing(object? sender, CancelEventArgs e)
     {
-        if (_exiting || !_settings.CloseToTray || sender is not MainWindow view) return;
+        // 退出空间正在收这一扇：那一次必须真的关掉，而不是又藏回托盘
+        if (_exiting || _loggingOut || !_settings.CloseToTray || sender is not MainWindow view) return;
         e.Cancel = true;
         view.HideToTray();
     }
@@ -367,14 +373,42 @@ public partial class App : Application
         Open: () =>
         {
             if (MainWindow is MainWindow view) view.ShowFromTray();
-            else OpenMainWindow();
+            else if (Enrolled) OpenMainWindow();
+            // 退出空间之后托盘还在：那一下该落到首启窗，而不是拿一份不存在的身份去开主窗
+            else OpenFirstLaunch();
         },
-        OpenSettings: OpenSettings,
+        OpenSettings: () =>
+        {
+            if (Enrolled) OpenSettings();
+            else OpenFirstLaunch();
+        },
         Exit: ExitApp,
         SetNotifications: on => Update(_settings with { NotificationsEnabled = on }),
         SetQuiet: on => Update(_settings with { QuietEnabled = on }),
         SetAutoStart: on => ApplySettings(_settings with { AutoStartEnabled = on }),
         SetCloseToTray: on => Update(_settings with { CloseToTray = on }));
+
+    /// <summary>本机有没有身份文件。托盘那两条与"退出空间之后该摆哪扇窗"都读它，
+    /// 判的是磁盘上的事实而不是内存里的某个标志——身份文件也可能被别的进程删掉。</summary>
+    private bool Enrolled => (_identities ??= new IdentityStore()).Exists();
+
+    /// <summary>首启窗只留一扇：退出空间之后从托盘再点"打开"、或者注册到一半又点一下，都不该叠出第二扇。</summary>
+    private void OpenFirstLaunch()
+    {
+        if (_firstLaunch is { } open)
+        {
+            open.Activate();
+            return;
+        }
+
+        var window = new FirstLaunchWindow(new OnboardingModel());
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_firstLaunch, window)) _firstLaunch = null;
+        };
+        _firstLaunch = window;
+        window.Show();
+    }
 
     /// <summary>
     /// 子窗挂 owner 只认"真的露着的主窗"。后台启动（自启）时主窗对象在、但一次都没 Show，
@@ -397,7 +431,7 @@ public partial class App : Application
 
         var identities = _identities ??= new IdentityStore();
         var window = new SettingsWindow(new SettingsModel(_client, identities), _settings, ApplySettings,
-            new UpdateModel(), ExitApp)
+            new UpdateModel(), ExitApp, logout: () => _ = LogoutSpaceAsync())
         {
             Owner = VisibleMainWindow
         };
@@ -452,6 +486,81 @@ public partial class App : Application
 
     private void RefreshTray(MainWindow view) =>
         _tray?.SetTooltip(TrayIcon.TooltipFor(view.TrayState, view.TrayUnread));
+
+    /// <summary>
+    /// §7.3 退出空间（设置页那一枚危险按钮的落点）。由装配层做，是因为要停的引擎、要关的库、要换的窗都归它；
+    /// 设置窗只负责问一句——旧实现把 <c>File.Delete</c> 留在窗口里，库还被引擎攥着，删失败又被吞掉，
+    /// 于是机器上剩下一份"身份没了、库还在"的半退出。四步的顺序由 <see cref="SpaceReset"/> 钉住。
+    /// 多空间切换（同时留几份身份与库）这一轮不做：身份、库、两份图片缓存都按固定路径放，
+    /// 要能切换得先把它们搬进"每空间一个目录"，那是独立的一步；现在"换一个空间"就是退出再从首启加入。
+    /// </summary>
+    private async Task LogoutSpaceAsync()
+    {
+        _loggingOut = true;
+        try
+        {
+            var reset = new SpaceReset(
+                stopSync: async () =>
+                {
+                    if (_engine is not { } engine) return;
+                    _engine = null;
+                    await engine.StopAsync();
+                },
+                closeWindows: () =>
+                {
+                    // 设置窗的 Closed 里会顺手重画主窗，所以两扇窗都必须排在关库之前
+                    _settingsWindow?.Close();
+                    // 先把下一扇窗摆上：默认的 OnLastWindowClose 在主窗一关就会把整个应用收掉，
+                    // 而这时候同步刚停、库还没删——收在这里等于退出空间只做了半截
+                    OpenFirstLaunch();
+                    if (MainWindow is MainWindow view)
+                    {
+                        MainWindow = null;
+                        view.Close();
+                    }
+                },
+                closeDatabase: () =>
+                {
+                    _db?.Dispose();
+                    _db = null;
+                    // 这些服务都攥着刚关掉的那份库：留着它们等下一次注册时被 ??= 复用，就是拿旧库去查新空间
+                    _reporter = null;
+                    _media = null;
+                    _tally = null;
+                    _notifier = null;
+                },
+                purge: () => LocalSpace.Purge(IdentityStore.DefaultDirectory));
+
+            var left = await reset.RunAsync();
+            AppLog.SpaceCleared(left.Count);
+            // 托盘还在：它得先退回"没连任何空间"的样子，别继续挂着上一个空间的未读数
+            _tray?.SetTooltip(TrayIcon.TooltipFor(null, 0));
+            OpenFirstLaunch();
+            if (left.Count > 0) TellAboutLeftovers(left);
+        }
+        catch (Exception e)
+        {
+            // 到这一步窗口已经关掉了：不把这一句摆出来，用户看到的就只是"点了没反应"。
+            // 仍然是首启（而不是回到那扇主窗）：退出走到一半的机器上继续收消息，比重新接入更不该发生
+            AppLog.SpaceLogoutFailed(e.GetType().Name);
+            MessageBox.Show("退出空间没走完：" + Outcome<string>.Describe(e), "PushBox",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            OpenFirstLaunch();
+        }
+        finally
+        {
+            _loggingOut = false;
+        }
+    }
+
+    /// <summary>清不掉的必须自己说出来：一句"已退出"底下藏着一份旧库，比退出失败更糟。</summary>
+    private static void TellAboutLeftovers(IReadOnlyList<string> left)
+    {
+        MessageBox.Show(
+            "退出没有完全成功：下面这些文件还被占用，删不掉。\n\n" + string.Join("\n", left)
+            + "\n\n关掉占用它们的程序后重试，或手动删除。",
+            "PushBox", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
 
     private void ExitApp()
     {

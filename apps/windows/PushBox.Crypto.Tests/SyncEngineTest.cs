@@ -47,6 +47,31 @@ public sealed class SyncEngineTest : IDisposable
 
     // ---- §7.2 退避与断因分派 ---------------------------------------------------------------------
 
+    /// <summary>
+    /// 退出空间要紧接着删库：StopAsync 返回时循环必须真的收工，否则库文件还挂在句柄上，
+    /// 删不掉的那一下就是"身份没了、库还在"（2026-10-22 那台开发机）。
+    /// </summary>
+    [Fact]
+    public async Task StopAsyncReturnsOnlyAfterTheLoopHasLetGo()
+    {
+        var harness = Harness(Device());
+        harness.EnqueueHanging();
+        harness.Start();
+        await Until(() => harness.ConnectedCount >= 1, "先要真连上一条");
+
+        await harness.Engine.StopAsync();
+
+        Assert.True(harness.Running.IsCompleted, "StopAsync 返回时循环还在跑，库文件就删不掉");
+    }
+
+    [Fact]
+    public async Task StopAsyncWithoutAStartedLoopIsSafe()
+    {
+        // 退出空间可能在引擎还没起过的时候被点（首启窗那边不会，但这一句不该因此抛）
+        var harness = Harness(Device());
+        await harness.Engine.StopAsync();
+    }
+
     [Fact]
     public async Task ReconnectWaitsOneTwoFourSecondsAndCapsAtSixty()
     {

@@ -533,27 +533,4 @@ public sealed class SettingsModel
         foreach (var item in source) copy.Add(map(item));
         return copy;
     }
-
-    // ---- 退出空间（清空数据回到首启）------------------------------------------------------------------
-
-    /// <summary>§7.3 退出空间：停掉同步引擎、清空本地库和身份文件,回到首启注册页。与 Android "更换服务器"同效。</summary>
-    public void Logout()
-    {
-        // 清空身份文件
-        _identities.Clear();
-        
-        // 清空数据库文件（与 Android 的 db.clearAllTables() 同效）
-        var dbPath = Data.DeviceStore.DefaultDatabasePath;
-        if (System.IO.File.Exists(dbPath))
-        {
-            try
-            {
-                System.IO.File.Delete(dbPath);
-            }
-            catch
-            {
-                // 数据库可能被锁定（SyncEngine 还在用），跳过但不阻断退出流程
-            }
-        }
-    }
 }

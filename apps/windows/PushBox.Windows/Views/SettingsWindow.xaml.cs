@@ -32,6 +32,17 @@ public partial class SettingsWindow : Window
     private readonly UpdateModel _update;
     private readonly Action? _beforeExit;
 
+    /// <summary>退出空间的落点（<c>App.LogoutSpaceAsync</c>）。这一页只问一句：删文件要等引擎停了、库关了，
+    /// 那两样都不归窗口管，拿着库的第二份引用在窗口里删，就是 2026-10-22 那次"身份没了、库还在"。</summary>
+    private readonly Action? _logout;
+
+    /// <summary>退出空间那一问的正文。恢复码必须说出来：本机唯一的恢复码就在身份文件里，
+    /// 一起清掉之后，没有第二台设备的人就再也进不回这个空间。</summary>
+    public const string LogoutDetail =
+        "这台电脑上的会话、消息、图片与设备身份会被清空，然后回到首启注册页。\n"
+        + "服务器上的消息不受影响，但本机保存的恢复码会一起清掉——重新加入之前请确认已经抄下。\n"
+        + "此操作不可撤销。";
+
     /// <summary>刚回显过的那一份接入信息。密钥不落盘，窗口一关就没有第二份了。</summary>
     private Issued? _issued;
 
@@ -51,13 +62,14 @@ public partial class SettingsWindow : Window
     private bool _busy;
 
     public SettingsWindow(SettingsModel model, ClientSettings settings, Action<ClientSettings> apply,
-        UpdateModel? update = null, Action? beforeExit = null)
+        UpdateModel? update = null, Action? beforeExit = null, Action? logout = null)
     {
         _model = model;
         _settings = settings;
         _apply = apply;
         _update = update ?? new UpdateModel();
         _beforeExit = beforeExit;
+        _logout = logout;
         InitializeComponent();
         // 写死的 900×640 在 1366×768@150% 的可见区（约 910×512）里放不下，开窗就把底下那排按钮推到屏幕外。
         // 主窗早就在夹了（MainWindow 构造），这扇窗漏了；MinHeight 460 会把夹出来的值再顶回来一点，
@@ -656,20 +668,11 @@ public partial class SettingsWindow : Window
         MessageBox.Show(question + "\n\n" + detail, "PushBox 设置", MessageBoxButton.YesNo,
             MessageBoxImage.Warning) == MessageBoxResult.Yes;
 
-    /// <summary>§7.3 退出空间：清空所有数据回到首启，与 Android "更换服务器"同效。</summary>
+    /// <summary>§7.3 退出空间：这一页只负责问一句，停引擎、关库、删文件、换窗口都由装配层做。</summary>
     private void OnLogout(object sender, RoutedEventArgs e)
     {
-        if (!Confirm("退出空间？",
-                "这将清空本地所有数据（会话、消息、图片、身份），回到首启注册页。此操作不可撤销。")) return;
-        
-        // 清空身份和本地库
-        _model.Logout();
-        
-        // 关闭设置窗口
-        Close();
-        
-        // 重新打开首启窗口
-        var firstLaunch = new FirstLaunchWindow();
-        firstLaunch.Show();
+        if (_logout is null) return;
+        if (!Confirm("退出空间？", LogoutDetail)) return;
+        _logout();
     }
 }

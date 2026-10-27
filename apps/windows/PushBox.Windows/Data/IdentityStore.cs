@@ -203,13 +203,4 @@ public sealed class IdentityStore
             ? el.GetString() ?? ""
             : "";
     }
-
-    /// <summary>§7.3 退出空间：删除身份文件，清空所有凭据。与 Android IdentityStore.clear() 同效。</summary>
-    public void Clear()
-    {
-        if (File.Exists(_filePath))
-        {
-            File.Delete(_filePath);
-        }
-    }
 }

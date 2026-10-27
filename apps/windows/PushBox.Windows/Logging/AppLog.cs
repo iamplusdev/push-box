@@ -201,6 +201,15 @@ public static class AppLog
     public static void AutoStartWriteFailed(string exceptionType) =>
         Write(LogEventLevel.Warning, "开机自启写不进注册表 {Type}", exceptionType);
 
+    /// <summary>§7.3 退出空间：只记"几项没删掉"。文件路径里有用户名，不进日志。</summary>
+    public static void SpaceCleared(int left) => Write(
+        left == 0 ? LogEventLevel.Information : LogEventLevel.Warning,
+        "退出空间：{Left} 项没删掉", left);
+
+    /// <summary>退出空间走到一半抛了：窗口已经关掉，日志是唯一还能查的地方，所以只留类型名。</summary>
+    public static void SpaceLogoutFailed(string exceptionType) =>
+        Write(LogEventLevel.Error, "退出空间没走完 {Type}", exceptionType);
+
     /// <summary>§8.4 之后的更新检查：只记"发现新版"这件事和版本号，GitHub 的 URL、release 正文都不进日志。</summary>
     public static void UpdateFound(string latest, string current) =>
         Write(LogEventLevel.Information, "发现新版本 {Latest}（当前 {Current}）", latest, current);
