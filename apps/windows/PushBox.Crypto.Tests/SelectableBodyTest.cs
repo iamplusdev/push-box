@@ -184,6 +184,23 @@ public class SelectableBodyTest
         });
     }
 
+    /// <summary>拖选底色用的是它自己那一支，不是角标的淡绿。
+    /// 这一条只锁"从 MarkdownStyle 走到了 FlowDocumentScrollViewer"，够不够蓝由
+    /// <see cref="ThemeTest.TheDragSelectionBackgroundStaysReadableOverBodyText"/> 那头按 token 值断。</summary>
+    [Fact]
+    public void TheSelectionHighlightIsItsOwnBrushAtFullOpacity()
+    {
+        Sta.Run(() =>
+        {
+            var body = Build("拖选的这一行要有边界", 600);
+            Assert.Same(Style.TextSelection, body.SelectionBrush);
+            // 反向判据：这一轮之前挂的就是角标那支淡绿，压在气泡底上看不出选了哪里
+            Assert.NotSame(Style.BadgeBackground, body.SelectionBrush);
+            // 默认那支是半透明的，叠在气泡底上会褪成没有边界
+            Assert.Equal(1d, body.SelectionOpacity);
+        });
+    }
+
     [Fact]
     public void SelectionIsCopyableAndCtrlCUsesWhatWasPicked()
     {

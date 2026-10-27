@@ -21,6 +21,11 @@ public static class TokenFiles
     private static readonly Regex Used = new(
         @"\{DynamicResource\s+([^}]+)\}", RegexOptions.Compiled);
 
+    /// <summary>渲染层在代码里取资源的两个调用：<c>Brush("键")</c> 与 <c>Font("键", 兜底族名)</c>。
+    /// 只取第一个字符串参数——后面那支是字体族名，不是 token。</summary>
+    private static readonly Regex CodeKey = new(
+        @"\b(?:Brush|Font)\(""([^""]+)""", RegexOptions.Compiled);
+
     private static readonly string Root = Path.Combine(AppContext.BaseDirectory,
         "..", "..", "..", "..", "PushBox.Windows");
 
@@ -42,7 +47,9 @@ public static class TokenFiles
             .Select(e => e.Attribute(X + "Key")!.Value)
             .ToList();
 
-    /// <summary>各窗口 XAML 里用到的每一个 token 键名。设置窗与更新框也是同一套色，漏一个键就是漏一处反色。</summary>
+    /// <summary>各窗口 XAML 里用到的每一个 token 键名。设置窗与更新框也是同一套色，漏一个键就是漏一处反色。
+    /// 渲染层在代码里摸的那批键也算进来（<c>MarkdownStyle.FromResources</c>）：那边写错时
+    /// <c>TryFindResource</c> 不抛异常，只给一支灰——屏幕上就是"某处颜色不对"，没有任何线索。</summary>
     public static List<string> UsedKeys() => new[]
         {
             "MainWindow.xaml", "Views/FirstLaunchWindow.xaml", "Views/SettingsWindow.xaml",
@@ -50,6 +57,8 @@ public static class TokenFiles
         }
         .SelectMany(file => Used.Matches(Text(file)).Cast<Match>())
         .Select(m => m.Groups[1].Value.Trim())
+        .Concat(CodeKey.Matches(Text("Controls/MarkdownView.cs")).Cast<Match>()
+            .Select(m => m.Groups[1].Value))
         .Distinct()
         .ToList();
 }
@@ -78,6 +87,8 @@ public class ThemeTest
         // 选中行是比列表底深一档的灰（微信 PC 那档），整行染绿太吵；accent 只留在 3px 竖条上
         ["Bg.Selected"] = "#E2E2E2",
         ["Bg.AccentTint"] = "#E6F9EF",
+        // 正文拖选的底：独立一支偏蓝的浅底，不再复用上面那支淡绿
+        ["Bg.TextSelection"] = "#BFE0FF",
         ["Fg.Primary"] = "#19191A",
         // 13px 次要字要落在页面/卡片/列表三种底上，4.5:1 的门槛由这个深度兜住
         ["Fg.Secondary"] = "#5F5F5F",
@@ -120,6 +131,8 @@ public class ThemeTest
         ["Bg.SenderList"] = "#1E1E1E",
         ["Bg.Selected"] = "#2E2E2E",
         ["Bg.AccentTint"] = "#223B2C",
+        // 深色那一边同理偏蓝，而且要压得住 #E0E0E0 的正文
+        ["Bg.TextSelection"] = "#2F5C8E",
         ["Fg.Primary"] = "#E0E0E0",
         ["Fg.Secondary"] = "#9E9E9E",
         // 深底上 #0A8F4A 只有 3.7:1，得提亮到 #3FBF7A（6.6:1）才能当正文色
@@ -200,6 +213,48 @@ public class ThemeTest
         var g = Convert.ToInt32(hex.Substring(3, 2), 16);
         var b = Convert.ToInt32(hex.Substring(5, 2), 16);
         return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+
+    /// <summary>
+    /// 正文拖选的高亮底要同时满足两件事，缺一件就是"选了看不出选了哪里"：
+    /// ① 正文色压上去够得着 4.5:1（WCAG AA，选中期间字还要能读）；
+    /// ② 与底色拉开色相——判据取"蓝减红 ≥ 0x20"，因为它专门拦住淡绿/淡灰那一族：
+    /// 原来复用 <c>Bg.AccentTint</c>（浅 #E6F9EF、深 #223B2C）时这个差只有 9 和 10，
+    /// 和气泡底只差一档色相偏移，肉眼分不出边界（2026-10-27 的实测抱怨）。
+    /// </summary>
+    [Fact]
+    public void TheDragSelectionBackgroundStaysReadableOverBodyText()
+    {
+        foreach (var file in new[] { Light, Dark })
+        {
+            var tokens = TokenFiles.Read(file);
+            var selection = tokens["Bg.TextSelection"];
+            var ratio = Contrast(selection, tokens["Fg.Primary"]);
+            Assert.True(ratio >= 4.5, $"{file}: 正文压在选择底上只有 {ratio:0.0}:1");
+            var blueMinusRed = Convert.ToInt32(selection.Substring(5, 2), 16)
+                             - Convert.ToInt32(selection.Substring(1, 2), 16);
+            Assert.True(blueMinusRed >= 0x20, $"{file}: 选择底没跟底色拉开色相，蓝减红只有 {blueMinusRed}");
+        }
+    }
+
+    /// <summary>WCAG 的相对亮度：三通道先线性化再加权。上面的 <see cref="Luminance"/> 直接按 0-255 加权，
+    /// 只够比"谁更深谁更浅"，够不着对比度门槛。</summary>
+    private static double Contrast(string a, string b)
+    {
+        var la = RelativeLuminance(a);
+        var lb = RelativeLuminance(b);
+        return (Math.Max(la, lb) + 0.05) / (Math.Min(la, lb) + 0.05);
+    }
+
+    private static double RelativeLuminance(string hex)
+    {
+        static double Channel(string hex, int at)
+        {
+            var c = Convert.ToInt32(hex.Substring(at, 2), 16) / 255.0;
+            return c <= 0.03928 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+        }
+
+        return 0.2126 * Channel(hex, 1) + 0.7152 * Channel(hex, 3) + 0.0722 * Channel(hex, 5);
     }
 
     [Fact]

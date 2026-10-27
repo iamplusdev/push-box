@@ -39,8 +39,8 @@ public sealed class SelectableBody : Decorator
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
             IsSelectionEnabled = true,
             IsInactiveSelectionHighlightEnabled = true,
-            // 选中底色走主色淡影，且不透明：默认那层半透明叠在白气泡上几乎看不出选到哪儿了
-            SelectionBrush = style.BadgeBackground,
+            // 选中底色走独立的拖选 token，且不透明：默认那层半透明叠在气泡底上几乎看不出选到哪儿了
+            SelectionBrush = style.TextSelection,
             SelectionOpacity = 1,
             IsTabStop = false,
             Focusable = true,
@@ -66,6 +66,12 @@ public sealed class SelectableBody : Decorator
 
     /// <summary>文档里的选中范围。拖选落在这上面，用例也用它把"选了一段"如实摆出来。</summary>
     public TextSelection Selection => _viewer.Selection;
+
+    /// <summary>这一棵树实际用到的选中底色。用例据此断"配色从 token 走到了控件"，而不是只停在字典里。</summary>
+    public Brush SelectionBrush => _viewer.SelectionBrush;
+
+    /// <summary>选中底的不透明度。默认那支是半透明的，叠在气泡底上会褪成看不出边界，所以这里必须是 1。</summary>
+    public double SelectionOpacity => _viewer.SelectionOpacity;
 
     /// <summary>当前拖选到的文字（空选 = 空串）。尾部的段落换行去掉——用户复制走的不是那两个字符。</summary>
     public string SelectedText

@@ -128,7 +128,7 @@ internal static class Tree
         node is null ? Enumerable.Empty<DependencyObject>() : new[] { node };
 }
 
-/// <summary>十二个角色各给一个可辨认的颜色，断言"落到了哪一支画刷"就不会靠巧合通过。</summary>
+/// <summary>十三个角色各给一个可辨认的颜色，断言"落到了哪一支画刷"就不会靠巧合通过。</summary>
 internal static class Paint
 {
     private static SolidColorBrush Brush(byte v)
@@ -140,10 +140,10 @@ internal static class Paint
 
     /// <summary>每次给一棵新的：画刷本身可以共享，但每个用例都拿自己那份，互不干扰。
     /// 参数顺序与 <see cref="MarkdownStyle"/> 的位置参数逐格对齐（Text/Muted/BlockBackground/BubbleBorder/
-    /// Code/Bar/Link/Highlight/BadgeBackground/BadgeText/LevelError/LevelWarning + 三支字体族）。</summary>
+    /// Code/Bar/Link/Highlight/BadgeBackground/BadgeText/LevelError/LevelWarning/TextSelection + 三支字体族）。</summary>
     public static MarkdownStyle Style() => new(
         Brush(1), Brush(2), Brush(3), Brush(4), Brush(5), Brush(6), Brush(7), Brush(8), Brush(9), Brush(10),
-        Brush(11), Brush(12), new FontFamily("Segoe UI"), new FontFamily("Consolas"),
+        Brush(11), Brush(12), Brush(13), new FontFamily("Segoe UI"), new FontFamily("Consolas"),
         new FontFamily("Segoe MDL2 Assets"));
 }
 

@@ -19,10 +19,12 @@ namespace PushBox.Windows.Controls;
 /// <see cref="Code"/> 单独一支而不是复用 <see cref="BlockBackground"/>：后者就是气泡自己的底，
 /// 拿它给行内码/代码块铺底等于没画（2026-10-26 前的实际症状）。<see cref="BubbleBorder"/> 不借
 /// <c>Divider</c>（比它更弱，只够勾轮廓），<see cref="Icon"/> 是动作行那颗字形用的字体族。
+/// <see cref="TextSelection"/> 同理不借 <see cref="BadgeBackground"/>（两支原本是同一支
+/// <c>Bg.AccentTint</c>）：淡绿压在气泡底上只差一档色相偏移，拖完选看不出选了哪里（2026-10-27 的实测抱怨）。
 /// </summary>
 public sealed record MarkdownStyle(Brush Text, Brush Muted, Brush BlockBackground, Brush BubbleBorder, Brush Code,
     Brush Bar, Brush Link, Brush Highlight, Brush BadgeBackground, Brush BadgeText,
-    Brush LevelError, Brush LevelWarning, FontFamily Body, FontFamily Monospace, FontFamily Icon)
+    Brush LevelError, Brush LevelWarning, Brush TextSelection, FontFamily Body, FontFamily Monospace, FontFamily Icon)
 {
     /// <summary>
     /// 围栏代码块右上角那颗"复制"要交出去的那一段（就是代码原文，不是整条消息）；null = 这棵树里不给这颗按钮。
@@ -60,7 +62,7 @@ public sealed record MarkdownStyle(Brush Text, Brush Muted, Brush BlockBackgroun
         Brush("Fg.Primary"), Brush("Fg.Secondary"), Brush("Bg.Bubble.In"), Brush("Bg.Bubble.Border"),
         Brush("Bg.Code"), Brush("Divider"),
         Brush("Accent"), Brush("Level.Highlight"), Brush("Bg.AccentTint"), Brush("Accent"),
-        Brush("Level.Error"), Brush("Level.Warning"),
+        Brush("Level.Error"), Brush("Level.Warning"), Brush("Bg.TextSelection"),
         Font("Font.UI", "Segoe UI, Microsoft YaHei UI"), Font("Font.Code", "Consolas, Microsoft YaHei UI"),
         Font("Font.Icon", "Segoe MDL2 Assets"));
 

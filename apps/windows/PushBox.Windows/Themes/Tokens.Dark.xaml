@@ -16,6 +16,9 @@
     <SolidColorBrush x:Key="Bg.SenderList" Color="#1E1E1E" />
     <SolidColorBrush x:Key="Bg.Selected" Color="#2E2E2E" />
     <SolidColorBrush x:Key="Bg.AccentTint" Color="#223B2C" />
+    <!-- 正文拖选的高亮底：深底上要靠"变亮 + 偏蓝"才读得出选了哪里。#223B2C 那支绿压在 #2A2A2C
+         的气泡底上几乎无色差，且正文（#E0E0E0）压在这支蓝上有 5.2:1 -->
+    <SolidColorBrush x:Key="Bg.TextSelection" Color="#2F5C8E" />
 
     <!-- 文字颜色（保证对比度） -->
     <SolidColorBrush x:Key="Fg.Primary" Color="#E0E0E0" />
