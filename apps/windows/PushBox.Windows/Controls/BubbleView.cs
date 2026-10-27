@@ -13,6 +13,14 @@ using MediaState = PushBox.Windows.Media.MediaState;
 namespace PushBox.Windows.Controls;
 
 /// <summary>
+/// 气泡右键菜单要的四件事，由窗口实现：复制要碰系统剪贴板、取原图要签名、删除要先问一句再上报，
+/// 渲染层这三样都不该自己干。菜单的形状（给哪几项）留在这里，动作从哪里来由调用方决定——
+/// 所以用例传四个记参数的委托就能断"点了复制走的到底是哪一段文字"。
+/// </summary>
+public sealed record MessageCommands(Action<string> CopyText, Action<string> CopyImage,
+    Action<string> CopyLink, Action<string> Delete);
+
+/// <summary>
 /// 一条消息在 PC 上长什么样：类型标签 → 左侧竖条 + 气泡（图在上、文在下）→ 打开链接 → 时间。
 /// 每一处的取舍都对齐 Android 的 <c>MessageBubble</c>（MainActivity.kt:1004-1043），
 /// 因为 §12 P3 验收③ 判的是"同一条消息两端渲染结果一致"。
@@ -243,6 +251,55 @@ public static class BubbleView
         
         container.Children.Add(textBlock);
         return container;
+    }
+
+    /// <summary>菜单项的稳定标识。文案会改，`Tag` 不会——用例认它，不认那几行字。</summary>
+    public const string CopyTextTag = "copy-text";
+
+    public const string CopyImageTag = "copy-image";
+
+    public const string CopyLinkTag = "copy-link";
+
+    public const string DeleteTag = "delete";
+
+    /// <summary>
+    /// 气泡的右键菜单（§9.3 那三类动作在 PC 上的落点）。每一项只在"这条消息真有那样东西"时出现：
+    /// 没有正文就没有"复制正文"，没有图就没有"复制图片"，没有链接就没有"复制链接"——
+    /// 摆一排用不上的灰项，比少给一项更像坏了。
+    /// 多图消息刻意<b>不</b>给"复制图片"：到底复制哪一张说不清，左键点开原图才是那条路。
+    /// </summary>
+    public static ContextMenu ContextMenuFor(MessageItem item, MessageCommands commands)
+    {
+        var menu = new ContextMenu();
+
+        if (item.Text.Trim().Length > 0)
+        {
+            var copy = new MenuItem { Header = "复制正文", Tag = CopyTextTag };
+            copy.Click += (_, _) => commands.CopyText(item.Text);
+            menu.Items.Add(copy);
+        }
+
+        if (item.MediaCount == 1)
+        {
+            var copy = new MenuItem { Header = "复制图片", Tag = CopyImageTag };
+            copy.Click += (_, _) => commands.CopyImage(item.MsgId);
+            menu.Items.Add(copy);
+        }
+
+        if (item.LinkUrl is { Length: > 0 } link)
+        {
+            var copy = new MenuItem { Header = "复制链接", Tag = CopyLinkTag };
+            copy.Click += (_, _) => commands.CopyLink(link);
+            menu.Items.Add(copy);
+        }
+
+        // 只发图没有字的消息，前面一项都没有：那就别让第一行是一条分隔线
+        if (menu.Items.Count > 0) menu.Items.Add(new Separator());
+
+        var delete = new MenuItem { Header = "删除这条消息…", Tag = DeleteTag };
+        delete.Click += (_, _) => commands.Delete(item.MsgId);
+        menu.Items.Add(delete);
+        return menu;
     }
 
     /// <summary>

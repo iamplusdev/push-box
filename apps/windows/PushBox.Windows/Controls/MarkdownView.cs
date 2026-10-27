@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using PushBox.Windows.Data;
 
 namespace PushBox.Windows.Controls;
@@ -21,6 +23,12 @@ public sealed record MarkdownStyle(Brush Text, Brush Muted, Brush BlockBackgroun
     Brush Link, Brush Highlight, Brush BadgeBackground, Brush BadgeText,
     Brush LevelError, Brush LevelWarning, FontFamily Body, FontFamily Monospace)
 {
+    /// <summary>
+    /// 围栏代码块右上角那颗"复制"要交出去的那一段（就是代码原文，不是整条消息）；null = 这棵树里不给这颗按钮。
+    /// 渲染层因此仍然不碰系统剪贴板：谁来实现由窗口决定，用例传一个记下参数的委托就能断到"复制走的到底是哪一段"。
+    /// </summary>
+    public Action<string>? Copy { get; init; }
+
     // §9.2 的字号与行高，数值直接沿用 Android 的 Typography（15/23、13/18、12/16、16/22）：
     // WPF 的 1/96 英寸与 dp 不同基准，同数值在 PC 上略大，验收按"观感一致"而不是"像素一致"（§8.2）
     //
@@ -232,12 +240,67 @@ public static class MarkdownView
                 Margin = new Thickness(MarkdownStyle.CodePadding)
             }
         };
-        return new Border
+        var border = new Border
         {
             Background = style.Code,
-            CornerRadius = new CornerRadius(MarkdownStyle.CodeRadius),
-            Child = scroll
+            CornerRadius = new CornerRadius(MarkdownStyle.CodeRadius)
         };
+        // 没人交复制回调时保持原样：那一棵树里连这颗字都不该出现（用例断"代码块长什么样"不该被按钮干扰）
+        if (style.Copy is not { } copy)
+        {
+            border.Child = scroll;
+            return border;
+        }
+
+        border.Child = WithCopyChip(scroll, value, copy, style);
+        return border;
+    }
+
+    private const string CopyLabel = "复制";
+
+    private const string CopiedLabel = "已复制";
+
+    /// <summary>
+    /// 代码块右上角那颗"复制"。它压在代码上方而不是另起一行：多一行会让每条带命令的消息都长高一截，
+    /// 而这块地方本来就是用户要找的地方（GitHub 那套位置）。底色与代码块同色，
+    /// 长行横滚到它底下时不会透出一截字来。点完变"已复制"再自己退回去——
+    /// 不给这一下反馈，用户就不知道刚才那一点有没有生效。
+    /// </summary>
+    private static Grid WithCopyChip(ScrollViewer scroll, string value, Action<string> copy, MarkdownStyle style)
+    {
+        var chip = new TextBlock
+        {
+            Text = CopyLabel,
+            FontFamily = style.Body,
+            FontSize = MarkdownStyle.LabelSize,
+            Foreground = style.Link,
+            Background = style.Code,
+            Padding = new Thickness(MarkdownStyle.CodePadding, 2, MarkdownStyle.CodePadding, 2),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Cursor = Cursors.Hand,
+            ToolTip = "复制这段代码"
+        };
+        // 1.5 秒后自己退回去：留着一个"已复制"会让人以为再点一下是别的意思
+        var revert = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+        revert.Tick += (_, _) =>
+        {
+            revert.Stop();
+            chip.Text = CopyLabel;
+        };
+        chip.MouseLeftButtonUp += (_, args) =>
+        {
+            args.Handled = true;
+            chip.Text = CopiedLabel;
+            copy(value);
+            revert.Stop();
+            revert.Start();
+        };
+
+        var layer = new Grid();
+        layer.Children.Add(scroll);
+        layer.Children.Add(chip);
+        return layer;
     }
 
     private static FrameworkElement List(MarkdownList block, MarkdownStyle style)

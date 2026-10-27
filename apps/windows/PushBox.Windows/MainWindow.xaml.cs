@@ -325,13 +325,53 @@ public partial class MainWindow : Window
         _ => null
     };
 
-    /// <summary>气泡上的右键菜单在这里现建（不写进 XAML）：删除项点的是<b>这一条</b>消息的 id，
-    /// 由调用方用闭包带进来，就不必再从弹出树反查气泡是哪一个。</summary>
-    private static ContextMenu MessageMenu(Action delete)
+    /// <summary>
+    /// 气泡右键菜单在这里接上：菜单的形状在 <see cref="BubbleView.ContextMenuFor"/>（能在 STA 用例里直接断），
+    /// 四件事落在这里——复制只写剪贴板，删除走二次确认与上报。
+    /// </summary>
+    private void AttachMessageMenu(FrameworkElement node, MessageItem item) => node.ContextMenu =
+        BubbleView.ContextMenuFor(item, new MessageCommands(
+            CopyText: CopyText,
+            CopyImage: id => _ = CopyImageAsync(id),
+            CopyLink: CopyText,
+            Delete: id => _ = DeleteMessageFromUiAsync(id)));
+
+    /// <summary>复制这一条的文字。剪贴板被别的进程攥着时 <c>SetText</c> 会抛，而这行字本来就在屏幕上，
+    /// 抄得走就不值得为它弹一个框（与设置页那份 <c>CopyToClipboard</c> 同一个口径）。</summary>
+    private static void CopyText(string text)
     {
-        var entry = new MenuItem { Header = "删除这条消息…" };
-        entry.Click += (_, _) => delete();
-        return new ContextMenu { Items = { entry } };
+        if (string.IsNullOrEmpty(text)) return;
+        try
+        {
+            Clipboard.SetText(text);
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            // 远程桌面/密码管理器锁着剪贴板：这一次没复制上，屏幕上那份还在
+        }
+    }
+
+    /// <summary>
+    /// 右键"复制图片"：取 <c>size=full</c> 那一份，不是把缩略图放大充数（同看图窗的口径）。
+    /// 取不到要说一句人话——剪贴板里悄悄躺着一张上一次复制的图，比什么都没发生更难查。
+    /// </summary>
+    private async Task CopyImageAsync(string msgId)
+    {
+        try
+        {
+            var asset = await _media.ImageAsync(Identity(), msgId, 0, false);
+            if (ImageSourceOf.FromBytes(asset.Bytes) is { } image)
+            {
+                Clipboard.SetImage(image);
+                return;
+            }
+
+            ShowNotice(asset.Placeholder is { Length: > 0 } text ? text : "这张图片暂时取不到");
+        }
+        catch (Exception)
+        {
+            ShowNotice("这张图片暂时取不到");
+        }
     }
 
     // ---- 托盘（W13）-------------------------------------------------------------------------------
@@ -380,7 +420,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>画刷是 <c>Application.Resources</c> 那两份 token 字典的快照，所以换主题时要作废重建。</summary>
-    private MarkdownStyle PaintStyle() => _style ??= MarkdownStyle.FromResources();
+    private MarkdownStyle PaintStyle() => _style ??= MarkdownStyle.FromResources() with { Copy = CopyText };
 
     protected override void OnContentRendered(EventArgs e)
     {
@@ -506,7 +546,7 @@ public partial class MainWindow : Window
             // 不加键盘快捷键——按错一下就把一条消息删掉的代价比少按一次鼠标大得多
             if (item is MessageItem target)
             {
-                node.ContextMenu = MessageMenu(() => _ = DeleteMessageFromUiAsync(target.MsgId));
+                AttachMessageMenu(node, target);
             }
 
             Timeline.Items.Add(node);
