@@ -479,7 +479,7 @@ public class BubbleViewTest
             var marker = new TextBlock { Text = "图位" };
             var body = Body(BubbleView.Build(Item(mediaCount: 1), Style, marker));
             Assert.Same(marker, body.Children[0]);
-            Assert.IsType<StackPanel>(body.Children[1]);
+            Assert.IsType<SelectableBody>(body.Children[1]);
         });
     }
 
@@ -499,9 +499,12 @@ public class BubbleViewTest
             Assert.Same(Style.BadgeBackground, badge.Background);
             Assert.Same(Style.BadgeText, label.Foreground);
             Assert.IsType<Grid>(column.Children[1]);
-            // 正文是拼进 Inlines 的，TextBlock.Text 那个 getter 在这种写法下回空串，所以断言读 Run
-            Assert.Equal("正文", string.Concat(Tree.First<TextBlock>(Body(built)).Inlines
-                .OfType<Run>().Select(r => r.Text)));
+            // 正文改成可拖选的 FlowDocument 之后，字在文档的 Run 里（TextBlock.Text 那条路已经没有了）
+            var selectable = Assert.IsType<SelectableBody>(Body(built).Children[0]);
+            Assert.Equal("正文", string.Concat(selectable.Document.Blocks
+                .OfType<Paragraph>()
+                .SelectMany(block => block.Inlines.OfType<Run>())
+                .Select(run => run.Text)));
             // 时间戳在 wrapper 的第二行，不在气泡内容列里（那样它才不会把气泡顶偏）
             Assert.Equal(TimeFormat.Stamp(1_700_000_000_000), ((TextBlock)Wrapper(built).Children[^1]).Text);
         });
@@ -618,7 +621,7 @@ public class BubbleViewTest
             var node = BubbleView.Build(Item(text: longText), Style);
 
             var items = LayOutInTimeline(node);
-            var body = Tree.First<TextBlock>(Body(node));
+            var body = Tree.First<SelectableBody>(Body(node));
 
             Assert.True(node.ActualWidth <= items.ActualWidth + 0.5,
                 $"消息行 {node.ActualWidth:0.#} 比列表 {items.ActualWidth:0.#} 还宽，右侧会被裁掉");

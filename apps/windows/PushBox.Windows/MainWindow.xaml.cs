@@ -328,13 +328,18 @@ public partial class MainWindow : Window
     /// <summary>
     /// 气泡右键菜单在这里接上：菜单的形状在 <see cref="BubbleView.ContextMenuFor"/>（能在 STA 用例里直接断），
     /// 四件事落在这里——复制只写剪贴板，删除走二次确认与上报。
+    /// 菜单归气泡根节点，但"复制正文"该复制哪一段只有正文自己知道：拖选了一段就复制那段，
+    /// 没选才复制整条（菜单项文字也跟着改，见 <see cref="BubbleView.ContextMenuFor"/>）。
     /// </summary>
-    private void AttachMessageMenu(FrameworkElement node, MessageItem item) => node.ContextMenu =
-        BubbleView.ContextMenuFor(item, new MessageCommands(
+    private void AttachMessageMenu(FrameworkElement node, MessageItem item)
+    {
+        var body = BubbleView.SelectableOf(node);
+        node.ContextMenu = BubbleView.ContextMenuFor(item, new MessageCommands(
             CopyText: CopyText,
             CopyImage: id => _ = CopyImageAsync(id),
             CopyLink: CopyText,
-            Delete: id => _ = DeleteMessageFromUiAsync(id)));
+            Delete: id => _ = DeleteMessageFromUiAsync(id)), () => body?.SelectedText);
+    }
 
     /// <summary>复制这一条的文字。剪贴板被别的进程攥着时 <c>SetText</c> 会抛，而这行字本来就在屏幕上，
     /// 抄得走就不值得为它弹一个框（与设置页那份 <c>CopyToClipboard</c> 同一个口径）。</summary>

@@ -76,6 +76,46 @@ public class CopyTest
         });
     }
 
+    /// <summary>
+    /// 拖选之后"复制正文"要复制<b>选中那段</b>，而且菜单项的字也得跟着改——
+    /// 点下去拿到半句、菜单上还写着"复制正文"，用户会以为整条都进去了。
+    /// </summary>
+    [Fact]
+    public void CopyingTextPrefersWhatTheUserSelected()
+    {
+        Sta.Run(() =>
+        {
+            var recorder = new Recorder();
+            string? picked = null;
+            var menu = BubbleView.ContextMenuFor(Item("整条正文"), recorder.Commands, () => picked);
+            var copy = menu.Items.OfType<MenuItem>().Single(item => (item.Tag as string) == BubbleView.CopyTextTag);
+
+            // 没选中：写着"复制正文"，交整条
+            menu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
+            Assert.Equal(BubbleView.CopyTextLabel, copy.Header);
+            Click(menu, BubbleView.CopyTextTag);
+            Assert.Equal(new[] { "text:整条正文" }, recorder.Calls);
+
+            // 选中了：菜单当场改字，交的是那半句
+            picked = "选中这半句";
+            menu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
+            Assert.Equal(BubbleView.CopyPickedLabel, copy.Header);
+            Click(menu, BubbleView.CopyTextTag);
+            Assert.Equal(new[] { "text:整条正文", "text:选中这半句" }, recorder.Calls);
+        });
+    }
+
+    /// <summary>窗口那一侧要靠它把"选中了什么"绑到菜单上：有正文的气泡找得到，纯图气泡找不到。</summary>
+    [Fact]
+    public void TheBubbleKnowsWhichPartOfItCanBeSelected()
+    {
+        Sta.Run(() =>
+        {
+            Assert.NotNull(BubbleView.SelectableOf(BubbleView.Build(Item(), Style)));
+            Assert.Null(BubbleView.SelectableOf(BubbleView.Build(Item(text: string.Empty, mediaCount: 1), Style)));
+        });
+    }
+
     [Fact]
     public void EachEntryHandsOverItsOwnPieceOfTheMessage()
     {

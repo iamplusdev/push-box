@@ -143,8 +143,10 @@ public static class BubbleView
         if (media is not null) body.Children.Add(media);
         // body ?: summary ?: title 三选一（在 MainModel 里已经选完），再按块解析：
         // 非 markdown 类型的正文通常没有语法，但两端走同一条解析路径才不会"手机按块排、PC 挤成一行"
+        // 正文换成可拖选的 FlowDocument：TextBlock 没有选中 API，而气泡又要"贴着字收窄"，
+        // 这两件事的交点见 SelectableBody 的注释（标尺量宽 + PageWidth 钉住）
         if (item.Text.Trim().Length > 0)
-            body.Children.Add(MarkdownView.BuildAll(Markdown.Parse(item.Text), style));
+            body.Children.Add(new SelectableBody(Markdown.Parse(item.Text), style));
 
         // 气泡本体：背景 + 1px 边框 + 阴影效果（通过 BorderThickness 模拟）
         // 星号列会把剩余宽度全给这一列，所以气泡自己靠左收在内容宽度上，短消息才不会拉成一整条空白
@@ -262,20 +264,33 @@ public static class BubbleView
 
     public const string DeleteTag = "delete";
 
+    /// <summary>没拖选时复制整条正文。</summary>
+    public const string CopyTextLabel = "复制正文";
+
+    /// <summary>拖选了一段就复制那一段——菜单在打开那一刻才改这个字，不然点下去复制的东西和写着的不一样。</summary>
+    public const string CopyPickedLabel = "复制选中内容";
+
     /// <summary>
     /// 气泡的右键菜单（§9.3 那三类动作在 PC 上的落点）。每一项只在"这条消息真有那样东西"时出现：
     /// 没有正文就没有"复制正文"，没有图就没有"复制图片"，没有链接就没有"复制链接"——
     /// 摆一排用不上的灰项，比少给一项更像坏了。
     /// 多图消息刻意<b>不</b>给"复制图片"：到底复制哪一张说不清，左键点开原图才是那条路。
+    /// <paramref name="picked"/> 交的是"这一条现在被拖选的那段字"：有选中就复制选中，
+    /// 否则复制整条正文。菜单项文字跟着改，用户点到的和看到的才是同一件事。
     /// </summary>
-    public static ContextMenu ContextMenuFor(MessageItem item, MessageCommands commands)
+    public static ContextMenu ContextMenuFor(MessageItem item, MessageCommands commands,
+        Func<string?>? picked = null)
     {
         var menu = new ContextMenu();
 
         if (item.Text.Trim().Length > 0)
         {
-            var copy = new MenuItem { Header = "复制正文", Tag = CopyTextTag };
-            copy.Click += (_, _) => commands.CopyText(item.Text);
+            var copy = new MenuItem { Header = CopyTextLabel, Tag = CopyTextTag };
+            copy.Click += (_, _) => commands.CopyText(
+                picked?.Invoke() is { Length: > 0 } selection ? selection : item.Text);
+            if (picked is not null)
+                menu.Opened += (_, _) =>
+                    copy.Header = picked() is { Length: > 0 } ? CopyPickedLabel : CopyTextLabel;
             menu.Items.Add(copy);
         }
 
@@ -313,6 +328,22 @@ public static class BubbleView
         "Level.Warning" => style.LevelWarning,
         _ => null
     };
+
+    /// <summary>
+    /// 这一棵气泡里的可拖选正文（只发图、只发链接的消息没有）。右键菜单据此把"复制正文"
+    /// 换成"复制选中内容"：菜单归气泡根节点，选中的范围只有正文自己知道，所以要找得到它。
+    /// 走可视树：气泡是纯 Panel/Border 搭的，子节点加进去就是可视子节点，不必先排过版。
+    /// </summary>
+    public static SelectableBody? SelectableOf(DependencyObject root)
+    {
+        if (root is SelectableBody body) return body;
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            if (SelectableOf(VisualTreeHelper.GetChild(root, i)) is { } found) return found;
+        }
+        return null;
+    }
 }
 
 /// <summary>

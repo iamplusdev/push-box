@@ -149,6 +149,17 @@ public static class MarkdownView
             Foreground = color,
             Margin = margin ?? new Thickness(0)
         };
+        Inlines(text.Inlines, value, style, color, bold);
+        return text;
+    }
+
+    /// <summary>
+    /// 一条正文的内联规则：粗体、行内码、裸链接（均可叠加）与 emoji 逐 Run 替换。
+    /// 抽出来是因为正文有两条呈现路径——<see cref="TextBlock"/> 与 <see cref="FlowDocument"/> 的
+    /// <see cref="Paragraph"/>——两边必须是同一份规则，不然"拖选的那棵树"和"量宽度的那棵树"会长得不一样。
+    /// </summary>
+    private static void Inlines(InlineCollection target, string value, MarkdownStyle style, Brush color, bool bold)
+    {
         foreach (var span in Markdown.Inline(value))
         {
             var run = new Run(span.Text)
@@ -164,12 +175,122 @@ public static class MarkdownView
                 // 与气泡底同色时这枚"码片"根本看不出来，必须走单独的 Code 画刷
                 run.Background = style.Code;
             }
-            text.Inlines.Add(run);
+            target.Add(run);
             // 必须在 Add 之后：Run 没有父集合时替换插不进兄弟节点，而且不抛异常、只是什么都不出
             if (span.Style != InlineStyle.Code) EmojiText.Substitute(run);
         }
-        return text;
     }
+
+    /// <summary>
+    /// 同一串块拼成 <see cref="FlowDocument"/>：正文因此可以拖选（TextBlock 不提供选中）。
+    /// 段落、标题、引用、列表走原生块（字能选、能复制），围栏代码块与表格仍交回
+    /// <see cref="Code"/> / <see cref="Table"/>——那两样要的是横向滚动与右上角那颗复制，塞进
+    /// 文档流反而会丢掉这两样；它们的文字走 <c>BlockUIContainer</c>，不在拖选范围内。
+    /// 每一块都显式给 Margin：FlowDocument 里 Paragraph 的默认 Margin 是 Auto，两段之间会自己
+    /// 多出整整一行（实测 2×23 → 69），跟 §9.2 的"块间 4"对不上。
+    /// </summary>
+    public static FlowDocument BuildDocument(IReadOnlyList<MarkdownBlock> blocks, MarkdownStyle style)
+    {
+        var document = new FlowDocument
+        {
+            PagePadding = new Thickness(0),
+            FontFamily = style.Body,
+            FontSize = MarkdownStyle.BodySize,
+            Foreground = style.Text
+        };
+        for (var i = 0; i < blocks.Count; i++)
+            document.Blocks.Add(Block(blocks[i], style, i == 0));
+        return document;
+    }
+
+    private static System.Windows.Documents.Block Block(MarkdownBlock block, MarkdownStyle style, bool first) =>
+        block switch
+        {
+            MarkdownParagraph p => Paragraph(p.Text, style, MarkdownStyle.BodySize, MarkdownStyle.BodyLine,
+                style.Text, false, Gap(first)),
+            MarkdownHeading h => Paragraph(h.Text, style, HeadingSize(h.Level), HeadingLine(h.Level),
+                style.Text, true, new Thickness(0, MarkdownStyle.BlockGap, 0, 0)),
+            MarkdownQuote q => Quoted(q.Text, style, Gap(first)),
+            MarkdownList l => Bullets(l, style, Gap(first)),
+            MarkdownCode c => Embed(Code(c.Text, style), Gap(first)),
+            MarkdownTable t => Embed(Table(t, style), Gap(first)),
+            _ => Paragraph(string.Empty, style, MarkdownStyle.BodySize, MarkdownStyle.BodyLine, style.Text,
+                false, Gap(first))
+        };
+
+    /// <summary>块之间的间距：与 <see cref="BuildAll"/> 同一条规则（第一块不空行、标题永远 4）。</summary>
+    private static Thickness Gap(bool first) => new(0, first ? 0 : MarkdownStyle.BlockGap, 0, 0);
+
+    private static Paragraph Paragraph(string value, MarkdownStyle style, double size, double line,
+        Brush color, bool bold, Thickness margin)
+    {
+        var paragraph = new Paragraph
+        {
+            FontSize = size,
+            LineHeight = line,
+            LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+            Foreground = color,
+            Margin = margin
+        };
+        Inlines(paragraph.Inlines, value, style, color, bold);
+        return paragraph;
+    }
+
+    /// <summary>引用：原生段落自带边框与内边距，竖条（3）与文字缩进（8）和 <see cref="Quote"/> 同一个数。</summary>
+    private static Paragraph Quoted(string value, MarkdownStyle style, Thickness margin)
+    {
+        var paragraph = new Paragraph
+        {
+            FontSize = MarkdownStyle.BodySize,
+            LineHeight = MarkdownStyle.BodyLine,
+            LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+            Foreground = style.Muted,
+            BorderBrush = style.Bar,
+            BorderThickness = new Thickness(MarkdownStyle.QuoteBarWidth, 0, 0, 0),
+            Padding = new Thickness(MarkdownStyle.QuoteIndent, 0, 0, 0),
+            Margin = margin
+        };
+        Inlines(paragraph.Inlines, value, style, style.Muted, false);
+        return paragraph;
+    }
+
+    /// <summary>
+    /// 列表：正文必须能选中，所以这里不能再拿 <see cref="List"/> 那个方法名（它返回 StackPanel）。
+    /// 项目符号交给原生 <see cref="System.Windows.Documents.List"/>；左边留出的那一列 =
+    /// 最宽那条项目符号的自然宽 + 8，MarkerOffset 固定 8——这样符号落在 0 附近、文字从
+    /// "符号宽 + 8" 起，与标尺那份列表的横向位置一致（离屏渲染逐列比对过）。
+    /// </summary>
+    private static System.Windows.Documents.List Bullets(MarkdownList block, MarkdownStyle style, Thickness margin)
+    {
+        var list = new System.Windows.Documents.List
+        {
+            MarkerStyle = block.Ordered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc,
+            MarkerOffset = MarkdownStyle.ListIndent,
+            Padding = new Thickness(MarkerBudget(block, style), 0, 0, 0),
+            Margin = margin,
+            // 符号走弱色，与标尺那颗"•"同一支画刷
+            Foreground = style.Muted
+        };
+        for (var i = 0; i < block.Items.Count; i++)
+        {
+            list.ListItems.Add(new ListItem(Paragraph(block.Items[i], style, MarkdownStyle.BodySize,
+                MarkdownStyle.BodyLine, style.Text, false,
+                new Thickness(0, i == 0 ? 0 : MarkdownStyle.ListGap, 0, 0))));
+        }
+        return list;
+    }
+
+    private static double MarkerBudget(MarkdownList block, MarkdownStyle style)
+    {
+        var widest = block.Ordered ? $"{block.Items.Count}." : "•";
+        var ruler = new TextBlock { Text = widest, FontFamily = style.Body, FontSize = MarkdownStyle.BodySize };
+        ruler.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        return ruler.DesiredSize.Width + MarkdownStyle.ListIndent;
+    }
+
+    /// <summary>代码块与表格照旧由各自那套元素画，这里只负责把它们排进文档流。</summary>
+    private static BlockUIContainer Embed(FrameworkElement child, Thickness margin) =>
+        new() { Child = child, Padding = new Thickness(0), Margin = margin };
 
     /// <summary>
     /// §7.4 的命中高亮：刷主色 + 加粗，不是加背景色（Android 的 <c>highlighted</c> 就是这个样式）。
