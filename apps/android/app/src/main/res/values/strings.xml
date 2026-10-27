@@ -318,6 +318,12 @@
     <string name="message_fulltext">展开全文</string>
     <string name="message_fulltext_loading">全文取回中…</string>
 
+    <!-- §7.4 全屏看图：顶栏保存与保存结果提示 -->
+    <string name="image_viewer_save">保存图片</string>
+    <string name="image_saved">已保存到相册</string>
+    <string name="image_save_failed">保存失败，请稍后再试</string>
+    <string name="image_save_denied">没有存储权限，无法保存</string>
+
     <!-- 频道治理（§14：App 是唯一控制台，D28） -->
     <string name="channel_governance">治理设置</string>
     <string name="channel_governance_title">频道治理</string>

@@ -177,6 +177,7 @@ import cn.iamplus.pushbox.ui.dateSectionLabel
 import cn.iamplus.pushbox.ui.dateTimeLabel
 import cn.iamplus.pushbox.ui.dayKey
 import cn.iamplus.pushbox.ui.listTimeLabel
+import cn.iamplus.pushbox.ui.rememberMediaSaver
 import cn.iamplus.pushbox.push.PushService
 import cn.iamplus.pushbox.push.SyncWorker
 import cn.iamplus.pushbox.ui.LocalPushBoxColors
@@ -1602,9 +1603,8 @@ private fun MessageActionSheet(row: MessageRow, onDismiss: () -> Unit, onDelete:
     val copy = rememberCopyAction(messageText(row))
     var confirmDelete by remember { mutableStateOf(false) }
     var showJson by remember { mutableStateOf(false) }
-    val context = LocalContext.current
     // §7.4 D17：长按气泡补"保存图片 / 查看原始 JSON"
-    val scope = rememberCoroutineScope()
+    val saveImage = rememberMediaSaver()
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -1649,11 +1649,7 @@ private fun MessageActionSheet(row: MessageRow, onDismiss: () -> Unit, onDelete:
                 if (row.mediaCount > 0) {
                     MenuOption(
                         label = stringResource(R.string.message_action_save_image),
-                        onClick = {
-                            scope.launch(Dispatchers.IO) {
-                                runCatching { saveMediaToDownloads(context, row.msgId, 0) }
-                            }
-                        })
+                        onClick = { saveImage(row.msgId, 0) })
                 }
                 MenuOption(
                     label = stringResource(R.string.message_action_raw_json),
@@ -1685,18 +1681,6 @@ private fun rawMessageJson(row: MessageRow): String = buildString {
     append("  \"created_at\": ${row.createdAt},\n")
     append("  \"read_state\": ${row.readState}\n")
     append("}")
-}
-
-/** §7.4 保存媒体到系统下载目录：取第一张图，写进 Download 文件夹并通知 MediaStore。 */
-private suspend fun saveMediaToDownloads(context: Context, msgId: String, idx: Int) {
-    val app = App.get(context)
-    val identity = app.identity.load() ?: return
-    val bytes = PushBoxApi(identity.baseUrl, app.http).fetchMedia(identity, msgId, idx, thumb = false)
-    val dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-    val file = java.io.File(dir, "pushbox_${msgId}_$idx.jpg")
-    java.io.FileOutputStream(file).use { it.write(bytes) }
-    // 通知系统扫描新文件（不依赖 FileProvider）
-    android.media.MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), null) { _, _ -> }
 }
 
 private fun messageText(row: MessageRow): String = row.body ?: row.summary ?: row.title.orEmpty()

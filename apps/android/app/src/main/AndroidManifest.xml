@@ -16,6 +16,9 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- 版本自更新：下载 GitHub Releases 的 APK 后拉起系统安装面板（Android 8+ 需此权限 + 未知来源授权） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- §7.4 存图到相册：Android 10+ 走 MediaStore 不要权限；8/9 写公共 Pictures 目录才需要它 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
