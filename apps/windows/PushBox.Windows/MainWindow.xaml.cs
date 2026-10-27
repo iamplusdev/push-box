@@ -888,7 +888,9 @@ public partial class MainWindow : Window
 
     // ---- 渲染用的小工具 ---------------------------------------------------------------------------
 
-    /// <summary>这一条消息的图位：没图就不占位，有图才挂 <see cref="MediaStrip"/>（取字节是异步的）。
+    /// <summary>这一条消息的图位：没图就不占位，有图才挂 <see cref="MediaStrip"/>。
+    /// 这里只<b>摆好格子</b>，取字节要等那一格被装载（<see cref="MediaStrip"/> 的 <c>MediaSlot</c>）——
+    /// 切会话重建整条时间线，一次刷新里发几百个请求正是卡顿的一半来源。
     /// 缩略图与大图是两次请求：§4.5 的 <c>size=thumb</c> 是服务端降过级的产物，点开时不能拿它放大充数。</summary>
     private UIElement? MediaOf(MessageItem item, MarkdownStyle style) => item.MediaCount <= 0
         ? null

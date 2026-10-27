@@ -195,4 +195,65 @@ public class MarkdownTest
     {
         Assert.Empty(Markdown.Inline(string.Empty));
     }
+
+    // ---- 分块缓存 ---------------------------------------------------------------------------------
+
+    /// <summary>
+    /// 缓存拿<b>对象引用</b>当判据，不拿计数：块表是 record，两次解析内容相等但对象不同，
+    /// <c>Assert.Same</c> 才分得出"复用了一份"和"又算了一遍"。
+    /// 每个用例开头先 <see cref="Markdown.ClearCache"/>——整个装配是顺序跑的（AssemblyInfo 那条），
+    /// 但别处用例也经手同一份静态缓存，不清就测不出自己那一份。
+    /// </summary>
+    [Fact]
+    public void TheSameBodyIsParsedOnceAndHandedBackAgain()
+    {
+        Markdown.ClearCache();
+        var source = "# 磁盘告警\ncritical **disk** full";
+
+        var first = Markdown.BlocksFor(source);
+        Assert.Same(first, Markdown.BlocksFor(source));
+
+        Markdown.ClearCache();
+        Assert.NotSame(first, Markdown.BlocksFor(source));
+    }
+
+    [Fact]
+    public void TwoDifferentBodiesNeverShareABlockTable()
+    {
+        Markdown.ClearCache();
+
+        Assert.NotSame(Markdown.BlocksFor("第一句"), Markdown.BlocksFor("第二句"));
+    }
+
+    /// <summary>
+    /// 到了上限就淘汰最久没用的那一条，而不是整表清空：往上翻历史时，刚看过的还在。
+    /// 逐条 <c>BlocksFor</c> 填满 <see cref="Markdown.CacheBound"/> 再溢出一条，代价是一次正则，可接受。
+    /// </summary>
+    [Fact]
+    public void TheOldestBodyIsDroppedWhenTheCacheIsFullAndTheFreshOnesStay()
+    {
+        Markdown.ClearCache();
+        var bodies = Enumerable.Range(0, Markdown.CacheBound).Select(i => $"第 {i} 条正文").ToArray();
+        var first = bodies.ToDictionary(body => body, Markdown.BlocksFor);
+
+        var overflow = Markdown.BlocksFor("挤进来的一条");
+        Assert.NotSame(first[bodies[0]], Markdown.BlocksFor(bodies[0]));
+        Assert.Same(overflow, Markdown.BlocksFor("挤进来的一条"));
+        Assert.Same(first[bodies[^1]], Markdown.BlocksFor(bodies[^1]));
+    }
+
+    /// <summary>命中要把它挪回队尾：不然一条一直往前翻的正文会被"用得最少"的那条挤掉，缓存白做。</summary>
+    [Fact]
+    public void AHitKeepsItsBodyAliveAndTheLeastUsedOneGoesFirst()
+    {
+        Markdown.ClearCache();
+        var bodies = Enumerable.Range(0, Markdown.CacheBound).Select(i => $"第 {i} 条正文").ToArray();
+        var first = bodies.ToDictionary(body => body, Markdown.BlocksFor);
+
+        Assert.Same(first[bodies[0]], Markdown.BlocksFor(bodies[0])); // 摸一下 oldest，把它挪到队尾
+        Markdown.BlocksFor("挤进来的一条");
+
+        Assert.NotSame(first[bodies[1]], Markdown.BlocksFor(bodies[1]));
+        Assert.Same(first[bodies[0]], Markdown.BlocksFor(bodies[0]));
+    }
 }

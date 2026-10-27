@@ -755,6 +755,7 @@ public class MediaStripTest
         Sta.Run(() =>
         {
             var grid = MediaStrip.Build(1, _ => NeverReturns(), Style);
+            MediaStrip.Realize(grid);
             Assert.Equal("加载中…", Text(Cell(grid, 0)));
             // 转 120ms 让"如果它自己会变"的那些续延都跑完，再回头确认它纹丝不动
             Sta.PumpFor(120);
@@ -770,6 +771,7 @@ public class MediaStripTest
             var png = PngBytes();
             var single = MediaStrip.Build(1,
                 _ => Task.FromResult(new MediaAsset(MediaState.Ready, png, "image/png")), Style);
+            MediaStrip.Realize(single);
             Sta.PumpUntil(() => Tree.Descendants<Image>(single).Any());
             var big = Tree.First<Image>(single);
             Assert.NotNull(big.Source);
@@ -779,6 +781,7 @@ public class MediaStripTest
 
             var grid = MediaStrip.Build(2,
                 _ => Task.FromResult(new MediaAsset(MediaState.Ready, png, "image/png")), Style);
+            MediaStrip.Realize(grid);
             Sta.PumpUntil(() => Tree.Descendants<Image>(grid).Any());
             Assert.Equal(Stretch.UniformToFill, Tree.First<Image>(grid).Stretch);
             Assert.Equal(88d, Cell(grid, 1).Width);
@@ -791,6 +794,7 @@ public class MediaStripTest
         Sta.Run(() =>
         {
             var grid = MediaStrip.Build(1, _ => Task.FromResult(new MediaAsset(MediaState.Purged)), Style);
+            MediaStrip.Realize(grid);
             Sta.PumpUntil(() => Text(Cell(grid, 0)) == "图片已失效");
             Assert.Equal("点击重试", Tree.First<TextBlock>(grid).ToolTip);
         });
@@ -803,6 +807,7 @@ public class MediaStripTest
         {
             var grid = MediaStrip.Build(1,
                 _ => Task.FromResult(new MediaAsset(MediaState.NetworkError, Reason: "连不上服务端")), Style);
+            MediaStrip.Realize(grid);
             Sta.PumpUntil(() => Text(Cell(grid, 0)) == "连不上服务端");
             Assert.Equal("点击重试", Tree.First<TextBlock>(grid).ToolTip);
         });
@@ -814,10 +819,12 @@ public class MediaStripTest
         Sta.Run(() =>
         {
             var pending = MediaStrip.Build(1, _ => Task.FromResult(Pending()), Style);
+            MediaStrip.Realize(pending);
             Sta.PumpUntil(() => Text(Cell(pending, 0)) == "图片加载中");
 
             // 这一格压根没有图源：文案留空、也不给重试（重试变不出图源来），由会话行的首字头像继续顶着
             var none = MediaStrip.Build(1, _ => Task.FromResult(new MediaAsset(MediaState.NoSource)), Style);
+            MediaStrip.Realize(none);
             Sta.PumpUntil(() => Cell(none, 0).Child is not null);
             Assert.Equal(string.Empty, Text(Cell(none, 0)));
             Assert.Null(((TextBlock)Cell(none, 0).Child).ToolTip);
@@ -831,6 +838,7 @@ public class MediaStripTest
         {
             var grid = MediaStrip.Build(1,
                 _ => Task.FromException<MediaAsset>(new InvalidOperationException("解码器炸了")), Style);
+            MediaStrip.Realize(grid);
             Sta.PumpUntil(() => Text(Cell(grid, 0)) == "图片暂时取不到");
             Assert.Equal("点击重试", Tree.First<TextBlock>(grid).ToolTip);
         });
@@ -843,6 +851,62 @@ public class MediaStripTest
         {
             var empty = (StackPanel)MediaStrip.Build(0, _ => Task.FromResult(Pending()), Style);
             Assert.Empty(empty.Children);
+        });
+    }
+
+    /// <summary>
+    /// 没被装载的格子一个请求都不发。切会话要重建整条时间线，几百条消息就是几百张图：
+    /// 全在构造那一刻发车，等于把几百次网络往返和它们的字节解码压进同一次界面刷新。
+    /// 这条断的是"<b>不发</b>"，所以它用 <see cref="Sta.PumpFor"/> 断一个永远不成立的条件——
+    /// 换成 <c>PumpUntil</c> 会把超时抛出当成用例失败。
+    /// </summary>
+    [Fact]
+    public void AnUnrealizedSlotSendsNothingAndDrawsNothingYet()
+    {
+        Sta.Run(() =>
+        {
+            var calls = 0;
+            var grid = MediaStrip.Build(3, _ =>
+            {
+                calls++;
+                return Task.FromResult(Pending());
+            }, Style);
+
+            Sta.PumpFor(60);
+            Assert.Equal(0, calls);
+            // 但方框照旧占着那一格：宽高是构造时按表定死的，晚点取字节不会让版面跳一下
+            Assert.Null(Cell(grid, 0).Child);
+            Assert.Equal(88d, Cell(grid, 2).Width);
+            Assert.Equal(88d, Cell(grid, 2).Height);
+        });
+    }
+
+    /// <summary>
+    /// 一个格子一辈子只发一次。滚出屏幕再滚回来时 <c>Loaded</c> 会第二次敲门，那时字节早就画上了；
+    /// 按<b>格</b>计而不是按这条消息计，是因为九宫格那几格各有各的对象键（<c>{msgId}#{idx}</c>）。
+    /// </summary>
+    [Fact]
+    public void OneSlotPaysExactlyOneRequestHoweverManyTimesItIsLoaded()
+    {
+        Sta.Run(() =>
+        {
+            var calls = 0;
+            Task<MediaAsset> Count()
+            {
+                calls++;
+                return Task.FromResult(Pending());
+            }
+
+            var single = MediaStrip.Build(1, _ => Count(), Style);
+            MediaStrip.Realize(single);
+            MediaStrip.Realize(single);
+            Sta.PumpFor(60);
+            Assert.Equal(1, calls);
+
+            var three = MediaStrip.Build(3, _ => Count(), Style);
+            MediaStrip.Realize(three);
+            Sta.PumpFor(60);
+            Assert.Equal(4, calls);
         });
     }
 

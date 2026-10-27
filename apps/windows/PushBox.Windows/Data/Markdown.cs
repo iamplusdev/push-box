@@ -60,7 +60,65 @@ public static class Markdown
 
     private static readonly Regex InlineUrl = new(@"https?://[^\s<>""']+", RegexOptions.Compiled);
 
-    /// <summary>整条正文分块。空串也会得到一个空段落，渲染层因此不必判 null。</summary>
+    // ---- 分块缓存 ----------------------------------------------------------------------------------
+
+    /// <summary>
+    /// 缓存上限。一屏几十条，往上翻也就几百条；再大就是在拿内存换一条早就划出屏幕的消息。
+    /// 它是<b>按正文</b>而不是按 msgId 计的：监控类消息一分钟推同一段话进来，那几口气泡共用一份块表。
+    /// </summary>
+    public const int CacheBound = 400;
+
+    /// <summary>链表节点存着键，淘汰时才不用反查字典。</summary>
+    private readonly record struct Entry(string Key, IReadOnlyList<MarkdownBlock> Blocks);
+
+    private static readonly Dictionary<string, LinkedListNode<Entry>> Cache = new(StringComparer.Ordinal);
+    private static readonly LinkedList<Entry> Order = new();
+
+    /// <summary>
+    /// 按正文取块表：同一条正文第二次拿到<b>同一个对象</b>，不再重走一遍正则。
+    ///
+    /// 缓存不需要跟着主题失效——<see cref="MarkdownBlock"/> 这一族是纯语法数据，一个颜色都不认，
+    /// 样式只在 <c>MarkdownView.Build*</c> 那一步才叠上去（这也是它能被跨样式复用的原因）。
+    /// 命中的那一下要挪到 LRU 尾巴：切回一个会话时，它顶上那几条正是马上又要用的。
+    ///
+    /// 和渲染层别处一样，只在 UI 线程上碰。
+    /// </summary>
+    public static IReadOnlyList<MarkdownBlock> BlocksFor(string source)
+    {
+        var key = source ?? string.Empty;
+        if (Cache.TryGetValue(key, out var node))
+        {
+            if (!ReferenceEquals(node, Order.Last))
+            {
+                Order.Remove(node);
+                Order.AddLast(node);
+            }
+            return node.Value.Blocks;
+        }
+
+        var blocks = Parse(key);
+        Cache[key] = Order.AddLast(new Entry(key, blocks));
+        while (Cache.Count > CacheBound)
+        {
+            var oldest = Order.First!;
+            Order.RemoveFirst();
+            Cache.Remove(oldest.Value.Key);
+        }
+        return blocks;
+    }
+
+    /// <summary>清空分块缓存。生产代码不调它——留给用例把"命中还是重解析"摆成可比的对象引用。</summary>
+    public static void ClearCache()
+    {
+        Cache.Clear();
+        Order.Clear();
+    }
+
+    /// <summary>
+    /// 整条正文分块，<b>每次调用真的重算一遍</b>。界面上画气泡走的是 <see cref="BlocksFor"/>
+    /// （那条带缓存）；这里留着不带缓存的入口，是给"要的就是这一趟解析本身"的用例用的。
+    /// 空串也会得到一个空段落，渲染层因此不必判 null。
+    /// </summary>
     public static IReadOnlyList<MarkdownBlock> Parse(string source)
     {
         var text = source ?? string.Empty;

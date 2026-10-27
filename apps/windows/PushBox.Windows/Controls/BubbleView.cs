@@ -153,8 +153,10 @@ public static class BubbleView
         // 非 markdown 类型的正文通常没有语法，但两端走同一条解析路径才不会"手机按块排、PC 挤成一行"
         // 正文换成可拖选的 FlowDocument：TextBlock 没有选中 API，而气泡又要"贴着字收窄"，
         // 这两件事的交点见 SelectableBody 的注释（标尺量宽 + PageWidth 钉住）
+        // 分块走 BlocksFor 而不是 Parse：每次 Refresh 都重建整条时间线，同一条正文会被反复解析；
+        // 块表是纯语法数据、不认样式，所以换主题不用失效它，缓存才有意义
         if (item.Text.Trim().Length > 0)
-            body.Children.Add(new SelectableBody(Markdown.Parse(item.Text), style));
+            body.Children.Add(new SelectableBody(Markdown.BlocksFor(item.Text), style));
 
         // 气泡本体：背景 + 1px 边框 + 阴影效果（通过 BorderThickness 模拟）
         // 星号列会把剩余宽度全给这一列，所以气泡自己靠左收在内容宽度上，短消息才不会拉成一整条空白
@@ -366,6 +368,8 @@ public static class BubbleView
 /// §4.5 的抓取是异步的，所以这里必须区分"还在等字节"和"字节不会再来"：
 /// 前者转圈、后者给 <see cref="MediaAsset.Placeholder"/> 那句"图片已失效"并留一次点击重试。
 /// 图在正文**上方**，与 Android 的 <c>if (mediaCount &gt; 0) MediaGrid(...)</c> 先于文本同序。
+/// 每格的请求<b>等到自己被装载才发</b>（见 <see cref="MediaSlot"/>）：切会话要重建整条时间线，
+/// 一屏几百张图同时在构造那一刻发车，就是把网络往返和字节解码全塞进同一次界面刷新里。
 /// </summary>
 public static class MediaStrip
 {
@@ -427,30 +431,90 @@ public static class MediaStrip
     /// 一个格子。<paramref name="crop"/> = true 是九宫格里的小方格（裁满），false 是单图大格（按原比例放全）。
     /// </summary>
     private static Border Slot(int idx, double size, double fallbackHeight, bool crop, double leftMargin,
-        Func<int, Task<MediaAsset>>? fullLoad, Func<int, Task<MediaAsset>> load, MarkdownStyle style)
+        Func<int, Task<MediaAsset>>? fullLoad, Func<int, Task<MediaAsset>> load, MarkdownStyle style) =>
+        new MediaSlot(idx, size, fallbackHeight, crop, leftMargin, load, fullLoad, style);
+
+    /// <summary>
+    /// 把 <paramref name="root"/> 底下每一格子的取图叫醒一次；已经叫过的不会重复叫。
+    ///
+    /// <b>生产代码里没有它的位置</b>：真界面是格子自己被装载时敲 <see cref="FrameworkElement.Loaded"/>
+    /// 的门。它是留给用例的入口——测试里那棵 StackPanel 从头到尾没进过可视树，Loaded 永远不来，
+    /// 而"什么时候去取字节"恰恰是这批用例要断的那件事。
+    /// </summary>
+    public static void Realize(DependencyObject root)
     {
-        var slot = new Border
+        if (root is MediaSlot slot)
         {
-            Width = size,
-            Height = fallbackHeight,
-            CornerRadius = new CornerRadius(BubbleView.BubbleRadius),
-            Background = style.BlockBackground,
-            Margin = new Thickness(leftMargin, 0, 0, 0),
-            ClipToBounds = true
-        };
-        Fill(slot, idx, load, style, crop, fullLoad);
-        if (fullLoad != null)
-        {
-            slot.Cursor = Cursors.Hand;
-            slot.ToolTip = "查看原图";
-            slot.MouseLeftButtonUp += (_, _) => MediaViewer.Show(() => fullLoad(idx), style);
+            slot.Fetch();
+            return;
         }
-        return slot;
+
+        if (root is Panel panel)
+        {
+            foreach (UIElement child in panel.Children) Realize(child);
+            return;
+        }
+
+        if (root is Border border && border.Child is { } inner) Realize(inner);
+    }
+
+    /// <summary>
+    /// 一格图。<b>在被装载之前不去取字节</b>：切会话那一下会重建整条时间线，几百条消息就是几百张图，
+    /// 全在构造那一刻发车的话，网络请求和字节解码会挤在同一帧里落地。
+    /// 方框的宽高在构造时就按表定死了，所以晚点取不会让版面跳一下（唯一会长高的那次——单图按真实
+    /// 比例换算——本来也得等字节）。
+    /// 一次装载只取一次：滚出屏幕再滚回来，Loaded 会第二次敲门，那时字节早就画上了。
+    /// 只有点"重试"那条路绕开这个闸门，那是用户明确要求再取一遍。
+    /// </summary>
+    internal sealed class MediaSlot : Border
+    {
+        private readonly int _idx;
+        private readonly Func<int, Task<MediaAsset>> _load;
+        private readonly Func<int, Task<MediaAsset>>? _fullLoad;
+        private readonly MarkdownStyle _style;
+        private readonly bool _crop;
+        private bool _fetched;
+
+        public MediaSlot(int idx, double size, double fallbackHeight, bool crop, double leftMargin,
+            Func<int, Task<MediaAsset>> load, Func<int, Task<MediaAsset>>? fullLoad, MarkdownStyle style)
+        {
+            _idx = idx;
+            _load = load;
+            _fullLoad = fullLoad;
+            _style = style;
+            _crop = crop;
+
+            Width = size;
+            Height = fallbackHeight;
+            CornerRadius = new CornerRadius(BubbleView.BubbleRadius);
+            Background = style.BlockBackground;
+            Margin = new Thickness(leftMargin, 0, 0, 0);
+            ClipToBounds = true;
+            Loaded += (_, _) => Fetch();
+
+            // 大图走 <c>size=full</c> 那条端点，不是把缩略图放大（§4.5 的缩略图是服务端降级的产物）
+            if (fullLoad is null) return;
+            Cursor = Cursors.Hand;
+            ToolTip = "查看原图";
+            MouseLeftButtonUp += (_, _) => MediaViewer.Show(() => fullLoad(idx), style);
+        }
+
+        /// <summary>
+        /// 发一次请求。叫 internal 而不是 private 是因为 C# 只让嵌套类往外套用私有成员，
+        /// 反过来不行——而 <see cref="Realize"/>（用例入口）就在外面。
+        /// </summary>
+        internal void Fetch()
+        {
+            if (_fetched) return;
+            _fetched = true;
+            Fill(this, _idx, _load, _style, _crop, _fullLoad);
+        }
     }
 
     /// <summary>
     /// 异步填一个槽位。<c>async void</c> 在这里是对的：这是"元素自己把自己画出来"，
     /// 没人能 await 它，所以异常必须在本方法里咽干净——两条出口都给得出占位，绝不留下一个空白图框。
+    /// 只有两个入口会走到这儿：格子被装载（<see cref="MediaSlot.Fetch"/>）和点"重试"。
     /// </summary>
     private static async void Fill(Border slot, int idx, Func<int, Task<MediaAsset>> load, MarkdownStyle style,
         bool crop, Func<int, Task<MediaAsset>>? fullLoad)
