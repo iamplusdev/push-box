@@ -126,9 +126,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -170,6 +167,11 @@ import cn.iamplus.pushbox.data.Identity
 import cn.iamplus.pushbox.notify.Notifier
 import cn.iamplus.pushbox.ui.MediaGrid
 import cn.iamplus.pushbox.ui.AvatarCache
+import cn.iamplus.pushbox.ui.bubbleTimeLabel
+import cn.iamplus.pushbox.ui.dateSectionLabel
+import cn.iamplus.pushbox.ui.dateTimeLabel
+import cn.iamplus.pushbox.ui.dayKey
+import cn.iamplus.pushbox.ui.listTimeLabel
 import cn.iamplus.pushbox.push.PushService
 import cn.iamplus.pushbox.push.SyncWorker
 import cn.iamplus.pushbox.ui.LocalPushBoxColors
@@ -1499,7 +1501,7 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
                         itemsIndexed(rows, key = { _, row -> row.msgId }) { index, row ->
                             // §7.3 按日期分节：与上一条不同日则插一个分节头（今天/昨天/M月d日）
                             if (index == 0 || dayKey(rows[index - 1].createdAt) != dayKey(row.createdAt)) {
-                                DateHeader(dateLabel(row.createdAt))
+                                DateHeader(dateSectionLabel(row.createdAt))
                             }
                             // 时间智能分组：5分钟内的连续消息只显示一次时间戳
                             val showTime = index == 0 || 
@@ -1766,7 +1768,7 @@ private fun MessageBubble(row: MessageRow, senderName: String, showTime: Boolean
         }
         // 时间智能显示：只在分组第一条或跨日期时显示，放在 Row 外面不影响对齐
         if (showTime) {
-            Text(stamp(row.createdAt), style = MaterialTheme.typography.labelSmall,
+            Text(bubbleTimeLabel(row.createdAt), style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 48.dp, top = 2.dp)) // 48dp = 头像40 + 间距8
         }
@@ -2503,7 +2505,7 @@ private fun ChannelCapacityDialog(identity: Identity, channel: PushBoxApi.Channe
             else Text(stringResource(R.string.channel_capacity_body,
                 r.totalMessages, humanBytes(r.totalTextBytes), r.totalImages,
                 humanBytes(r.totalImageBytes),
-                if (r.earliestMsgAt > 0) stamp(r.earliestMsgAt) else "—"))
+                if (r.earliestMsgAt > 0) dateTimeLabel(r.earliestMsgAt) else "—"))
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.confirm_ok)) }
@@ -2741,7 +2743,7 @@ private fun DeviceRow(dev: PushBoxApi.DeviceInfo, busy: Boolean, onRevoke: () ->
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(dev.name.ifBlank { dev.deviceId }, style = MaterialTheme.typography.titleMedium)
-            val seen = if (dev.lastSeenAt > 0) stamp(dev.lastSeenAt) else "-"
+            val seen = if (dev.lastSeenAt > 0) dateTimeLabel(dev.lastSeenAt) else "-"
             val sub = buildString {
                 if (dev.platform.isNotBlank()) append(dev.platform).append(" · ")
                 append(stringResource(R.string.device_last_seen)).append(' ').append(seen)
@@ -4189,7 +4191,7 @@ private fun ConversationRowView(row: ConversationRow, onOpen: () -> Unit, onLong
                 maxLines = summaryLines, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(clock(row.lastMsgAt), style = MaterialTheme.typography.labelSmall,
+            Text(listTimeLabel(row.lastMsgAt), style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (row.unreadCount > 0) {
                 // §7.3 微信式未读：红底白字的气泡，而不是一个孤零零的红字——
@@ -4278,13 +4280,6 @@ private fun persistAvatar(context: Context, row: ConversationRow, uri: Uri): Str
         out.absolutePath
     }.getOrNull()
 
-private fun clock(millis: Long): String =
-    if (millis <= 0L) "" else SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(millis))
-
-private fun stamp(millis: Long): String =
-    if (millis <= 0L) ""
-    else SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(millis))
-
 /** 一条搜索命中：本地与服务端结果统一成这个形状，才能合并、去重、并排渲染。 */
 private data class SearchEntry(val msgId: String, val channelNo: String, val senderId: String,
     val senderName: String, val text: String, val createdAt: Long, val fromServer: Boolean)
@@ -4299,7 +4294,7 @@ private fun SearchResultRow(entry: SearchEntry, query: String, onClick: () -> Un
             color = MaterialTheme.colorScheme.onSurface)
         val where = stringResource(if (entry.fromServer) R.string.search_from_server
         else R.string.search_from_local)
-        Text("${entry.senderName} · ${dateLabel(entry.createdAt)} · $where",
+        Text("${entry.senderName} · ${dateSectionLabel(entry.createdAt)} · $where",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -4326,25 +4321,6 @@ private fun highlighted(text: String, query: String): AnnotatedString = buildAnn
         }
         i = at + needle.length
     }
-}
-
-private const val DAY_MILLIS = 24L * 60 * 60 * 1000
-
-/** 同一天判定用的天键（yyyyMMdd），跨年时前 4 位天然区分。 */
-private fun dayKey(millis: Long): String =
-    SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date(millis))
-
-/** §7.3 分节标签：今天 / 昨天 / 本年 M月d日 / 跨年 yyyy年M月d日。 */
-private fun dateLabel(millis: Long): String {
-    if (millis <= 0L) return ""
-    val now = System.currentTimeMillis()
-    val today = dayKey(now)
-    val d = dayKey(millis)
-    if (d == today) return "今天"
-    if (d == dayKey(now - DAY_MILLIS)) return "昨天"
-    return if (d.substring(0, 4) == today.substring(0, 4))
-        SimpleDateFormat("M月d日", Locale.getDefault()).format(Date(millis))
-    else SimpleDateFormat("yyyy年M月d日", Locale.getDefault()).format(Date(millis))
 }
 
 /**
