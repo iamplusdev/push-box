@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using PushBox.Windows.Data;
 using PushBox.Windows.Net;
 using PushBox.Windows.Settings;
+using PushBox.Windows.Themes;
 
 namespace PushBox.Windows.Views;
 
@@ -489,6 +490,26 @@ public sealed class SettingsModel
     public static string RecoveryText(string? saved) => string.IsNullOrWhiteSpace(saved)
         ? "本机未保存恢复码"
         : saved;
+
+    // ---- 外观（主题三档）------------------------------------------------------------------------------
+
+    /// <summary>主题下拉的三项，顺序就是 <see cref="ThemeIndexOf"/> 给出的下标。</summary>
+    public static IReadOnlyList<string> ThemeLabels { get; } = new[] { "跟随系统", "浅色", "深色" };
+
+    /// <summary>下拉下标 → 档位。越界（控件还没选中）按"跟随系统"处理，不猜成某个固定色。</summary>
+    public static ThemeChoice ThemeOf(int index) => index switch
+    {
+        1 => ThemeChoice.Light,
+        2 => ThemeChoice.Dark,
+        _ => ThemeChoice.System
+    };
+
+    public static int ThemeIndexOf(ThemeChoice choice) => choice switch
+    {
+        ThemeChoice.Light => 1,
+        ThemeChoice.Dark => 2,
+        _ => 0
+    };
 
     // ---- 通知（本机开关）------------------------------------------------------------------------------
 

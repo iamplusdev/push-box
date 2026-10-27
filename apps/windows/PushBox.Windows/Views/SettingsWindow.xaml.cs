@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using PushBox.Windows.Data;
+using PushBox.Windows.Logging;
 using PushBox.Windows.Net;
 using PushBox.Windows.Settings;
 using PushBox.Windows.Update;
@@ -58,6 +59,9 @@ public partial class SettingsWindow : Window
     /// <summary>回填 <see cref="FilterOnly"/> 的勾时压掉一次事件：那是刷新的结果，不是用户的一次改动。</summary>
     private bool _filterLoading;
 
+    /// <summary>回填主题下拉时同样压掉一次 SelectionChanged——刷新的结果不该被当成换档去落盘。</summary>
+    private bool _themeLoading;
+
     /// <summary>一次只让一个写操作在飞：治理页那堆按钮点两下就是两次 PUT，服务端会按后到那条落库。</summary>
     private bool _busy;
 
@@ -77,6 +81,9 @@ public partial class SettingsWindow : Window
         Width = MainModel.FitToWorkArea(Width, SystemParameters.WorkArea.Width);
         Height = MainModel.FitToWorkArea(Height, SystemParameters.WorkArea.Height);
         PreviewKeyDown += OnPreviewKeyDown;
+        // 下拉的项先于回填挂上：SelectedIndex 落在没有 ItemsSource 的空列表上会被压回 -1
+        ThemeBox.ItemsSource = SettingsModel.ThemeLabels;
+        LogPathText.Text = AppLog.DirectoryFor();
         ApplyToControls();
         AboutVersion.Text = "版本 " + UpdateClient.CurrentVersion();
         // 一开扇就去服务端取一次，而不是等人再点一下"刷新"：这一页的全部价值都在"看得见现在的治理位"，
@@ -103,6 +110,8 @@ public partial class SettingsWindow : Window
     public string ProbeSubscriptionLine => GovSubscriptionLine.Text;
     public string ProbeSendersHint => SendersHint.Text;
     public string ProbeQuietLine => QuietLabel.Text;
+    public int ProbeThemeIndex => ThemeBox.SelectedIndex;
+    public string ProbeLogPath => LogPathText.Text;
     public IReadOnlyList<string> ProbeLevelsNow => GovLevel.Items.Cast<string>().ToList();
 
     // ---- 导航 ----------------------------------------------------------------------------------------
@@ -545,6 +554,9 @@ public partial class SettingsWindow : Window
         // 每次按落盘值回填都比上一次更可信：上一轮那句"已改回…"留着只会和现在这两格对不上
         QuietHint.Text = string.Empty;
         QuietHint.Visibility = Visibility.Collapsed;
+        _themeLoading = true;
+        ThemeBox.SelectedIndex = SettingsModel.ThemeIndexOf(_settings.Theme);
+        _themeLoading = false;
     }
 
     private void OnToggleNotifications(object sender, RoutedEventArgs e) =>
@@ -552,6 +564,13 @@ public partial class SettingsWindow : Window
 
     private void OnToggleQuiet(object sender, RoutedEventArgs e) =>
         Update(_settings with { QuietEnabled = QuietOn.IsChecked == true });
+
+    /// <summary>换档即时生效：<see cref="Update"/> 把同一份设置交回装配层，那边先铺色再落盘。</summary>
+    private void OnThemeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_themeLoading) return;
+        Update(_settings with { Theme = SettingsModel.ThemeOf(ThemeBox.SelectedIndex) });
+    }
 
     private void OnToggleCloseToTray(object sender, RoutedEventArgs e) =>
         Update(_settings with { CloseToTray = CloseToTrayOn.IsChecked == true });
@@ -578,6 +597,28 @@ public partial class SettingsWindow : Window
     }
 
     // ---- 关于（版本更新）------------------------------------------------------------------------------
+
+    /// <summary>把日志目录交给资源管理器。目录可能还没建（全新安装、第一条日志都没写），先建再开；
+    /// 打不开就把原因写在这一行，不要只留一个按下去没反应的按钮。</summary>
+    private void OnOpenLogs(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dir = AppLog.DirectoryFor();
+            System.IO.Directory.CreateDirectory(dir);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir)
+            {
+                UseShellExecute = true
+            });
+            LogHint.Text = string.Empty;
+            LogHint.Visibility = Visibility.Collapsed;
+        }
+        catch (Exception ex)
+        {
+            LogHint.Text = "打不开日志目录：" + Outcome<string>.Describe(ex);
+            LogHint.Visibility = Visibility.Visible;
+        }
+    }
 
     /// <summary>点"检查更新"：拉一次最新 release，比对版本，把结论显示在这一页。
     /// 查到确有可装的新版就当场弹确认框（和启动自动检查同一只窗），下载这一步仍要用户在框里点——

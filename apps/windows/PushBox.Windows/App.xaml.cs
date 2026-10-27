@@ -102,8 +102,9 @@ public partial class App : Application
         // 开机自启那一笔注册表会带上 --tray：托盘与同步照常起来，主窗先不 Show
         var background = StartInBackground(e.Args);
 
-        // §9.1 的深浅色：在任何一个窗口被 Show 之前换上 token 字典，否则首帧会闪一下另一个主题
-        ThemeManager.FollowSystem();
+        // §9.1 的深浅色：在任何一个窗口被 Show 之前换上 token 字典，否则首帧会闪一下另一个主题。
+        // 档位来自设置（默认跟随系统），固定浅色/深色时系统事件不再改色
+        ThemeManager.Follow(_settings.Theme);
         // 裸 WinRT 不给未打包应用注册入口，这两处 HKCU 就是那个入口（AUMID + 协议处理器）
         ToastRegistration.Ensure(exe);
         ReconcileAutoStart(exe);
@@ -499,6 +500,8 @@ public partial class App : Application
 
     private void Update(ClientSettings next)
     {
+        // 主题先铺色再落盘：设置页选完的那一下就该看见变化，而不是等下一次系统事件
+        ThemeManager.SetChoice(next.Theme);
         _settings = next;
         try
         {

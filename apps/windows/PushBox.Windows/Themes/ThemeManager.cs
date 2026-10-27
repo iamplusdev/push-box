@@ -5,9 +5,17 @@ using Microsoft.Win32;
 
 namespace PushBox.Windows.Themes;
 
+/// <summary>主题三档。默认跟随系统；另外两档是"不想被系统带着变"的显式选择。</summary>
+public enum ThemeChoice
+{
+    System,
+    Light,
+    Dark
+}
+
 /// <summary>
-/// §9.1 的"深浅色跟随系统"。WPF 没有 Material3 那种自动反色，所以这里做的事只有两件：
-/// 读系统那个 <c>AppsUseLightTheme</c>，以及把它变化时把两份 token 字典的顺序换一下。
+/// §9.1 的"深浅色"。WPF 没有 Material3 那种自动反色，所以这里做的事只有两件：
+/// 读系统那个 <c>AppsUseLightTheme</c>（仅"跟随系统"这一档才读），以及把两份 token 字典的顺序换一下。
 /// 控件侧一律 <c>{DynamicResource Bg.Page}</c>，换字典不需要重建任何可视元素。
 /// </summary>
 public static class ThemeManager
@@ -22,6 +30,9 @@ public static class ThemeManager
         new("pack://application:,,,/PushBox.Windows;component/Themes/Tokens.Dark.xaml");
 
     private static UserPreferenceChangedEventHandler? _watching;
+
+    /// <summary>当前档位。系统事件不带"现在是哪一档"，所以只能由这里记着。</summary>
+    private static ThemeChoice _choice = ThemeChoice.System;
 
     /// <summary>
     /// 换完字典后广播一次。<c>DynamicResource</c> 自己会跟着变，但两处不会：
@@ -65,16 +76,37 @@ public static class ThemeManager
     }
 
     /// <summary>
-    /// 启动时应用一次，并在系统换主题时再应用一次。<see cref="SystemEvents.UserPreferenceChanged"/>
+    /// 启动时按设置里的档位应用一次，并在系统换主题时再应用一次。<see cref="SystemEvents.UserPreferenceChanged"/>
     /// 是这套机器上唯一能收到"用户在设置里点了深色"的入口（WPF 没有 theme changed 事件）。
+    /// 固定浅色/深色时系统事件仍会到，但那时不再改色——档位是用户明说的。
     /// </summary>
-    public static void FollowSystem()
+    public static void Follow(ThemeChoice choice)
     {
-        Apply(SystemPrefersDark());
+        _choice = choice;
+        Apply(DarkFor(choice, SystemPrefersDark()));
         if (_watching is not null) return;
-        _watching = (_, _) => Apply(SystemPrefersDark());
+        _watching = (_, _) =>
+        {
+            if (_choice == ThemeChoice.System) Apply(SystemPrefersDark());
+        };
         SystemEvents.UserPreferenceChanged += _watching;
     }
+
+    /// <summary>设置页换档：立刻生效，不等下一次系统事件。同一档不重铺字典（铺一次就是整窗重绘）。</summary>
+    public static void SetChoice(ThemeChoice choice)
+    {
+        if (choice == _choice) return;
+        _choice = choice;
+        Apply(DarkFor(choice, SystemPrefersDark()));
+    }
+
+    /// <summary>三档里实际该用哪一份字典：只有"跟随系统"才去看系统的值。</summary>
+    public static bool DarkFor(ThemeChoice choice, bool systemPrefersDark) => choice switch
+    {
+        ThemeChoice.Dark => true,
+        ThemeChoice.Light => false,
+        _ => systemPrefersDark
+    };
 
     /// <summary>进程退出前解绑：SystemEvents 是静态事件，挂着不放会让窗口对象回收不掉。</summary>
     public static void StopFollowing()

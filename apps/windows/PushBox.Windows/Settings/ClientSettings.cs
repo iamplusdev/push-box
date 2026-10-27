@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using PushBox.Windows.Themes;
 
 namespace PushBox.Windows.Settings;
 
@@ -44,6 +45,9 @@ public sealed record ClientSettings
     /// <summary>D32：冷启动是否静默查一次 GitHub 更新。默认<b>开</b>——查到也只弹一个确认框，
     /// 点"下载并安装"才动手，绝不自动下、自动装。关掉它只是不再主动查，设置里的「检查更新」按钮不受影响。</summary>
     public bool AutoCheckUpdate { get; init; } = true;
+
+    /// <summary>主题三档（默认跟随系统）。存成 <c>"system"/"light"/"dark"</c>：手改 settings.json 也看得懂。</summary>
+    public ThemeChoice Theme { get; init; } = ThemeChoice.System;
 
     /// <summary>
     /// 主窗几何（<c>Views.WindowGeometry</c> 的五个数）。用可空是因为"没记过"和"记成 0,0"含义不同：
@@ -110,6 +114,7 @@ public sealed record ClientSettings
             AutoStartEnabled = Bool(root, "auto_start", Defaults.AutoStartEnabled),
             CloseToTray = Bool(root, "close_to_tray", Defaults.CloseToTray),
             AutoCheckUpdate = Bool(root, "auto_check_update", Defaults.AutoCheckUpdate),
+            Theme = ThemeOf(root),
             WindowLeft = Number(root, "window_left"),
             WindowTop = Number(root, "window_top"),
             WindowWidth = Number(root, "window_width"),
@@ -134,6 +139,7 @@ public sealed record ClientSettings
             ["auto_start"] = AutoStartEnabled,
             ["close_to_tray"] = CloseToTray,
             ["auto_check_update"] = AutoCheckUpdate,
+            ["theme"] = ThemeKey(Theme),
             // 没记过时写 null：读回来还是 null，不会被当成"窗口在 (0,0)"或"列宽 0"
             ["window_left"] = WindowLeft,
             ["window_top"] = WindowTop,
@@ -157,6 +163,27 @@ public sealed record ClientSettings
         root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n)
             ? n
             : fallback;
+
+    /// <summary>缺项、拼错、旧版本写的别的词都回"跟随系统"——不为一行主题把整份设置作废。</summary>
+    private static ThemeChoice ThemeOf(JsonElement root)
+    {
+        var text = root.TryGetProperty("theme", out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString()?.Trim().ToLowerInvariant()
+            : null;
+        return text switch
+        {
+            "light" => ThemeChoice.Light,
+            "dark" => ThemeChoice.Dark,
+            _ => ThemeChoice.System
+        };
+    }
+
+    private static string ThemeKey(ThemeChoice theme) => theme switch
+    {
+        ThemeChoice.Light => "light",
+        ThemeChoice.Dark => "dark",
+        _ => "system"
+    };
 
     /// <summary>几何那五项没有默认值：读不到就是"没记过"，而不是回落到某个写死的坐标。</summary>
     private static double? Number(JsonElement root, string name) =>

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using PushBox.Windows.Settings;
+using PushBox.Windows.Themes;
 using Xunit;
 
 namespace PushBox.Crypto.Tests;
@@ -52,6 +53,8 @@ public sealed class ClientSettingsTest : IDisposable
             QuietEndMinute = 6 * 60 + 15,
             AutoStartEnabled = true,
             CloseToTray = false,
+            AutoCheckUpdate = false,
+            Theme = ThemeChoice.Dark,
             WindowLeft = 128.5,
             WindowTop = -40,
             WindowWidth = 1080,
@@ -100,6 +103,30 @@ public sealed class ClientSettingsTest : IDisposable
         Assert.True(settings.AutoStartEnabled);
         Assert.False(settings.QuietEnabled); // 这一项是字符串 "yes"：读不动就退回默认（默认关）
         Assert.Equal(ClientSettings.DefaultQuietStart, settings.QuietStartMinute);
+    }
+
+    [Theory]
+    [InlineData("\"system\"", ThemeChoice.System)]
+    [InlineData("\"light\"", ThemeChoice.Light)]
+    [InlineData("\"dark\"", ThemeChoice.Dark)]
+    [InlineData("\"DARK\"", ThemeChoice.Dark)]
+    [InlineData("\" deep \"", ThemeChoice.System)]
+    [InlineData("1", ThemeChoice.System)]
+    [InlineData("null", ThemeChoice.System)]
+    public void ThemeIsStoredAsAReadableWordAndAnythingElseMeansFollowSystem(string raw, ThemeChoice expected)
+    {
+        // 存 "light"/"dark" 而不是枚举序号：手改 settings.json 的人看得懂，加一档也不再改变旧文件的含义
+        File.WriteAllText(ClientSettings.FilePathIn(_dir), "{\"theme\":" + raw + "}");
+
+        Assert.Equal(expected, ClientSettings.Load(_dir).Theme);
+
+        new ClientSettings { Theme = expected }.Save(_dir);
+        Assert.Contains("\"theme\":\"" + (expected switch
+        {
+            ThemeChoice.Light => "light",
+            ThemeChoice.Dark => "dark",
+            _ => "system"
+        }) + "\"", File.ReadAllText(ClientSettings.FilePathIn(_dir)));
     }
 
     /// <summary>

@@ -651,7 +651,7 @@
             </ScrollViewer>
 
             <StackPanel x:Name="NotifyPanel" Visibility="Collapsed">
-                <TextBlock Text="通知" Style="{DynamicResource Text.H3}" Foreground="{DynamicResource Fg.Primary}" />
+                <TextBlock Text="通知与外观" Style="{DynamicResource Text.H3}" Foreground="{DynamicResource Fg.Primary}" />
                 <CheckBox x:Name="NotifyOn" Content="新消息通知" FontSize="{x:Static controls:MarkdownStyle.SmallSize}" Margin="0,14,0,0"
                           Foreground="{DynamicResource Fg.Primary}" Click="OnToggleNotifications" />
                 <CheckBox x:Name="QuietOn" Content="静默时段" FontSize="{x:Static controls:MarkdownStyle.SmallSize}" Margin="0,10,0,0"
@@ -676,6 +676,18 @@
                 <TextBlock Text="这几项与托盘菜单上的是同一份设置，改哪边都一样。静默时段内只有 error 还会出声。"
                            Style="{DynamicResource Text.Label}" Margin="0,14,0,0" TextWrapping="Wrap"
                            Foreground="{DynamicResource Fg.Secondary}" />
+
+                <!-- 外观：主题三档。原来只能跟系统，深色系统下想用浅色就没办法 -->
+                <TextBlock Text="外观" Style="{DynamicResource Text.H3}" Margin="0,24,0,0"
+                           Foreground="{DynamicResource Fg.Primary}" />
+                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                    <TextBlock Text="主题" Style="{DynamicResource Text.Small}" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Fg.Primary}" />
+                    <ComboBox x:Name="ThemeBox" Width="150" Margin="12,0,0,0" SelectionChanged="OnThemeChanged" />
+                </StackPanel>
+                <TextBlock Text="「跟随系统」会跟着 Windows 的深浅色设置走；固定浅色或深色适合不想被系统带着变的场景。"
+                           Style="{DynamicResource Text.Label}" Margin="0,8,0,0" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Fg.Secondary}" />
             </StackPanel>
 
             <ScrollViewer x:Name="AboutPanel" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
@@ -696,6 +708,22 @@
                                Foreground="{DynamicResource Fg.Primary}" />
                     <TextBlock x:Name="UpdateHint" Style="{DynamicResource Text.Label}" Margin="0,6,0,0"
                                TextWrapping="Wrap"
+                               Foreground="{DynamicResource Level.Error}" />
+
+                    <!-- 诊断：日志只在本机，出问题时用户得找得到它 -->
+                    <TextBlock Text="诊断" Style="{DynamicResource Text.H3}" Margin="0,24,0,0"
+                               Foreground="{DynamicResource Fg.Primary}" />
+                    <TextBlock Text="日志按天写在本机，只记事件类型与脱敏后的错误（不含消息正文和凭据）。遇到问题时把整个目录一起发出来。"
+                               Style="{DynamicResource Text.Label}" Margin="0,10,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Fg.Secondary}" />
+                    <TextBlock x:Name="LogPathText" Style="{DynamicResource Text.Code}" Margin="0,8,0,0"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource Fg.Secondary}" />
+                    <Button x:Name="OpenLogButton" Content="打开日志目录" Margin="0,8,0,0"
+                            HorizontalAlignment="Left" Click="OnOpenLogs"
+                            Style="{DynamicResource Button.Secondary}" />
+                    <TextBlock x:Name="LogHint" Style="{DynamicResource Text.Label}" Margin="0,6,0,0"
+                               TextWrapping="Wrap" Visibility="Collapsed"
                                Foreground="{DynamicResource Level.Error}" />
                 </StackPanel>
             </ScrollViewer>

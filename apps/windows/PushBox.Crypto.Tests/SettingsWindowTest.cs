@@ -9,6 +9,7 @@ using System.Windows;
 using PushBox.Windows.Data;
 using PushBox.Windows.Net;
 using PushBox.Windows.Settings;
+using PushBox.Windows.Themes;
 using PushBox.Windows.Views;
 using Xunit;
 
@@ -224,6 +225,38 @@ public sealed class SettingsWindowTest : IDisposable
         Assert.Equal(string.Empty, SettingsModel.QuietHintOf(good));
         Assert.Equal(21 * 60 + 15, good.Settings.QuietStartMinute);
         Assert.Equal(7 * 60 + 45, good.Settings.QuietEndMinute);
+    }
+
+    // ---- 外观与诊断 ---------------------------------------------------------------------------------
+
+    [Fact]
+    public void TheThemeDropdownMapsIndexesBothWays()
+    {
+        // 三项的顺序就是下拉的顺序；存进 settings.json 的是档位本身，所以这个映射要守恒
+        Assert.Equal(3, SettingsModel.ThemeLabels.Count);
+        Assert.Equal("跟随系统", SettingsModel.ThemeLabels[0]);
+
+        foreach (var choice in new[] { ThemeChoice.System, ThemeChoice.Light, ThemeChoice.Dark })
+        {
+            Assert.Equal(choice, SettingsModel.ThemeOf(SettingsModel.ThemeIndexOf(choice)));
+        }
+
+        // 控件还没选中（-1）或越界时按"跟随系统"，不猜成某个固定色
+        Assert.Equal(ThemeChoice.System, SettingsModel.ThemeOf(-1));
+        Assert.Equal(ThemeChoice.System, SettingsModel.ThemeOf(99));
+    }
+
+    [Fact]
+    public void TheWindowStartsOnFollowSystemAndShowsWhereTheLogsAre()
+    {
+        Sta.Run(() =>
+        {
+            var window = new SettingsWindow(Offline(), ClientSettings.Defaults, _ => { });
+            Assert.Equal(0, window.ProbeThemeIndex);
+            Assert.NotEqual(string.Empty, window.ProbeLogPath);
+            Assert.Contains("PushBox", window.ProbeLogPath);
+            window.Close();
+        });
     }
 
     [Fact]

@@ -309,6 +309,50 @@ public class ThemeTest
         Assert.False(ThemeManager.IsDark("0"));
     }
 
+    /// <summary>
+    /// 三档的换算是纯函数，"跟随系统"那一档才去看注册表。固定浅色遇到深色系统必须仍是浅色——
+    /// 这里钉住的是这件事，免得以后把 <see cref="ThemeManager.Apply"/> 的入参写回 <c>SystemPrefersDark()</c>。
+    /// </summary>
+    [Fact]
+    public void AChosenLightOrDarkIgnoresWhatTheSystemSays()
+    {
+        Assert.False(ThemeManager.DarkFor(ThemeChoice.Light, systemPrefersDark: true));
+        Assert.False(ThemeManager.DarkFor(ThemeChoice.Light, systemPrefersDark: false));
+        Assert.True(ThemeManager.DarkFor(ThemeChoice.Dark, systemPrefersDark: false));
+        Assert.True(ThemeManager.DarkFor(ThemeChoice.Dark, systemPrefersDark: true));
+        Assert.True(ThemeManager.DarkFor(ThemeChoice.System, systemPrefersDark: true));
+        Assert.False(ThemeManager.DarkFor(ThemeChoice.System, systemPrefersDark: false));
+    }
+
+    /// <summary>
+    /// 设置页新加的两处：主题下拉与关于页的日志入口。下拉不许自带背景色（那会把深色下的弹层钉成浅色），
+    /// 日志路径要能换行（路径很长），按钮与提示各自走已有的样式档，不另开一套。
+    /// </summary>
+    [Fact]
+    public void TheThemePickerAndTheLogEntryUseExistingTokens()
+    {
+        var doc = XDocument.Parse(TokenFiles.Text("Views/SettingsWindow.xaml"));
+        XElement ByName(string name) => doc.Descendants()
+            .Single(e => (string?)e.Attribute(X + "Name") == name);
+
+        var theme = ByName("ThemeBox");
+        Assert.Equal("ComboBox", theme.Name.LocalName);
+        Assert.Null(theme.Attribute("Background"));
+        Assert.Null(theme.Attribute("Foreground"));
+        Assert.Null(theme.Attribute("Style"));
+
+        var path = ByName("LogPathText");
+        Assert.Equal("{DynamicResource Text.Code}", (string?)path.Attribute("Style"));
+        Assert.Equal("Wrap", (string?)path.Attribute("TextWrapping"));
+        Assert.Equal("{DynamicResource Fg.Secondary}", (string?)path.Attribute("Foreground"));
+
+        Assert.Equal("{DynamicResource Button.Secondary}", (string?)ByName("OpenLogButton").Attribute("Style"));
+        // 打不开目录时要说一句，默认收起（与静默时段那行同一个口径）
+        var hint = ByName("LogHint");
+        Assert.Equal("Collapsed", (string?)hint.Attribute("Visibility"));
+        Assert.Equal("{DynamicResource Level.Error}", (string?)hint.Attribute("Foreground"));
+    }
+
     [Fact]
     public void TheLevelAccentsAreTheTwoDocumentedOnes()
     {
