@@ -196,14 +196,34 @@ public sealed class SettingsWindowTest : IDisposable
     }
 
     [Fact]
-    public void ABoxTypedWrongKeepsTheWindowItReplaced()
+    public void ABoxTypedWrongKeepsTheWindowItReplacedAndSaysSo()
     {
         var current = ClientSettings.Defaults.WithQuietWindow(true, 22 * 60, 8 * 60);
-        var edited = SettingsModel.QuietWindowOf(current, "09:30", "填歪了");
-        Assert.Equal(9 * 60 + 30, edited.QuietStartMinute);
-        Assert.Equal(8 * 60, edited.QuietEndMinute);
+        var edited = SettingsModel.QuietEditOf(current, "09:30", "填歪了");
+        Assert.Equal(9 * 60 + 30, edited.Settings.QuietStartMinute);
+        Assert.Equal(8 * 60, edited.Settings.QuietEndMinute);
         // 开关不是这两格能动的：改起止不该顺手把静默打开或关掉
-        Assert.True(edited.QuietEnabled);
+        Assert.True(edited.Settings.QuietEnabled);
+        // 回退本身原来就在做，缺的是把"改回了什么"说出来
+        Assert.False(edited.StartBad);
+        Assert.True(edited.EndBad);
+        Assert.Contains("HH:mm", SettingsModel.QuietHintOf(edited));
+        Assert.Contains("08:00", SettingsModel.QuietHintOf(edited));
+
+        var both = SettingsModel.QuietEditOf(current, "25:00", string.Empty);
+        Assert.True(both.StartBad);
+        Assert.True(both.EndBad);
+        Assert.Equal(22 * 60, both.Settings.QuietStartMinute);
+        Assert.Equal(8 * 60, both.Settings.QuietEndMinute);
+        Assert.Contains("22:00", SettingsModel.QuietHintOf(both));
+        Assert.Contains("08:00", SettingsModel.QuietHintOf(both));
+
+        // 两格都好就一句话都不用说，提示要收起来
+        var good = SettingsModel.QuietEditOf(current, "21:15", "07:45");
+        Assert.False(good.StartBad || good.EndBad);
+        Assert.Equal(string.Empty, SettingsModel.QuietHintOf(good));
+        Assert.Equal(21 * 60 + 15, good.Settings.QuietStartMinute);
+        Assert.Equal(7 * 60 + 45, good.Settings.QuietEndMinute);
     }
 
     [Fact]

@@ -16,7 +16,8 @@ public sealed record ConversationItem(string ChannelNo, string SenderId, string 
     string? Summary, long LastMsgAt, int UnreadCount, bool Pinned, bool Muted, string? LastLevel,
     long LastReadSeq, string? AvatarPath = null)
 {
-    public string ClockText => TimeFormat.Clock(LastMsgAt);
+    /// <summary>右上角那一格：今天给时分，更早给日期——上周的消息显示成"14:32"会被读成今天刚到。</summary>
+    public string ClockText => TimeFormat.ListClock(LastMsgAt);
 
     /// <summary>§4.5 的头像对象标识：sender_id 的 sha256，本机能算出来，不等 <c>sender_avatar</c> 那一列。</summary>
     public string AvatarToken => DeviceClient.AvatarTokenFor(SenderId);
@@ -74,9 +75,12 @@ public sealed record SearchItem(string Id, string ChannelNo, string SenderId, st
     public string DateText => TimeFormat.DateLabel(CreatedAt);
 }
 
-/// <summary>时间格式与日期分节，逐条对齐 Android 的 clock/stamp/dayKey/dateLabel。</summary>
+/// <summary>时间格式与日期分节，除会话列表的 <see cref="TimeFormat.ListClock"/>（跨天要能分辨，Windows 独有）外
+/// 逐条对齐 Android 的 clock/stamp/dayKey/dateLabel。</summary>
 public static class TimeFormat
 {
+    private const long DayMs = 24L * 60 * 60 * 1000;
+
     private static readonly string[] AccentKeys = { "Level.Error", "Level.Warning" };
 
     public static string Clock(long millis) =>
@@ -97,10 +101,29 @@ public static class TimeFormat
         var day = DayKey(millis);
         if (day == today) return "今天";
         // "昨天"按 24 小时前那一格的天键算，与 Android 完全一致（夏令时边界的口径也因此一致）
-        if (day == DayKey(now - 24L * 60 * 60 * 1000)) return "昨天";
+        if (day == DayKey(now - DayMs)) return "昨天";
         return day.Substring(0, 4) == today.Substring(0, 4)
             ? Local(millis).ToString("M月d日", CultureInfo.InvariantCulture)
             : Local(millis).ToString("yyyy年M月d日", CultureInfo.InvariantCulture);
+    }
+
+    public static string ListClock(long millis) => ListClock(millis, DateTimeOffset.Now.ToUnixTimeMilliseconds());
+
+    /// <summary>
+    /// 会话列表右上角那一格。当天只给时分（同一天的消息按它排序）；昨天与更早必须说清是哪一天，
+    /// 否则上周的消息显示成"14:32"像是今天刚到。当年沿用分节头那套中文短式，跨年补年份但写成斜杠——
+    /// 列表最窄只有 200，中文的"2025年12月12日"会把名称列挤没（分节头在消息区，不受这条约束）。
+    /// </summary>
+    public static string ListClock(long millis, long now)
+    {
+        if (millis <= 0) return string.Empty;
+        var day = DayKey(millis);
+        if (day == DayKey(now)) return Clock(millis);
+        if (day == DayKey(now - DayMs)) return "昨天";
+        var local = Local(millis);
+        return day.Substring(0, 4) == DayKey(now).Substring(0, 4)
+            ? local.ToString("M月d日", CultureInfo.InvariantCulture)
+            : local.ToString("yyyy/M/d", CultureInfo.InvariantCulture);
     }
 
     /// <summary>资源字典里颜色 token 的键名；返回 null 就是"不着色"，比返回一个透明色更好读。</summary>

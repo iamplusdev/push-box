@@ -665,6 +665,10 @@
                                VerticalAlignment="Center"
                                Foreground="{DynamicResource Fg.Secondary}" />
                 </StackPanel>
+                <!-- 填歪了要说一句：两格都会按落盘值回填，没有这行就只是"我敲的 25:00 自己变回去了" -->
+                <TextBlock x:Name="QuietHint" Style="{DynamicResource Text.Label}" Margin="24,6,0,0"
+                           TextWrapping="Wrap" Visibility="Collapsed"
+                           Foreground="{DynamicResource Level.Error}" />
                 <CheckBox x:Name="AutoStartOn" Content="开机自启" FontSize="{x:Static controls:MarkdownStyle.SmallSize}" Margin="0,14,0,0"
                           Foreground="{DynamicResource Fg.Primary}" Click="OnToggleAutoStart" />
                 <CheckBox x:Name="CloseToTrayOn" Content="关闭窗口时最小化到托盘" FontSize="{x:Static controls:MarkdownStyle.SmallSize}" Margin="0,10,0,0"

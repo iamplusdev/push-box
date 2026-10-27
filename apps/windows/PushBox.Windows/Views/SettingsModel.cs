@@ -518,13 +518,32 @@ public sealed class SettingsModel
         return $"{ClockOf(start)}–{ClockOf(end)}{(crosses ? "（次日）" : string.Empty)}";
     }
 
+    /// <summary>
+    /// 两个格子的编辑结果。<see cref="StartBad"/> / <see cref="EndBad"/> 为真表示那一格填歪了、
+    /// 已退回 <see cref="Settings"/> 里的原值：回退本来就在做，缺的是把这件事说出来。
+    /// </summary>
+    public sealed record QuietEdit(ClientSettings Settings, bool StartBad, bool EndBad);
+
     /// <summary>把界面上的两个格子变成设置本身。填歪了的那一格保持原值，不为一个 25:00 把整晚的窗口改掉。</summary>
-    public static ClientSettings QuietWindowOf(ClientSettings current, string start, string end)
+    public static QuietEdit QuietEditOf(ClientSettings current, string start, string end)
     {
-        var from = MinuteOf(start) ?? current.QuietStartMinute;
-        var to = MinuteOf(end) ?? current.QuietEndMinute;
-        return current.WithQuietWindow(current.QuietEnabled, from, to);
+        var from = MinuteOf(start);
+        var to = MinuteOf(end);
+        var next = current.WithQuietWindow(current.QuietEnabled, from ?? current.QuietStartMinute,
+            to ?? current.QuietEndMinute);
+        return new QuietEdit(next, from is null, to is null);
     }
+
+    /// <summary>行内提示：说清格式、并报出那一格被改回的值（空串 = 没有要说的话）。</summary>
+    public static string QuietHintOf(QuietEdit edit) => (edit.StartBad, edit.EndBad) switch
+    {
+        (true, true) =>
+            $"两个时间都要写成 HH:mm（24 小时制），已改回 {ClockOf(edit.Settings.QuietStartMinute)}"
+            + $" 和 {ClockOf(edit.Settings.QuietEndMinute)}",
+        (true, false) => $"开始时间要写成 HH:mm（24 小时制），已改回 {ClockOf(edit.Settings.QuietStartMinute)}",
+        (false, true) => $"结束时间要写成 HH:mm（24 小时制），已改回 {ClockOf(edit.Settings.QuietEndMinute)}",
+        _ => string.Empty
+    };
 
     private static IReadOnlyList<TOut> Mapped<TIn, TOut>(IReadOnlyList<TIn> source, Func<TIn, TOut> map)
     {

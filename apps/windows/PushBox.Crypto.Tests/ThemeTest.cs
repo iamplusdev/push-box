@@ -337,6 +337,23 @@ public class ThemeTest
     }
 
     /// <summary>
+    /// 静默时段填歪了会被回填成原值——没有这行提示，用户看到的只是"我敲的 25:00 自己变回去了"。
+    /// 钉住它确实在页面里、默认收起、走 error 那一档颜色（§9.3 的行内口径：说错话用红，不弹框）。
+    /// </summary>
+    [Fact]
+    public void ABadQuietTimeHasSomewhereToSaySo()
+    {
+        var doc = XDocument.Parse(TokenFiles.Text("Views/SettingsWindow.xaml"));
+        var hint = doc.Descendants().Single(e =>
+            e.Name.LocalName == "TextBlock" && (string?)e.Attribute(X + "Name") == "QuietHint");
+
+        Assert.Equal("Collapsed", (string?)hint.Attribute("Visibility"));
+        Assert.Equal("{DynamicResource Text.Label}", (string?)hint.Attribute("Style"));
+        Assert.Equal("{DynamicResource Level.Error}", (string?)hint.Attribute("Foreground"));
+        Assert.Equal("Wrap", (string?)hint.Attribute("TextWrapping"));
+    }
+
+    /// <summary>
     /// 输入框与下拉框要自带模板：默认模板的 hover/焦点描边是系统浅蓝，下拉弹层在深色下是系统白底，
     /// 三态与弹层都没法靠 token 换。这里钉的是"模板里真写了"而不是"看起来差不多"。
     /// </summary>

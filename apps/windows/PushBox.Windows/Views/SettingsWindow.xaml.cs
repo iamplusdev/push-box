@@ -542,6 +542,9 @@ public partial class SettingsWindow : Window
         QuietEnd.Text = SettingsModel.ClockOf(_settings.QuietEndMinute);
         QuietLabel.Text = SettingsModel.QuietLine(_settings.QuietEnabled, _settings.QuietStartMinute,
             _settings.QuietEndMinute);
+        // 每次按落盘值回填都比上一次更可信：上一轮那句"已改回…"留着只会和现在这两格对不上
+        QuietHint.Text = string.Empty;
+        QuietHint.Visibility = Visibility.Collapsed;
     }
 
     private void OnToggleNotifications(object sender, RoutedEventArgs e) =>
@@ -557,8 +560,15 @@ public partial class SettingsWindow : Window
     private void OnToggleAutoStart(object sender, RoutedEventArgs e) =>
         Update(_settings with { AutoStartEnabled = AutoStartOn.IsChecked == true });
 
-    private void OnQuietWindowEdited(object sender, RoutedEventArgs e) =>
-        Update(SettingsModel.QuietWindowOf(_settings, QuietStart.Text, QuietEnd.Text));
+    /// <summary>失焦即提交。填歪的那一格会被 <see cref="Update"/> 回填成原值，所以这里补一句"为什么改了"，
+    /// 否则用户看到的只是自己刚敲的 25:00 莫名变回了 22:00。</summary>
+    private void OnQuietWindowEdited(object sender, RoutedEventArgs e)
+    {
+        var edit = SettingsModel.QuietEditOf(_settings, QuietStart.Text, QuietEnd.Text);
+        Update(edit.Settings);
+        QuietHint.Text = SettingsModel.QuietHintOf(edit);
+        QuietHint.Visibility = QuietHint.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     private void Update(ClientSettings next)
     {

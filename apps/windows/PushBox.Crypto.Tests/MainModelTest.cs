@@ -483,6 +483,25 @@ public sealed class MainModelTest : IDisposable
         Assert.Equal("2025年12月12日", TimeFormat.DateLabel(Day0));
     }
 
+    [Fact]
+    public void TheConversationListSaysWhichDayAnOlderMessageIsFrom()
+    {
+        // 钉住一个"现在"，四个分支（今天/昨天/当年/跨年）才能在同一组断言里跑到
+        var now = At(2026, 3, 15, 10);
+        Assert.Equal("09:12", TimeFormat.ListClock(At(2026, 3, 15, 9) + 12 * 60_000, now));
+        Assert.Equal("昨天", TimeFormat.ListClock(At(2026, 3, 14, 20), now));
+        Assert.Equal("3月10日", TimeFormat.ListClock(At(2026, 3, 10, 8), now));
+        // 跨年写成斜杠短式：列表最窄只有 200，"2025年12月12日"会把名称列挤没
+        Assert.Equal("2025/12/12", TimeFormat.ListClock(At(2025, 12, 12, 8), now));
+        Assert.Equal(string.Empty, TimeFormat.ListClock(0L, now));
+
+        // 会话行读的就是这一个，别再退回恒 HH:mm
+        var yesterday = new DateTimeOffset(DateTime.Today.AddDays(-1).AddHours(9)).ToUnixTimeMilliseconds();
+        var item = new ConversationItem(Channel, Grafana, "Grafana", "CPU 92%", yesterday, 0,
+            false, false, null, 0);
+        Assert.Equal("昨天", item.ClockText);
+    }
+
     // ---- 删除与清空（W14）---------------------------------------------------------------------------
 
     [Fact]
