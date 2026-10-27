@@ -33,6 +33,22 @@ public abstract record SyncState
 }
 
 /// <summary>
+/// §5.2 开机回放的一次结局。失败在这里不抛出（断链重连会自己再补），但要能被问出来：
+/// 主界面靠它把"这个空间确实没有消息"和"这次没取回来"分开，否则第一次打开永远只看到一句"还没有消息"。
+/// </summary>
+public enum ReplayOutcome
+{
+    /// <summary>一路拉到服务端末尾（服务端本来就没有消息也算）。</summary>
+    Completed,
+
+    /// <summary>中途被取消：正在退出、登出或引擎已停。这不是失败，界面不该因此挂出重试。</summary>
+    Cancelled,
+
+    /// <summary>服务端拒了或连不上：游标没动，联网后（或用户点重试）还能再补。</summary>
+    Failed
+}
+
+/// <summary>
 /// 通知的出口，W13 的 WinRT Toast 实现它。引擎只在"这条消息首次落库"时调用，传的是帧而不是
 /// 拼好的字符串——正文只有这一条路能到达 UI，绝不进日志（§14）。
 /// </summary>
@@ -93,8 +109,8 @@ public sealed class SyncEngine : IPushObserver
     /// <summary>第几次起跑：收工时只清理"还是当前这一轮"的状态，别让上一轮把新一轮的 Connecting 抹掉。</summary>
     private int _run;
 
-    /// <summary>开机回放正在进行（<see cref="RestoreHistoryAsync"/>）：0/1 开关，见那边的说明。</summary>
-    private int _restoring;
+    /// <summary>开机回放的那一份（<see cref="RestoreHistoryAsync"/>）：同一时刻只跑一份，重复调用拿到的就是它。</summary>
+    private Task<ReplayOutcome>? _restoreTask;
 
     public SyncEngine(IdentityStore identities, DeviceStore db, DeviceClient client, INotifier notifier,
         Func<DeviceIdentity, IPushTransport>? transports = null,
@@ -402,21 +418,23 @@ public sealed class SyncEngine : IPushObserver
     /// 而一台刚注册完、服务端之后又没再发过消息的机器永远等不到那一帧——主界面于是开成一片空白
     /// （手机那边是 join 完立刻 restoreHistory，两端口径要对齐）。
     /// 同一时刻只跑一份：重复跑没有副作用（msg_id 去重），但两条并发分页会把同一批拉两遍。
+    /// 重试按两下也一样——第二下拿到的是第一份的 Task，不会先"收工"让界面错判结局。
     /// </summary>
-    public async Task RestoreHistoryAsync()
+    public Task<ReplayOutcome> RestoreHistoryAsync()
     {
-        if (Interlocked.Exchange(ref _restoring, 1) == 1) return;
+        lock (_gate)
+        {
+            if (_restoreTask is { IsCompleted: false }) return _restoreTask;
+            return _restoreTask = RestoreCoreAsync();
+        }
+    }
+
+    private async Task<ReplayOutcome> RestoreCoreAsync()
+    {
         CancellationTokenSource? stop;
+        // 跟着这一轮的取消令牌走：收工时不该还在一页一页往下拉（同名的锁是重入的，这里不会死锁）
         lock (_gate) stop = _stop;
-        try
-        {
-            // 跟着这一轮的取消令牌走：收工时不该还在一页一页往下拉
-            await BackfillAsync(1L, stop?.Token ?? CancellationToken.None);
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _restoring, 0);
-        }
+        return await BackfillAsync(1L, stop?.Token ?? CancellationToken.None).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -483,10 +501,11 @@ public sealed class SyncEngine : IPushObserver
     /// §5.3：落后太多（&gt;2000）时帧补拉会被服务端拒绝，只能走 REST 分页，一页一页拉到 has_more 为假。
     /// 同一页里的墓碑先应用再补正文，否则服务端已删的那条会被这页重新写回来。
     /// </summary>
-    private async Task BackfillAsync(long missingFrom, CancellationToken ct)
+    private async Task<ReplayOutcome> BackfillAsync(long missingFrom, CancellationToken ct)
     {
         var identity = _current;
-        if (identity == null) return;
+        // 引擎已经停了（退出空间/登出）：没有"取回来"可言，也没到该说"失败"的地步
+        if (identity == null) return ReplayOutcome.Cancelled;
 
         var after = missingFrom - 1;
         var high = after;
@@ -502,13 +521,18 @@ public sealed class SyncEngine : IPushObserver
                 // 这一轮没补成：游标没动，下次连接还会从同一条路径再补一次，所以不断链也不重抛。
                 // 留痕只到 error 码与状态码为止：补拉的失败原因里最有用的是码，正文永远不进日志（§14）。
                 AppLog.BackfillRefused(e.Code, (int)e.Status);
-                return;
+                return ReplayOutcome.Failed;
             }
             catch (PushBoxTransportException e)
             {
                 // 连不上与"服务端拒了"要分开留：前者在日志里只有异常类型名，那句人话里带着服务器地址
                 AppLog.BackfillUnreachable(e.GetType().Name);
-                return;
+                return ReplayOutcome.Failed;
+            }
+            catch (OperationCanceledException)
+            {
+                // 退出/登出把这一轮掐了：这不是"没取回来"，是这一轮本来就不该有结局
+                return ReplayOutcome.Cancelled;
             }
 
             foreach (var tombstone in page.Tombstones) _db.ApplyTombstone(tombstone);
@@ -521,10 +545,11 @@ public sealed class SyncEngine : IPushObserver
             {
                 // 有进展才留痕：空账号开机那次 RestoreHistory 不该每天写一行"补拉完成"
                 if (high > missingFrom - 1) AppLog.BackfillCompleted(missingFrom, high);
-                return;
+                return ReplayOutcome.Completed;
             }
             after = newest;
         }
+        return ReplayOutcome.Cancelled;
     }
 
     /// <summary>§5.3：他端推进了已读游标，本端红点要跟着降；自己上报的那次回环忽略，

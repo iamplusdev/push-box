@@ -289,6 +289,8 @@ public partial class App : Application
         window.Closing += OnWindowClosing;
         window.TrayRefresh += () => RefreshTray(window);
         window.SettingsRequested += OpenSettings;
+        // 空态上的"重试"：再跑一次回放。引擎归这里，窗口只负责问
+        window.RestoreRequested += () => _ = RestoreHistoryAsync(window);
         MainWindow = window;
         // 后台启动这里就是全部差别：托盘与同步照常，主窗留给用户从托盘点开
         if (show) window.Show();
@@ -302,9 +304,7 @@ public partial class App : Application
         var loop = engine.Start(identities.Load());
         // 开屏不能只等着"下一条消息"把历史带进来：一台刚注册完、服务端还没再发过消息的机器
         // 永远收不到 resume_gap 帧，于是主界面开出来是一片空白。手机那边 join 完立刻回放，PC 对齐。
-        _ = engine.RestoreHistoryAsync().ContinueWith(
-            _ => Dispatcher.BeginInvoke(() => (MainWindow as MainWindow)?.Repaint()),
-            TaskContinuationOptions.ExecuteSynchronously);
+        _ = RestoreHistoryAsync(window);
         if (!_loopWatched)
         {
             _loopWatched = true;
@@ -312,6 +312,36 @@ public partial class App : Application
                     faulted.Exception == null ? "unknown" : faulted.Exception.GetBaseException().GetType().Name),
                 TaskContinuationOptions.OnlyOnFaulted);
         }
+    }
+
+    /// <summary>
+    /// 开机回放 / 空态上的"重试"。结局要交回窗口：一次没取回来如果被吞掉，界面就一直停在"正在同步"，
+    /// 而用户手里唯一能做的动作就是重试——所以这三态（取着 / 没有 / 没取回来）必须由这里说清楚。
+    /// 引擎内部把网络错误翻成了结局（<see cref="ReplayOutcome.Failed"/>），这里只兜住解码之类的意外。
+    /// </summary>
+    private async Task RestoreHistoryAsync(MainWindow window)
+    {
+        var engine = _engine;
+        if (engine is null) return;
+
+        window.BeginRestore();
+        ReplayOutcome outcome;
+        try
+        {
+            outcome = await engine.RestoreHistoryAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // 退出/登出把这一轮取消了：窗口正在关，三态没有可画的地方
+            return;
+        }
+        catch (Exception e)
+        {
+            AppLog.HistoryRestoreFailed(e.GetType().Name);
+            outcome = ReplayOutcome.Failed;
+        }
+
+        window.EndRestore(outcome);
     }
 
     /// <summary>

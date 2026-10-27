@@ -160,6 +160,21 @@ public partial class MainWindow : Window
     // 给测试用的只读视图（与 FirstLaunchWindow 同一手法）：XAML 写坏——x:Name 对不上、
     // 面板初始状态不对、模板没挂上——要能在 dotnet test 里被抓住，而不是等人去点。
     public Visibility ConversationListProbe => ConversationList.Visibility;
+
+    /// <summary>空态那一块现在说的是哪一句、底下那颗按钮指向哪——三态最容易出错的就是"抄错了模型"。</summary>
+    public string ConversationEmptyTitleProbe => ConversationEmptyTitle.Text;
+
+    public MainModel.EmptyAction ConversationEmptyActionProbe =>
+        ConversationEmptyButton.Tag is MainModel.EmptyAction action ? action : MainModel.EmptyAction.None;
+
+    public Visibility ConversationEmptyButtonProbe => ConversationEmptyButton.Visibility;
+
+    public Visibility TimelineEmptyProbe => TimelineEmpty.Visibility;
+
+    public string TimelineEmptyTitleProbe => TimelineEmptyTitle.Text;
+
+    public Visibility TimelineRetryProbe => TimelineRetryButton.Visibility;
+
     public Visibility NoConversationProbe => NoConversationBar.Visibility;
     public Visibility BackButtonProbe => BackButton.Visibility;
     public Visibility StatusDotProbe => StatusDot.Visibility;
@@ -291,8 +306,23 @@ public partial class MainWindow : Window
     /// <summary>顶栏那颗齿轮：设置窗由装配层开（主窗不认识设置窗，正如它不认识托盘）。</summary>
     private void OnOpenSettings(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke();
 
-    /// <summary>空会话列表时引导用户打开设置创建频道。</summary>
-    private void OnOpenSettingsFromEmpty(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke();
+    /// <summary>
+    /// 列表空态底下那一颗：三态里有话可做的只有两颗——"没取回来"重试回放，"确实没有"去建频道。
+    /// 走哪条看模型这一轮给的 <see cref="MainModel.EmptyAction"/>，窗口不自己猜。
+    /// </summary>
+    private void OnConversationEmptyAction(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: MainModel.EmptyAction.Retry })
+        {
+            RestoreRequested?.Invoke();
+            return;
+        }
+
+        SettingsRequested?.Invoke();
+    }
+
+    /// <summary>对话区那半的重试：引擎归装配层，这里只把话交出去。</summary>
+    private void OnTimelineRetry(object sender, RoutedEventArgs e) => RestoreRequested?.Invoke();
 
     /// <summary>
     /// 齿轮与箭头是字形，没法像带文字的按钮那样挂 AccessKey，所以用窗口级组合键补上键盘入口：
@@ -387,6 +417,15 @@ public partial class MainWindow : Window
 
     /// <summary>点了顶栏的"设置"。开哪扇窗、给它哪些服务，都是装配那一层（App）的事。</summary>
     public event Action? SettingsRequested;
+
+    /// <summary>空态上那颗"重试"：再跑一次开机回放。引擎在装配层手里，这里只把话交出去。</summary>
+    public event Action? RestoreRequested;
+
+    /// <summary>回放开始（开机或重试）。三态判定在模型里，这一页只是把装配层的两次调用递进去。</summary>
+    public void BeginRestore() => _model.BeginRestore();
+
+    /// <summary>回放收工。结局由引擎给：成 / 被取消 / 没取回来，后两种不能混成一句"还没有消息"。</summary>
+    public void EndRestore(ReplayOutcome outcome) => _model.EndRestore(outcome);
 
     /// <summary>托盘那一行的两样输入：状态文案与未读总数。
     /// 这里给的是带原因的那半句（<see cref="MainModel.StateDetail"/>）而不是顶栏那两字——
@@ -530,8 +569,26 @@ public partial class MainWindow : Window
             ? null
             : Find(conversations, selected.ChannelNo, selected.SenderId);
         _applyingSelection = false;
-        // 空列表在 PC 上不会像手机那样一眼看出"是没消息还是没加载出来"，所以这句话得自己说
-        ConversationEmpty.Visibility = conversations.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        // 空列表在 PC 上不会像手机那样一眼看出"是没消息还是没加载出来"，所以这句话得自己说；
+        // 说哪一句由模型的三态定（正在取 / 确实没有 / 没取回来），窗口不自己拼
+        var empty = conversations.Count == 0;
+        ConversationEmpty.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+        if (empty) PaintConversationEmpty(_model.ConversationEmptyState);
+    }
+
+    /// <summary>列表空态的三样：标题、说明、底下那颗按钮（有去向时才出现）。</summary>
+    private void PaintConversationEmpty(MainModel.EmptyState empty)
+    {
+        ConversationEmptyTitle.Text = empty.Title;
+        ConversationEmptyDetail.Text = empty.Detail;
+        ConversationEmptyDetail.Visibility = string.IsNullOrEmpty(empty.Detail)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        ConversationEmptyButton.Visibility =
+            empty.Action == MainModel.EmptyAction.None ? Visibility.Collapsed : Visibility.Visible;
+        ConversationEmptyButton.Content =
+            empty.Action == MainModel.EmptyAction.Retry ? "重试" : "打开设置创建频道";
+        ConversationEmptyButton.Tag = empty.Action;
     }
 
     private void RenderTimeline(MarkdownStyle style)
@@ -560,7 +617,17 @@ public partial class MainWindow : Window
         var opened = _model.Selected is not null;
         NoConversationBar.Visibility = opened ? Visibility.Collapsed : Visibility.Visible;
         ConversationTitle.Text = _model.Selected?.DisplayName ?? string.Empty;
-        EmptyText.Text = opened && items.Count == 0 ? _model.EmptyText : string.Empty;
+        // 打开的会话一条都没有：正在取 / 确实没有 / 没取回来，三句话都由模型定
+        var empty = opened && items.Count == 0;
+        TimelineEmpty.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+        if (empty) PaintTimelineEmpty(_model.TimelineEmptyState);
+    }
+
+    private void PaintTimelineEmpty(MainModel.EmptyState empty)
+    {
+        TimelineEmptyTitle.Text = empty.Title;
+        TimelineRetryButton.Visibility =
+            empty.Action == MainModel.EmptyAction.Retry ? Visibility.Visible : Visibility.Collapsed;
     }
 
     // ---- 交回模型 ---------------------------------------------------------------------------------

@@ -213,16 +213,19 @@
                                   Width="64" Height="64" 
                                   Stretch="Uniform"
                                   Margin="0,0,0,16"/>
-                            <TextBlock Text="还没有频道" Style="{DynamicResource Text.H3}" 
+                            <TextBlock x:Name="ConversationEmptyTitle" Text="还没有频道" Style="{DynamicResource Text.H3}" 
                                        HorizontalAlignment="Center"
                                        Foreground="{DynamicResource Fg.Primary}"
                                        Margin="0,0,0,8"/>
-                            <TextBlock Text="在手机上创建频道，或用 curl 发送第一条消息" Style="{DynamicResource Text.Small}"
+                            <TextBlock x:Name="ConversationEmptyDetail" Text="在手机上创建频道，或用 curl 发送第一条消息" Style="{DynamicResource Text.Small}"
                                        HorizontalAlignment="Center"
                                        Foreground="{DynamicResource Fg.Secondary}"
                                        TextWrapping="Wrap"
                                        Margin="0,0,0,16"/>
-                            <Button Content="打开设置创建频道" Click="OnOpenSettingsFromEmpty"
+                            <!-- 同一颗按钮两种去向（建频道 / 重试回放），由模型给的 EmptyAction 决定，
+                                 Tag 记这一轮该走哪条 -->
+                            <Button x:Name="ConversationEmptyButton" Content="打开设置创建频道"
+                                    Click="OnConversationEmptyAction"
                                     Style="{DynamicResource Button.Accent}"/>
                         </StackPanel>
                     </Grid>
@@ -287,9 +290,18 @@
                                 </Style>
                             </ItemsControl.ItemContainerStyle>
                         </ItemsControl>
-                        <TextBlock x:Name="EmptyText" Style="{DynamicResource Text.Small}" 
-                                   VerticalAlignment="Top" HorizontalAlignment="Center"
-                                   Margin="0,48,0,0" Foreground="{DynamicResource Fg.Secondary}" />
+                        <!-- 空态三句：正在取 / 确实没有 / 没取回来。回放没结束之前不许说"还没有消息"——
+                             那台机器可能只是还没取回来。失败时底下那颗按钮是唯一能做的事 -->
+                        <StackPanel x:Name="TimelineEmpty" Visibility="Collapsed"
+                                    VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,48,0,0">
+                            <TextBlock x:Name="TimelineEmptyTitle" Style="{DynamicResource Text.Small}"
+                                       HorizontalAlignment="Center" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Fg.Secondary}" />
+                            <Button x:Name="TimelineRetryButton" Content="重试" Visibility="Collapsed"
+                                    Margin="0,12,0,0" HorizontalAlignment="Center"
+                                    Style="{DynamicResource Button.Secondary}"
+                                    Click="OnTimelineRetry" />
+                        </StackPanel>
                     </Grid>
                 </ScrollViewer>
 

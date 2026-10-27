@@ -210,6 +210,13 @@ public static class AppLog
     public static void SpaceLogoutFailed(string exceptionType) =>
         Write(LogEventLevel.Error, "退出空间没走完 {Type}", exceptionType);
 
+    /// <summary>
+    /// 开机回放抛出了 <c>ReplayOutcome</c> 之外的东西（解码、库写坏了）：引擎自己只把
+    /// "服务端拒/连不上"翻成失败态，剩下的意外到这里，界面显示"没取回来"而原因在这里。
+    /// </summary>
+    public static void HistoryRestoreFailed(string exceptionType) =>
+        Write(LogEventLevel.Warning, "回放没走完 {Type}", exceptionType);
+
     /// <summary>§8.4 之后的更新检查：只记"发现新版"这件事和版本号，GitHub 的 URL、release 正文都不进日志。</summary>
     public static void UpdateFound(string latest, string current) =>
         Write(LogEventLevel.Information, "发现新版本 {Latest}（当前 {Current}）", latest, current);

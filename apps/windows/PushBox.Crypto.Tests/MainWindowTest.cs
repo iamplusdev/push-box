@@ -212,6 +212,73 @@ public sealed class MainWindowTest : IDisposable
         Assert.True(failure is null, failure?.ToString());
     }
 
+    /// <summary>
+    /// 三态在窗口这一侧的落点：模型给的句子与按钮去向要真的抄到控件上，换态之后要跟着重画，点"重试"要
+    /// 把话交回装配层。这一条必须 Show——<c>Refresh</c> 在 <c>IsLoaded</c> 之前整段跳过（自启那轮靠的就是它）。
+    /// </summary>
+    [Fact]
+    public void TheEmptyStateFollowsTheReplayPhaseOnScreen()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new MainWindow(_db, _identities,
+                    new ReadReporter(_db, _identities, Offline()),
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader())
+                {
+                    // 摆到屏幕外、不抢焦点：这条用例要的是真的加载过一屏，不是给人看
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = -10000,
+                    Top = -10000,
+                    ShowActivated = false
+                };
+                var retries = 0;
+                window.RestoreRequested += () => retries++;
+                window.Show();
+                Sta.PumpUntil(() => window.IsLoaded);
+                Sta.PumpUntil(() => window.ConversationEmptyTitleProbe.Length > 0);
+
+                // 库里空着、回放还没回话：不许说"还没有频道"，也没有可点的按钮
+                Assert.Equal("正在同步会话…", window.ConversationEmptyTitleProbe);
+                Assert.Equal(MainModel.EmptyAction.None, window.ConversationEmptyActionProbe);
+                Assert.Equal(Visibility.Collapsed, window.ConversationEmptyButtonProbe);
+
+                // 回放说"确实没有"：换成建频道那颗
+                window.EndRestore(ReplayOutcome.Completed);
+                Sta.PumpUntil(() => window.ConversationEmptyTitleProbe == "还没有频道");
+                Assert.Equal(MainModel.EmptyAction.CreateChannel, window.ConversationEmptyActionProbe);
+                Assert.Equal(Visibility.Visible, window.ConversationEmptyButtonProbe);
+
+                // 回放没成：同一颗按钮改成"重试"，点它把话交回装配层
+                window.EndRestore(ReplayOutcome.Failed);
+                Sta.PumpUntil(() => window.ConversationEmptyTitleProbe == "会话没取回来");
+                Assert.Equal(MainModel.EmptyAction.Retry, window.ConversationEmptyActionProbe);
+                var retry = (Button)window.FindName("ConversationEmptyButton")!;
+                Assert.Equal("重试", retry.Content);
+                retry.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal(1, retries);
+
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "空态三态没有按时画完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
     /// <summary>网络这条支路一律当场失败：这里测的是骨架，不是任何一次请求。</summary>
     private static DeviceClient Offline() => new(new HttpClient(new ThrowingHandler(
         new HttpRequestException("骨架用例不该发请求"))));

@@ -72,6 +72,95 @@ public sealed class SyncEngineTest : IDisposable
         await harness.Engine.StopAsync();
     }
 
+    // ---- 开机回放的结局（主界面空态三态读它）------------------------------------------------------
+
+    /// <summary>
+    /// 回放跑到了服务端末尾：主界面这时才敢说"这个空间确实没有消息"。
+    /// 服务端本来就没有消息也算 Completed——"没有"是结论，"没取回来"才是事故。
+    /// </summary>
+    [Fact]
+    public async Task AReplayThatReachesTheEndReportsCompleted()
+    {
+        var harness = Harness(Device(), Pages(Page(Array.Empty<object>(), hasMore: false)));
+        harness.EnqueueHanging();
+        harness.Start();
+        await Until(() => harness.ConnectedCount >= 1, "先要真连上一条");
+
+        var outcome = await harness.Engine.RestoreHistoryAsync();
+        harness.Engine.Stop();
+
+        Assert.Equal(ReplayOutcome.Completed, outcome);
+    }
+
+    /// <summary>
+    /// 连不上就不是"空"：主界面要挂出"没取回来 + 重试"，而不是把连不上的那段说成没有消息。
+    /// 引擎在这里不抛（断链重连自己会再补），只把结局交出来。
+    /// </summary>
+    [Fact]
+    public async Task AReplayThatCannotReachTheServerReportsFailed()
+    {
+        var harness = Harness(Device(), new FakeHandler(_ =>
+            throw new HttpRequestException("连不上")));
+        harness.EnqueueHanging();
+        harness.Start();
+        await Until(() => harness.ConnectedCount >= 1, "先要真连上一条");
+
+        var outcome = await harness.Engine.RestoreHistoryAsync();
+        harness.Engine.Stop();
+
+        Assert.Equal(ReplayOutcome.Failed, outcome);
+    }
+
+    /// <summary>服务端拒了（401 那种）也是失败，但和"连不上"在日志里要分开：一个是码，一个是类型名。</summary>
+    [Fact]
+    public async Task AReplayTheServerRefusesAlsoReportsFailed()
+    {
+        var harness = Harness(Device(), new FakeHandler(_ => Support.Reply(HttpStatusCode.Unauthorized,
+            Support.ErrorBody("unauthorized", "clock_skew"))));
+        harness.EnqueueHanging();
+        harness.Start();
+        await Until(() => harness.ConnectedCount >= 1, "先要真连上一条");
+
+        var outcome = await harness.Engine.RestoreHistoryAsync();
+        harness.Engine.Stop();
+
+        Assert.Equal(ReplayOutcome.Failed, outcome);
+    }
+
+    /// <summary>引擎还没起过（没有身份）时问回放：没有"取回来"可言，也就不该报失败。</summary>
+    [Fact]
+    public async Task AReplayAskedBeforeTheEngineEverStartedIsCancelled()
+    {
+        var harness = Harness(Device());
+        Assert.Equal(ReplayOutcome.Cancelled, await harness.Engine.RestoreHistoryAsync());
+    }
+
+    /// <summary>
+    /// 重试按两下：第二下拿到的必须是第一份。否则它会先"收工"，主界面在第一份还没拉完时就判了结局，
+    /// 而那一判多半是"没有消息"。
+    /// </summary>
+    [Fact]
+    public async Task ASecondReplayWhileOneIsRunningWaitsForTheSameOne()
+    {
+        var gate = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var harness = Harness(Device(), new FakeHandler(async (_, ct) => await Gate(gate, ct)));
+        harness.EnqueueHanging();
+        harness.Start();
+        await Until(() => harness.ConnectedCount >= 1, "先要真连上一条");
+
+        var first = harness.Engine.RestoreHistoryAsync();
+        await Until(() => harness.Http.Requests.Count >= 1, "第一份回放要发出去");
+        var second = harness.Engine.RestoreHistoryAsync();
+
+        Assert.Same(first, second);
+
+        gate.SetResult(Support.Reply(HttpStatusCode.OK, Support.SealRestResponse(
+            Page(Array.Empty<object>(), hasMore: false))));
+        Assert.Equal(ReplayOutcome.Completed, await first);
+        Assert.Equal(ReplayOutcome.Completed, await second);
+        harness.Engine.Stop();
+    }
+
     [Fact]
     public async Task ReconnectWaitsOneTwoFourSecondsAndCapsAtSixty()
     {

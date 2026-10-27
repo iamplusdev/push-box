@@ -214,7 +214,72 @@ public sealed class MainModel
     public IReadOnlyList<TimelineItem> Timeline() =>
         BuildTimeline(_window);
 
-    public string EmptyText => "还没有消息";
+    // ---- 空态的三态（加载中 / 空 / 没取回来）-------------------------------------------------------
+
+    /// <summary>空态的三张脸。窗口刚建出来是"还在取"：这台机器可能只是还没把历史取回来，
+    /// 这时候说"还没有消息"是替服务端下结论。</summary>
+    public enum EmptyPhase
+    {
+        Loading,
+        Ready,
+        Failed
+    }
+
+    /// <summary>空态底下那颗按钮指向哪一条路。没话可做时整颗收起来（<see cref="None"/>）。</summary>
+    public enum EmptyAction
+    {
+        None,
+        CreateChannel,
+        Retry
+    }
+
+    /// <summary>空态那一块要画的东西：标题、说明、按钮去向。窗口只负责照抄，不再自己拼文案。</summary>
+    public readonly record struct EmptyState(string Title, string Detail, EmptyAction Action);
+
+    private EmptyPhase _phase = EmptyPhase.Loading;
+
+    /// <summary>开机回放走到哪一步。三张脸只在 <see cref="EndRestore"/> 之后才换成后两张。</summary>
+    public EmptyPhase Phase => _phase;
+
+    /// <summary>回放开始（开机那一次或用户点了重试）：把上一轮的失败收起来，界面回到"正在取"。</summary>
+    public void BeginRestore()
+    {
+        if (_phase == EmptyPhase.Loading) return;
+        _phase = EmptyPhase.Loading;
+        Raise();
+    }
+
+    /// <summary>
+    /// 回放收工。取消（正在退出、登出）不改判定：窗口这会儿正在关，切成"失败"只会留下一次无处可看的重试。
+    /// </summary>
+    public void EndRestore(ReplayOutcome outcome)
+    {
+        var next = outcome switch
+        {
+            ReplayOutcome.Completed => EmptyPhase.Ready,
+            ReplayOutcome.Failed => EmptyPhase.Failed,
+            _ => _phase
+        };
+        if (next == _phase) return;
+        _phase = next;
+        Raise();
+    }
+
+    /// <summary>会话列表那半的空态。三句话都由 <see cref="Phase"/> 定，加载中与失败都不许说"还没有频道"。</summary>
+    public EmptyState ConversationEmptyState => _phase switch
+    {
+        EmptyPhase.Loading => new("正在同步会话…", "第一次打开要把服务端的会话取回来", EmptyAction.None),
+        EmptyPhase.Failed => new("会话没取回来", "检查服务器地址与网络连接，然后重试", EmptyAction.Retry),
+        _ => new("还没有频道", "在手机上创建频道，或用 curl 发送第一条消息", EmptyAction.CreateChannel)
+    };
+
+    /// <summary>对话区那半的空态：打开的会话一条消息都没有时说什么。看的是同一次回放的结局。</summary>
+    public EmptyState TimelineEmptyState => _phase switch
+    {
+        EmptyPhase.Loading => new("正在同步历史消息…", string.Empty, EmptyAction.None),
+        EmptyPhase.Failed => new("历史消息没取回来", "检查网络连接，然后重试", EmptyAction.Retry),
+        _ => new("还没有消息", string.Empty, EmptyAction.None)
+    };
 
     /// <summary>
     /// 气泡那一竖列的宽度上限：§9.2 的 72%（窄屏 78%），再封在 900 之内。

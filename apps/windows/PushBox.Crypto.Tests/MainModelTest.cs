@@ -701,6 +701,84 @@ public sealed class MainModelTest : IDisposable
         Assert.Equal("展开全文", OnlyMessage(model).ExpandLabel);
     }
 
+    // ---- 空态的三态（§9.3）------------------------------------------------------------------------
+
+    /// <summary>
+    /// 机器刚开、库还是空的：这时候不能说"还没有频道"。回放可能正把历史取回来，
+    /// 而"还没有消息"会被当成服务端的结论——用户接着就去手机上又建一个频道。
+    /// </summary>
+    [Fact]
+    public void AnEmptySpaceSaysItIsLoadingUntilTheReplayFinishes()
+    {
+        var model = Model();
+
+        Assert.Equal(MainModel.EmptyPhase.Loading, model.Phase);
+        Assert.Equal("正在同步会话…", model.ConversationEmptyState.Title);
+        Assert.Equal(MainModel.EmptyAction.None, model.ConversationEmptyState.Action);
+        Assert.Equal("正在同步历史消息…", model.TimelineEmptyState.Title);
+        // 加载中不许摆出"去建频道"或"重试"：前者让人白建一个，后者让人以为已经失败了
+        Assert.DoesNotContain("还没有", model.ConversationEmptyState.Title);
+    }
+
+    /// <summary>回放跑到服务端末尾、库里确实一条都没有，这时候"空"才算成立。</summary>
+    [Fact]
+    public void AnEmptySpaceOnlySaysItIsEmptyOnceTheReplayHasFinished()
+    {
+        var model = Model();
+        model.EndRestore(ReplayOutcome.Completed);
+
+        Assert.Equal(MainModel.EmptyPhase.Ready, model.Phase);
+        Assert.Equal("还没有频道", model.ConversationEmptyState.Title);
+        Assert.Equal("在手机上创建频道，或用 curl 发送第一条消息", model.ConversationEmptyState.Detail);
+        Assert.Equal(MainModel.EmptyAction.CreateChannel, model.ConversationEmptyState.Action);
+        Assert.Equal("还没有消息", model.TimelineEmptyState.Title);
+        Assert.Equal(MainModel.EmptyAction.None, model.TimelineEmptyState.Action);
+    }
+
+    /// <summary>没取回来和"没有"是两件事：前者该给人一颗重试，后者才该让人去建频道。</summary>
+    [Fact]
+    public void AFailedReplayOffersRetryInsteadOfPretendingTheSpaceIsEmpty()
+    {
+        var model = Model();
+        model.EndRestore(ReplayOutcome.Failed);
+
+        Assert.Equal(MainModel.EmptyPhase.Failed, model.Phase);
+        Assert.Equal("会话没取回来", model.ConversationEmptyState.Title);
+        Assert.Equal(MainModel.EmptyAction.Retry, model.ConversationEmptyState.Action);
+        Assert.Equal("历史消息没取回来", model.TimelineEmptyState.Title);
+        Assert.Equal(MainModel.EmptyAction.Retry, model.TimelineEmptyState.Action);
+
+        // 点重试：先回到"正在取"，而不是继续挂着上一次的失败
+        var raised = 0;
+        model.Changed += () => raised++;
+        model.BeginRestore();
+        Assert.Equal(MainModel.EmptyPhase.Loading, model.Phase);
+        Assert.Equal(MainModel.EmptyAction.None, model.ConversationEmptyState.Action);
+        Assert.Equal(1, raised);
+
+        // 已经在取的时候再叫一次不重画：重试按两下不该把列表刷两遍
+        model.BeginRestore();
+        Assert.Equal(1, raised);
+    }
+
+    /// <summary>
+    /// 取消不是失败：退出空间/登出把回放掐了，窗口这会儿正在关。
+    /// 把它当失败会留下一次无处可看的"重试"。
+    /// </summary>
+    [Fact]
+    public void ACancelledReplayChangesNothingBecauseTheWindowIsAlreadyClosing()
+    {
+        var model = Model();
+        model.EndRestore(ReplayOutcome.Completed);
+        var raised = 0;
+        model.Changed += () => raised++;
+
+        model.EndRestore(ReplayOutcome.Cancelled);
+
+        Assert.Equal(MainModel.EmptyPhase.Ready, model.Phase);
+        Assert.Equal(0, raised);
+    }
+
     // ---- fixtures ---------------------------------------------------------------------------------
 
     private MainModel Model(HttpMessageHandler? handler = null)
