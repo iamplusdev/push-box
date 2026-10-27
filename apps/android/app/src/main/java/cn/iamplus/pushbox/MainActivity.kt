@@ -82,6 +82,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -1300,9 +1301,22 @@ private data class ConversationTarget(val conversation: ConversationRow,
     val focusMsgId: String? = null)
 
 /** 对话详情（参考微信）：正流展示全部消息、进入即清未读、长按复制/删除。 */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsgId: String?,
+    onBack: () -> Unit) {
+    // 换会话 = 换一块干净的屏幕。外层 key 一变，里面所有 remember 全部重建，
+    // 包括 rememberLazyListState() 那个滚动位置——不做这件事，上一条会话读到哪儿、
+    // 下一条就开在哪儿，然后被"首次落位"拽回页尾，看上去就是"切个会话它自己滚了一路"。
+    // 键只用两把 id 而不是行本身：ConversationRow 是 data class，进这一屏会把未读清零，
+    // 行内容当场变一次，拿它当键等于每开一个会话就自己重置自己一遍。
+    key(conversation.channelNo, conversation.senderId) {
+        ConversationScreen(app, conversation, focusMsgId, onBack)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConversationScreen(app: App, conversation: ConversationRow, focusMsgId: String?,
     onBack: () -> Unit) {
     // 详情页覆盖在 shell 之上：系统返回键要收起详情，而不是退出 App
     BackHandler(onBack = onBack)
@@ -1319,7 +1333,7 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
     var rawQuery by rememberSaveable(conversation.channelNo, conversation.senderId) {
         mutableStateOf("")
     }
-    var query by remember(conversation) { mutableStateOf<String?>(null) }
+    var query by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(rawQuery) {
         if (rawQuery.isBlank()) {
             query = null
@@ -1330,7 +1344,10 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
     }
     // 同上：null 是"还没读到第一帧"。Room 的第一次发射不是同步的，把空列表当结果
     // 会让每个会话都先闪一下"还没有消息"。
-    val rowsState by remember(conversation, query) {
+    // 键只有 query：外层 key 已经保证"换会话 = 重建"，这里再挂会话行就等于
+    // 行内容一变（看一眼就把未读清零）就重新订阅一次 Room，列表整棵拆掉重进——
+    // 那一下就是"切会话卡"里能数出来的那一帧。
+    val rowsState by remember(query) {
         app.dao.messagesFlow(conversation.channelNo, conversation.senderId, query)
     }.collectAsState(initial = null)
     val rows = rowsState.orEmpty()
@@ -1342,7 +1359,9 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
         onDispose { ViewedConversation.close(conversation.channelNo, conversation.senderId) }
     }
 
-    LaunchedEffect(conversation) {
+    // 开屏那一次就够：正在看的这条不涨红点（ViewedConversation 那道门），所以行内容
+    // 后续再变也没新的要标；挂行本身等于每次变更都重发一遍已读上报。
+    LaunchedEffect(conversation.channelNo, conversation.senderId) {
         withContext(Dispatchers.IO) {
             app.dao.markConversationRead(conversation.channelNo, conversation.senderId)
         }
@@ -1362,10 +1381,10 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
     var highlightId by remember { mutableStateOf<String?>(null) }
     // 从搜索结果点进来要落在命中那条上：定位完成前先把"滚到最新"按住，否则两个效果互相拽。
     // 命中项只存在于服务端（本机没缓存正文）时这里找不到，退回页尾——那一条点开仍能看摘要。
-    var awaitingFocus by remember(conversation, focusMsgId) { mutableStateOf(focusMsgId != null) }
+    var awaitingFocus by remember(focusMsgId) { mutableStateOf(focusMsgId != null) }
     // 会话内搜索点中一条命中：先退出筛选，等未筛选的那一帧回来再定位——
     // 筛选列表里的下标与全量列表不是一回事，直接拿它 scrollToItem 会落到别的消息上。
-    var pendingFocus by remember(conversation) { mutableStateOf<String?>(null) }
+    var pendingFocus by remember { mutableStateOf<String?>(null) }
     // 键只挂 rowsState：定位完要把 pendingFocus 清掉，若它也当键，清空会取消
     // 这个协程里后半段"延时后取消高亮"，高亮就再也褪不掉了。
     LaunchedEffect(rowsState) {
@@ -1405,9 +1424,9 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
             last.index >= info.totalItemsCount - 1 - NEAR_BOTTOM_ITEMS
         }
     }
-    var unseen by remember(conversation) { mutableIntStateOf(0) }
-    var lastCount by remember(conversation) { mutableIntStateOf(0) }
-    var placed by remember(conversation) { mutableStateOf(false) }
+    var unseen by remember { mutableIntStateOf(0) }
+    var lastCount by remember { mutableIntStateOf(0) }
+    var placed by remember { mutableStateOf(false) }
     LaunchedEffect(nearBottom) { if (nearBottom) unseen = 0 }
     LaunchedEffect(rows.size, awaitingFocus, pendingFocus) {
         // 正在定位（外部命中或退出筛选）时不抢滚动，也不把这批长度变化算成"新消息"：
@@ -1420,10 +1439,12 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
         val grew = rows.size - lastCount
         lastCount = rows.size
         when {
-            // 首次落位只做一次；带命中目标的会话由上面那个 effect 负责，这里不抢
+            // 首次落位只做一次；带命中目标的会话由上面那个 effect 负责，这里不抢。
+            // 这一次用 scrollToItem 而不是 animate：这个协程挂在 rows.size 上，Room 每发一帧
+            // 就重跑一遍，动画会被打断重来——长会话开屏那一下就是"它自己在往上滚"。
             !placed -> {
                 placed = true
-                if (focusMsgId == null) listState.animateScrollToItem(rows.lastIndex)
+                if (focusMsgId == null) listState.scrollToItem(rows.lastIndex)
             }
 
             nearBottom -> listState.animateScrollToItem(rows.lastIndex)
