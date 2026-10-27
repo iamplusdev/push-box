@@ -34,7 +34,7 @@ services:
       dockerfile: infra/Dockerfile
     # 引用 CI 推到 Docker Hub 的那个名字，本文件同时留 build: 段：镜像在远端存在就拉，
     # 拉不到（自己 fork、离线、改了代码）才本地编。
-    image: docker.io/iamplusdev/push-box:1.1.3
+    image: docker.io/iamplusdev/push-box:1.1.4
     volumes:
       # 一个卷装下全部可变状态：config/pushbox.json（安装页写的配置）、media/（本地拓扑的图片与头像）、
       # logs/（logback 的滚动文件）。收敛成一个的理由是"人只需要管一处"：NAS 图形界面里的「存储位置」
