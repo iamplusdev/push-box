@@ -144,8 +144,15 @@
                 Background="{DynamicResource Bg.Elevated}" Cursor="Hand"
                 BorderBrush="{DynamicResource Divider}" BorderThickness="0,0,0,1"
                 MouseLeftButtonUp="OnNoticeDismissed">
-            <TextBlock x:Name="NoticeText" Style="{DynamicResource Text.Small}" TextWrapping="Wrap"
-                       VerticalAlignment="Center" Foreground="{DynamicResource Level.Error}" />
+            <DockPanel>
+                <!-- 整条也能点，但"能点"对键盘用户等于不存在：留一颗真的按钮，Tab 得到、读屏也念得出 -->
+                <Button DockPanel.Dock="Right" x:Name="NoticeCloseButton" Content="&#xE711;"
+                        Style="{DynamicResource Button.Icon}" Width="24" Height="24" Margin="12,0,0,0"
+                        FontSize="{x:Static controls:MarkdownStyle.SmallSize}"
+                        AutomationProperties.Name="关闭提示" ToolTip="关闭提示" Click="OnNoticeClosed" />
+                <TextBlock x:Name="NoticeText" Style="{DynamicResource Text.Small}" TextWrapping="Wrap"
+                           VerticalAlignment="Center" Foreground="{DynamicResource Level.Error}" />
+            </DockPanel>
         </Border>
 
         <Grid x:Name="Body">
@@ -174,6 +181,7 @@
                                 Style="{DynamicResource Button.Icon}"
                                 Width="36" Height="36"
                                 FontSize="{x:Static controls:MarkdownStyle.H2Size}"
+                                AutomationProperties.Name="设置"
                                 ToolTip="设置（Alt+S）" Click="OnOpenSettings" />
                     </Border>
                     <!-- 顶部：连接状态指示。正文只有两字（"在线/离线/异常"），原因挂在整块的悬停提示上——
@@ -198,6 +206,7 @@
                     <ListBox x:Name="ConversationList" BorderThickness="0"
                              Background="Transparent" 
                              controls:ScrollReveal.Attach="True"
+                             AutomationProperties.Name="会话列表"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                              ItemTemplate="{StaticResource ConversationRowTemplate}"
@@ -237,6 +246,7 @@
             <GridSplitter x:Name="ListSplitter" Grid.Column="2"
                           HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                           Background="Transparent" Cursor="SizeWE"
+                          AutomationProperties.Name="调整会话列表宽度"
                           ResizeBehavior="PreviousAndNext" ResizeDirection="Columns">
                 <GridSplitter.Template>
                     <ControlTemplate TargetType="GridSplitter">
@@ -264,6 +274,7 @@
                     <Button x:Name="BackButton" Grid.Column="0" Content="&#xE72B;" Width="28" Height="28"
                             Style="{DynamicResource Button.Icon}" Visibility="Collapsed"
                             FontSize="{x:Static controls:MarkdownStyle.H3Size}"
+                            AutomationProperties.Name="返回"
                             ToolTip="返回（Alt+←）" />
                     <TextBlock x:Name="ConversationTitle" Grid.Column="1" Margin="10,0,0,0"
                                Style="{DynamicResource Text.H3}" VerticalAlignment="Center"
@@ -277,6 +288,7 @@
                          面板会被按无限高测量，虚拟化整个失效——几千条历史就会在每次切会话时全量排版一遍 -->
                     <ItemsControl x:Name="Timeline" MaxWidth="900"
                                   controls:ScrollReveal.Attach="True"
+                                  AutomationProperties.Name="消息"
                                   VirtualizingPanel.IsVirtualizing="True"
                                   VirtualizingPanel.VirtualizationMode="Recycling"
                                   VirtualizingPanel.ScrollUnit="Pixel">
@@ -344,15 +356,15 @@
                 </Border>
 
                 <!-- §9.3 的"1 条新消息"胶囊：只有用户正往上翻历史（没贴在底部）时才出现，点它回到底部。
-                     贴在底部时新消息直接跟滚，不需要这一格。 -->
-                <Border Grid.Row="2" x:Name="NewBelow" Visibility="Collapsed" Cursor="Hand"
+                     贴在底部时新消息直接跟滚，不需要这一格。
+                     它原来是个只认鼠标的 Border：键盘用户既 Tab 不到也按不动，收成按钮才算真能按 -->
+                <Button x:Name="NewBelow" Grid.Row="2" Visibility="Collapsed"
                         HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,16"
-                        Padding="12,4" CornerRadius="12" Background="{DynamicResource Bg.Elevated}"
-                        BorderBrush="{DynamicResource Divider}" BorderThickness="1"
-                        MouseLeftButtonUp="OnNewBelowClicked">
+                        Style="{DynamicResource Button.Pill}" Click="OnNewBelowClicked"
+                        AutomationProperties.Name="新消息，跳到底部">
                     <TextBlock x:Name="NewBelowText" Style="{DynamicResource Text.Small}"
                                Foreground="{DynamicResource Accent}" />
-                </Border>
+                </Button>
             </Grid>
         </Grid>
     </DockPanel>

@@ -7,6 +7,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Threading;
 using PushBox.Windows.Data;
 using PushBox.Windows.Media;
@@ -338,6 +340,90 @@ public sealed class MainWindowTest : IDisposable
 
         thread.Start();
         Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "虚拟化用例没有按时跑完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    /// <summary>
+    /// 行的右键菜单要能只用键盘开出来。菜单住在行模板里的 Grid 上，而那个 Grid 不是焦点元素——
+    /// WPF 的 Shift+F10 只找"焦点元素自己的 ContextMenu"，所以这条键盘路径得窗口自己接。
+    /// 顺带断落点：键盘开的那次贴在行下面，关掉之后要还给鼠标（否则这一行下次右键也跑到行下面去）。
+    /// </summary>
+    [Fact]
+    public void TheRowMenuOpensFromTheKeyboardAndGivesPlacementBack()
+    {
+        _db.ApplyMessage(Msg(1, "m1", Grafana));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new MainWindow(_db, _identities,
+                    new ReadReporter(_db, _identities, Offline()),
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader())
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = -10000,
+                    Top = -10000,
+                    ShowActivated = false
+                };
+                window.Show();
+                Sta.PumpUntil(() => window.IsLoaded);
+                Sta.PumpUntil(() => window.RowRealizedProbe > 0);
+
+                // 没选中就没有"这一行"可言：这时按菜单键不该开出一颗指着别人的菜单
+                Assert.Null(window.OpenRowMenuForKeyboard());
+
+                window.OpenConversation(Channel, Grafana);
+                Sta.PumpUntil(() => window.RowRealizedProbe > 0);
+
+                var menu = window.OpenRowMenuForKeyboard();
+                Assert.NotNull(menu);
+                Sta.PumpUntil(() => menu!.IsOpen);
+                Assert.Same(window.RowMenuProbe, menu);
+                // 落点是被选中的那一行本身，不是模板里那个 Grid
+                Assert.IsType<ListBoxItem>(menu!.PlacementTarget);
+                Assert.Equal(PlacementMode.Bottom, menu.Placement);
+
+                // 打开时那两行按这一行的现状态写字：与右键开出来的走的是同一个 Opened
+                var items = menu.Items.OfType<MenuItem>().ToList();
+                Assert.Equal("置顶", items.Single(i => (string?)i.Tag == "pin").Header);
+                Assert.Equal("免打扰", items.Single(i => (string?)i.Tag == "mute").Header);
+
+                menu.IsOpen = false;
+                Sta.PumpUntil(() => !menu.IsOpen);
+                Sta.PumpUntil(() => menu.Placement == PlacementMode.MousePoint);
+                Assert.Null(window.RowMenuProbe);
+
+                // 真正的那条路：Shift+F10 / 菜单键走窗口的 PreviewKeyDown。
+                // 合成事件而不是真按键——测试窗没有激活，键盘输入根本到不了它
+                var args = new KeyEventArgs(Keyboard.PrimaryDevice,
+                    PresentationSource.FromVisual(window)!, 0, Key.Apps)
+                {
+                    RoutedEvent = Keyboard.PreviewKeyDownEvent
+                };
+                window.RaiseEvent(args);
+                Assert.True(args.Handled, "菜单键到了窗口却没人接");
+                Sta.PumpUntil(() => window.RowMenuProbe is not null);
+                window.RowMenuProbe!.IsOpen = false;
+                Sta.PumpUntil(() => window.RowMenuProbe is null);
+
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "键盘开行菜单没有按时跑完");
         Assert.True(failure is null, failure?.ToString());
     }
 

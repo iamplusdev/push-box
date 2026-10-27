@@ -510,7 +510,7 @@ public class ThemeTest
     [Fact]
     public void EveryButtonStyleCarriesAllThreeStatesOnBothSides()
     {
-        var keys = new[] { "Button.Primary", "Button.Secondary", "Button.Accent", "Button.Danger", "Button.Icon" };
+        var keys = new[] { "Button.Primary", "Button.Secondary", "Button.Accent", "Button.Danger", "Button.Icon", "Button.Pill" };
         foreach (var file in new[] { Light, Dark })
         {
             var doc = XDocument.Parse(TokenFiles.Text(file));

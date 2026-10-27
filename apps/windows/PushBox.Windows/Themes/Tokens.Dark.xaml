@@ -268,6 +268,37 @@
         </Setter>
     </Style>
 
+    <!-- "N 条新消息"胶囊：与浅色那份同一套（三态用的是 Ghost 的 hover/pressed 两档灰） -->
+    <Style x:Key="Button.Pill" TargetType="Button">
+        <Setter Property="Padding" Value="12,4" />
+        <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Focus.Visual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="{DynamicResource Bg.Elevated}" BorderThickness="1" CornerRadius="12"
+                            BorderBrush="{DynamicResource Divider}"
+                            Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Btn.Ghost.Hover}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Btn.Ghost.Pressed}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- 键盘焦点框：与浅色那份同一套（Accent 换字典时自己跟着走） -->
     <Style x:Key="Focus.Visual">
         <Setter Property="Control.Template">

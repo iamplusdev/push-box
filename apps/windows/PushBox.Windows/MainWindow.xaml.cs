@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -213,6 +214,21 @@ public partial class MainWindow : Window
     /// <summary>选中态那套样式没挂上时，列表会退成系统蓝高亮——深色 token 下它把会话名压得看不见。</summary>
     public bool HasRowContainerStyle => ConversationList.ItemContainerStyle is not null;
 
+    /// <summary>会话列表真正生成出来的行数：视口外的行在虚拟化下没有容器，行菜单也就无从谈起。</summary>
+    public int RowRealizedProbe
+    {
+        get
+        {
+            var realized = 0;
+            for (var i = 0; i < ConversationList.Items.Count; i++)
+            {
+                if (ConversationList.ItemContainerGenerator.ContainerFromIndex(i) is not null) realized++;
+            }
+
+            return realized;
+        }
+    }
+
     /// <summary>§9.3 那颗"新消息"胶囊：只有用户没贴在底部时才可能出现，所以它和滚动位置是一对。</summary>
     public Visibility NewBelowProbe => NewBelow.Visibility;
     public string NewBelowTextProbe => NewBelowText.Text;
@@ -264,6 +280,9 @@ public partial class MainWindow : Window
     }
 
     private void OnNoticeDismissed(object sender, MouseButtonEventArgs e) => ShowNotice(null);
+
+    /// <summary>提示条右边那颗 ×：整条也能点，但键盘用户只有这一颗按得到。</summary>
+    private void OnNoticeClosed(object sender, RoutedEventArgs e) => ShowNotice(null);
 
     /// <summary>
     /// 右键菜单挂在模板里，所以点击回调收到的只是 <see cref="MenuItem"/>：先把那一行的数据对象找回来。
@@ -357,9 +376,17 @@ public partial class MainWindow : Window
     /// <summary>
     /// 齿轮与箭头是字形，没法像带文字的按钮那样挂 AccessKey，所以用窗口级组合键补上键盘入口：
     /// Alt+S 开设置、Alt+← 退回"没选中"。<c>Alt</c> 按住时实际键码在 <see cref="KeyEventArgs.SystemKey"/> 上。
+    /// 行的右键菜单也在这里补：菜单挂在行模板里的 Grid 上，而 WPF 只认"焦点元素自己的 ContextMenu"，
+    /// 那个 Grid 永远拿不到焦点，所以 Shift+F10 / 菜单键本来什么都不会发生。
     /// </summary>
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Apps || (e.Key == Key.F10 && Keyboard.Modifiers == ModifierKeys.Shift))
+        {
+            if (OpenRowMenuForKeyboard() is not null) e.Handled = true;
+            return;
+        }
+
         if (Keyboard.Modifiers != ModifierKeys.Alt) return;
         if (e.SystemKey == Key.S)
         {
@@ -371,6 +398,50 @@ public partial class MainWindow : Window
             _model.CloseConversation();
             e.Handled = true;
         }
+    }
+
+    private ContextMenu? _rowMenu;
+
+    /// <summary>键盘刚开出来的行菜单（关掉就没有了）：测试拿不到模板里那颗菜单实例，只能从窗口问。</summary>
+    public ContextMenu? RowMenuProbe => _rowMenu is { IsOpen: true } ? _rowMenu : null;
+
+    /// <summary>
+    /// 键盘开"这一行"的菜单。挑的是<b>列表里选中的那一条</b>而不是"最后一个拿焦点的元素"：
+    /// 上下键在列表里走的时候，用户眼里的"这一行"就是选中行。
+    /// 没选中、或者那一行还没生成出来（虚拟化下视口外的行没有容器）时什么都不做。
+    /// </summary>
+    public ContextMenu? OpenRowMenuForKeyboard()
+    {
+        if (ConversationList.ItemContainerGenerator.ContainerFromItem(ConversationList.SelectedItem)
+            is not ListBoxItem container) return null;
+        if (MenuIn(container) is not { } menu) return null;
+
+        // 模板里那份菜单的落点本来是 MousePoint（右键在哪就在哪开）。键盘开的时候没有鼠标可依，
+        // 贴着行下面落——这也是 WPF 自己给键盘开菜单时的落法。关掉要还回去，
+        // 否则这一行以后再被右键，也会跑到行下面去。
+        menu.Closed += RestoreMousePlacement;
+        menu.PlacementTarget = container;
+        menu.Placement = PlacementMode.Bottom;
+        menu.IsOpen = true;
+        return _rowMenu = menu;
+    }
+
+    /// <summary>键盘开过的那颗菜单关掉时把落点还给鼠标。</summary>
+    private static readonly RoutedEventHandler RestoreMousePlacement = (sender, _) =>
+    {
+        if (sender is ContextMenu menu) menu.Placement = PlacementMode.MousePoint;
+    };
+
+    /// <summary>行模板的根节点上挂的就是那颗菜单：容器 → 内容宿主 → 模板根，逐层往下找。</summary>
+    private static ContextMenu? MenuIn(DependencyObject root)
+    {
+        if (root is FrameworkElement { ContextMenu: { } own }) return own;
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            if (MenuIn(VisualTreeHelper.GetChild(root, i)) is { } found) return found;
+        }
+
+        return null;
     }
 
     /// <summary>菜单项收到的只有 <see cref="MenuItem"/>，那一行的数据要从弹出树反查回来。
@@ -500,7 +571,15 @@ public partial class MainWindow : Window
         // 后台启动（自启）那条路在 Show 之前就跑过一次 Refresh，但它被 IsLoaded 挡在绘制之前：
         // Show 之后这一下才是第一屏
         Refresh();
+
+        // 第一屏的焦点给会话列表：不指定的话它落在可视树第一颗按钮上（设置齿轮），
+        // 键盘用户一进来按上下键什么都不会动。只放一次——之后从托盘回来不抢用户当下的焦点
+        if (_focusPlaced) return;
+        _focusPlaced = true;
+        ConversationList.Focus();
     }
+
+    private bool _focusPlaced;
 
     private bool _wired;
 
@@ -705,7 +784,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>点胶囊：回到底部，顺带清掉攒下的计数。</summary>
-    private void OnNewBelowClicked(object sender, MouseButtonEventArgs e) => SnapToBottom();
+    private void OnNewBelowClicked(object sender, RoutedEventArgs e) => SnapToBottom();
 
     // ---- 滚动与栏宽 -------------------------------------------------------------------------------
 

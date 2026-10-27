@@ -33,7 +33,10 @@
                    TextWrapping="Wrap"
                    Visibility="Collapsed" Foreground="{DynamicResource Level.Error}" />
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <!-- "稍后"同时是 Esc：这扇窗没有别的出口，键盘用户不该被迫去点"下载并安装"。
+                 安装那颗刻意不设 IsDefault——回车误触会开始下载，代价不对等 -->
             <Button x:Name="LaterButton" Content="稍后" MinWidth="76" Click="OnLater"
+                    IsCancel="True"
                     Style="{DynamicResource Button.Secondary}" />
             <Button x:Name="InstallButton" Content="下载并安装" MinWidth="100" Margin="10,0,0,0"
                     Click="OnInstall" Style="{DynamicResource Button.Primary}" />
