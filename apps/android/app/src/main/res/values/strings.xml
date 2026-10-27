@@ -21,7 +21,9 @@
     <string name="state_connecting">连接中</string>
     <string name="state_connected">已连接</string>
     <string name="empty_conversations">还没有会话，去「频道」创建第一个频道</string>
+    <string name="empty_conversations_hint">每个频道、每位发送者各成一条会话</string>
     <string name="empty_messages">还没有消息</string>
+    <string name="empty_messages_hint">这个频道有推送时会出现在这里</string>
     <string name="tab_messages">消息</string>
     <string name="tab_channels">频道</string>
     <string name="tab_settings">设置</string>
@@ -167,6 +169,7 @@
     <string name="conv_search_close">关闭</string>
     <string name="conv_search_hits">命中 %1$d 条 · 点按清除筛选</string>
     <string name="conv_search_none">本会话没有匹配的消息</string>
+    <string name="conv_search_none_hint">换个关键词试试</string>
     <string name="conv_new_messages">%1$d 条新消息</string>
     <string name="section_about">关于</string>
     <string name="current_server">当前地址</string>

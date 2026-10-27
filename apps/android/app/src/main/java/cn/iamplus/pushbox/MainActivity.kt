@@ -406,8 +406,13 @@ private fun PushBoxRoot(deepLink: kotlinx.coroutines.flow.MutableStateFlow<Pair<
     val app = App.get(LocalContext.current)
     val scope = rememberCoroutineScope()
     var refresh by remember { mutableStateOf(0) }
-    val identity by produceState<Identity?>(initialValue = null, refresh) {
-        value = app.identity.load()
+    // 三态而不是"null 即没注册"：DataStore 是异步读的，把 null 直接当"还没有身份"
+    // 会让每次冷启动都先画一帧注册页，然后才跳回会话列表。
+    var identity by remember { mutableStateOf<Identity?>(null) }
+    var identityReady by remember { mutableStateOf(false) }
+    LaunchedEffect(refresh) {
+        identity = app.identity.load()
+        identityReady = true
     }
 
     // Android 13+ 的 POST_NOTIFICATIONS 是运行时权限；被拒时消息仍入库，只是静默。
@@ -443,19 +448,23 @@ private fun PushBoxRoot(deepLink: kotlinx.coroutines.flow.MutableStateFlow<Pair<
         }
     }
     val guided by app.keepAliveGuided.collectAsState()
-    if (live == null) {
-        EnrollScreen(app, onDone = { refresh++ })
-    } else if (!guided) {
-        // §7.2 D18 首启必经：没看过保活引导就拦一次，看完/跳过即放行
-        KeepAliveGuideScreen(onDone = { app.finishKeepAliveGuide() })
-    } else {
-        MainShell(live, deepLink, onLogout = {
+    when {
+        // 身份还没读回来：既不是"没注册"也不该画任何一屏，留一块不动的底
+        !identityReady -> LoadingState(Modifier.background(MaterialTheme.colorScheme.background))
+        live == null -> EnrollScreen(app, onDone = { refresh++ })
+        !guided -> {
+            // §7.2 D18 首启必经：没看过保活引导就拦一次，看完/跳过即放行
+            KeepAliveGuideScreen(onDone = { app.finishKeepAliveGuide() })
+        }
+        else -> MainShell(live, deepLink, onLogout = {
             // 更换服务器=重新注册：停服务、清库清身份，回到首启注册页
             scope.launch {
                 PushService.stop(app)
                 SyncWorker.cancel(app)
                 withContext(Dispatchers.IO) { app.db.clearAllTables() }
                 app.identity.clear()
+                // 清完当场回到未注册：中间这段不能再画一次旧身份的主界面
+                identity = null
                 app.connection.value = SyncEngine.State.Idle
             }.invokeOnCompletion { refresh++ }
         })
@@ -808,7 +817,10 @@ private fun MainShell(identity: Identity,
     var openChannel by rememberSaveable { mutableStateOf<String?>(null) }
     var openSender by rememberSaveable { mutableStateOf<String?>(null) }
     var openFocus by rememberSaveable { mutableStateOf<String?>(null) }
-    val conversations by app.dao.conversations().collectAsState(initial = emptyList())
+    // null 是"还没读到第一帧"，与"一条会话都没有"必须分开：
+    // 冷启动时把空列表当结果，列表页会先闪一屏"还没有会话"。
+    val conversationsState by app.dao.conversations().collectAsState(initial = null)
+    val conversations = conversationsState.orEmpty()
     val open = remember(openChannel, openSender, openFocus, conversations) {
         val channel = openChannel
         val sender = openSender
@@ -899,7 +911,7 @@ private fun MainShell(identity: Identity,
             }
             val content = Modifier.fillMaxWidth().weight(1f)
             when (tab) {
-                0 -> MessagesTab(identity, conversations, content,
+                0 -> MessagesTab(identity, conversationsState, content,
                     onOpen = { row, focus -> showConversation(ConversationTarget(row, focus)) },
                     onNavigateToChannels = { tab = 1 })
                 1 -> ChannelsTab(identity, content)
@@ -1009,8 +1021,21 @@ private fun DelayBanner(text: String) {
     }
 }
 
+/**
+ * 取第一帧数据时的占位：不写字，也不该被读成"空"或"错"。
+ * 三处（启动、列表、详情）用的是同一个，免得一处转圈一处留白。
+ */
 @Composable
-private fun MessagesTab(identity: Identity, conversations: List<ConversationRow>,
+private fun LoadingState(modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(24.dp), strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun MessagesTab(identity: Identity, conversations: List<ConversationRow>?,
     modifier: Modifier, onOpen: (ConversationRow, String?) -> Unit,
     onNavigateToChannels: (() -> Unit)? = null) {
     val app = App.get(LocalContext.current)
@@ -1032,7 +1057,9 @@ private fun MessagesTab(identity: Identity, conversations: List<ConversationRow>
     }
 
     Column(modifier.fillMaxWidth()) {
-        if (conversations.isEmpty()) {
+        if (conversations == null) {
+            LoadingState()
+        } else if (conversations.isEmpty()) {
             Column(Modifier.fillMaxWidth().padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(Icons.Default.Hub, contentDescription = null,
@@ -1042,7 +1069,7 @@ private fun MessagesTab(identity: Identity, conversations: List<ConversationRow>
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.height(8.dp))
-                Text("前往「频道」创建或加入频道以接收消息",
+                Text(stringResource(R.string.empty_conversations_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center)
@@ -1277,9 +1304,12 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
             query = rawQuery.trim()
         }
     }
-    val rows by remember(conversation, query) {
+    // 同上：null 是"还没读到第一帧"。Room 的第一次发射不是同步的，把空列表当结果
+    // 会让每个会话都先闪一下"还没有消息"。
+    val rowsState by remember(conversation, query) {
         app.dao.messagesFlow(conversation.channelNo, conversation.senderId, query)
-    }.collectAsState(initial = emptyList())
+    }.collectAsState(initial = null)
+    val rows = rowsState.orEmpty()
 
     LaunchedEffect(conversation) {
         withContext(Dispatchers.IO) {
@@ -1302,6 +1332,22 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
     // 从搜索结果点进来要落在命中那条上：定位完成前先把"滚到最新"按住，否则两个效果互相拽。
     // 命中项只存在于服务端（本机没缓存正文）时这里找不到，退回页尾——那一条点开仍能看摘要。
     var awaitingFocus by remember(conversation, focusMsgId) { mutableStateOf(focusMsgId != null) }
+    // 会话内搜索点中一条命中：先退出筛选，等未筛选的那一帧回来再定位——
+    // 筛选列表里的下标与全量列表不是一回事，直接拿它 scrollToItem 会落到别的消息上。
+    var pendingFocus by remember(conversation) { mutableStateOf<String?>(null) }
+    // 键只挂 rowsState：定位完要把 pendingFocus 清掉，若它也当键，清空会取消
+    // 这个协程里后半段"延时后取消高亮"，高亮就再也褪不掉了。
+    LaunchedEffect(rowsState) {
+        val target = pendingFocus ?: return@LaunchedEffect
+        if (query != null || rowsState == null) return@LaunchedEffect
+        val index = rows.indexOfFirst { it.msgId == target }
+        if (index < 0) return@LaunchedEffect
+        pendingFocus = null
+        listState.scrollToItem(index)
+        highlightId = target
+        delay(FOCUS_HIGHLIGHT_MILLIS)
+        highlightId = null
+    }
     LaunchedEffect(awaitingFocus, rows) {
         val target = focusMsgId ?: return@LaunchedEffect
         if (!awaitingFocus) return@LaunchedEffect
@@ -1332,8 +1378,14 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
     var lastCount by remember(conversation) { mutableIntStateOf(0) }
     var placed by remember(conversation) { mutableStateOf(false) }
     LaunchedEffect(nearBottom) { if (nearBottom) unseen = 0 }
-    LaunchedEffect(rows.size, awaitingFocus) {
-        if (awaitingFocus || rows.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(rows.size, awaitingFocus, pendingFocus) {
+        // 正在定位（外部命中或退出筛选）时不抢滚动，也不把这批长度变化算成"新消息"：
+        // 跟着把 lastCount 对齐，否则定位结束后 grew 会是整条会话的长度，白白冒一个胶囊。
+        if (awaitingFocus || pendingFocus != null) {
+            lastCount = rows.size
+            return@LaunchedEffect
+        }
+        if (rows.isEmpty()) return@LaunchedEffect
         val grew = rows.size - lastCount
         lastCount = rows.size
         when {
@@ -1386,7 +1438,7 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
                     }
                 }
             }
-            if (query != null) {
+            if (query != null && rowsState != null) {
                 // 会话内搜索态：点一条就退出，免得用户找不到出口。
                 // 24dp 是原来的一行，手指点不中；抬到 Material 的 48dp 最小触控高，底色本身照旧。
                 Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
@@ -1398,7 +1450,9 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            if (rows.isEmpty()) {
+            if (rowsState == null) {
+                LoadingState()
+            } else if (rows.isEmpty()) {
                 // P0-3：插画 + 文案的空状态
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(top = 48.dp, start = 32.dp, end = 32.dp),
@@ -1424,8 +1478,11 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
                     
                     Spacer(Modifier.height(8.dp))
                     
+                    // 副标题必须跟着"为什么空"走：这里已经是一条打开着的会话，
+                    // 再劝人"选择一个会话开始聊天"就是句错话
                     Text(
-                        "选择一个会话开始聊天",
+                        stringResource(if (query != null) R.string.conv_search_none_hint
+                            else R.string.empty_messages_hint),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
@@ -1449,7 +1506,15 @@ private fun ConversationDetail(app: App, conversation: ConversationRow, focusMsg
                                 (row.createdAt - rows[index - 1].createdAt) > 5 * 60 * 1000L ||
                                 dayKey(rows[index - 1].createdAt) != dayKey(row.createdAt)
                             MessageBubble(row, conversation.displayName, showTime = showTime,
-                                highlighted = highlightId == row.msgId) { selected = row }
+                                highlighted = highlightId == row.msgId,
+                                onClick = if (query == null) null else {
+                                    {
+                                        // 先关筛选；定位交给 pendingFocus，等全量那一帧回来再滚
+                                        pendingFocus = row.msgId
+                                        searchOpen = false
+                                        rawQuery = ""
+                                    }
+                                }) { selected = row }
                         }
                     }
                     // 人在上面读历史时，新消息只在底部报个数，不抢滚动位置
@@ -1606,7 +1671,7 @@ private fun messageText(row: MessageRow): String = row.body ?: row.summary ?: ro
 
 @Composable
 private fun MessageBubble(row: MessageRow, senderName: String, showTime: Boolean = true,
-    highlighted: Boolean = false, onLong: () -> Unit) {
+    highlighted: Boolean = false, onClick: (() -> Unit)? = null, onLong: () -> Unit) {
     val app = App.get(LocalContext.current)
     val scope = rememberCoroutineScope()
     val colors = LocalPushBoxColors.current
@@ -1649,7 +1714,12 @@ private fun MessageBubble(row: MessageRow, senderName: String, showTime: Boolean
                         .then(Modifier.drawBehind {
                             drawRect(colors.divider, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx()))
                         })
-                        .pointerInput(text) { detectTapGestures(onLongPress = { onLong() }) }
+                        // 只在会话内搜索时点得动：那一下是"退出筛选并跳到这条"，
+                        // 不搜索时气泡保持原样（点它不该有任何事发生）
+                        .pointerInput(text, onClick) {
+                            detectTapGestures(onTap = onClick?.let { hit -> { _ -> hit() } },
+                                onLongPress = { onLong() })
+                        }
                         .padding(10.dp)) {
                     // §4.5 图片链路：有媒体槽就先出图（竖排九宫格），正文（若有）在图下方
                     if (row.mediaCount > 0) {
