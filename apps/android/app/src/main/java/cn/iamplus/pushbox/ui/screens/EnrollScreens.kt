@@ -191,18 +191,18 @@ import cn.iamplus.pushbox.R
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun EnrollScreen(app: App, onDone: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    var serverHost by remember { mutableStateOf("") }
-    var serverPort by remember { mutableStateOf("7404") }
-    var useHttps by remember { mutableStateOf(false) }
-    // 地址由主机+端口+协议推导，而不是另存一份：存了就会出现"开关拨了、URL 没跟着变"的半更新状态
-    var history by remember { mutableStateOf<List<String>>(emptyList()) }
-    var deviceName by remember { mutableStateOf(Build.MODEL ?: "Android") }
-    var recoveryCode by remember { mutableStateOf("") }
-    var showRecovery by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var issuedCode by remember { mutableStateOf<String?>(null) }
+    val vm: EnrollViewModel = viewModel(factory = EnrollViewModel.factory(app))
+    val serverHost by vm.serverHost.collectAsState()
+    val serverPort by vm.serverPort.collectAsState()
+    val useHttps by vm.useHttps.collectAsState()
+    val deviceName by vm.deviceName.collectAsState()
+    val recoveryCode by vm.recoveryCode.collectAsState()
+    val showRecovery by vm.showRecovery.collectAsState()
+    val history by vm.history.collectAsState()
+    val busy by vm.busy.collectAsState()
+    val error by vm.error.collectAsState()
+    val issuedCode by vm.issuedCode.collectAsState()
+    val baseUrl by vm.baseUrl.collectAsState()
     val scanPrompt = stringResource(R.string.enroll_scan_prompt)
     val serverRequired = stringResource(R.string.enroll_server_required)
     val serverInvalid = stringResource(R.string.enroll_server_invalid)
@@ -210,41 +210,7 @@ internal fun EnrollScreen(app: App, onDone: () -> Unit) {
     // 相机页返回不会触发 relock 拆组合，故这里用组合级 launcher 是安全的。
     val scanLauncher = rememberLauncherForActivityResult(
         com.journeyapps.barcodescanner.ScanContract()) { result ->
-        val text = result?.contents
-        if (!text.isNullOrBlank()) recoveryCode = text.trim()
-    }
-
-    // 根据主机、端口和 HTTPS 开关自动生成完整 URL
-    fun buildBaseUrl(host: String, port: String, https: Boolean): String {
-        val trimmedHost = host.trim().trimEnd('/')
-        if (trimmedHost.isEmpty()) return ""
-        val scheme = if (https) "https" else "http"
-        val trimmedPort = port.trim()
-        return if (trimmedPort.isNotEmpty() && trimmedPort != "80" && trimmedPort != "443") {
-            "$scheme://$trimmedHost:$trimmedPort"
-        } else {
-            "$scheme://$trimmedHost"
-        }
-    }
-
-    val baseUrl = remember(serverHost, serverPort, useHttps) {
-        buildBaseUrl(serverHost, serverPort, useHttps)
-    }
-
-    // 历史记录里存的是整条 URL，回填时要拆回主机/端口/协议三个格子，否则用户看到还是上一次的组合
-    fun applyUrl(url: String) {
-        val secured = url.startsWith("https://")
-        val rest = url.substringAfter("://").substringBefore('/')
-        val colon = rest.lastIndexOf(':')
-        useHttps = secured
-        serverHost = if (colon > 0) rest.substring(0, colon) else rest
-        serverPort = if (colon > 0) rest.substring(colon + 1) else ""
-    }
-
-    LaunchedEffect(Unit) {
-        val recent = app.identity.serverHistory()
-        history = recent
-        if (recent.isNotEmpty()) applyUrl(recent.first())
+        vm.onScanResult(result?.contents)
     }
 
     Scaffold(topBar = {
@@ -268,16 +234,16 @@ internal fun EnrollScreen(app: App, onDone: () -> Unit) {
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.weight(1f))
-                    Switch(checked = useHttps, onCheckedChange = { useHttps = it })
+                    Switch(checked = useHttps, onCheckedChange = { vm.useHttps.value = it })
                 }
                 OutlinedTextField(
-                    value = serverHost, onValueChange = { serverHost = it },
+                    value = serverHost, onValueChange = { vm.serverHost.value = it },
                     label = { Text(stringResource(R.string.enroll_server_host)) },
                     supportingText = { Text(stringResource(R.string.enroll_server_host_hint)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
                     modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(
-                    value = serverPort, onValueChange = { serverPort = it },
+                    value = serverPort, onValueChange = { vm.serverPort.value = it },
                     label = { Text(stringResource(R.string.enroll_server_port)) },
                     supportingText = { Text(stringResource(R.string.enroll_server_port_hint)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -295,7 +261,7 @@ internal fun EnrollScreen(app: App, onDone: () -> Unit) {
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         history.forEach { url ->
-                            OutlinedButton(enabled = !busy, onClick = { applyUrl(url) }) {
+                            OutlinedButton(enabled = !busy, onClick = { vm.applyUrl(url) }) {
                                 Text(url, maxLines = 1)
                             }
                         }
@@ -305,7 +271,7 @@ internal fun EnrollScreen(app: App, onDone: () -> Unit) {
 
             SettingsSection(stringResource(R.string.enroll_device_name)) {
                 OutlinedTextField(
-                    value = deviceName, onValueChange = { deviceName = it },
+                    value = deviceName, onValueChange = { vm.deviceName.value = it },
                     label = { Text(stringResource(R.string.enroll_device_name)) },
                     modifier = Modifier.fillMaxWidth(), singleLine = true)
             }
@@ -315,7 +281,7 @@ internal fun EnrollScreen(app: App, onDone: () -> Unit) {
             SettingsSection(stringResource(R.string.enroll_have_code_title)) {
                 if (showRecovery) {
                     OutlinedTextField(
-                        value = recoveryCode, onValueChange = { recoveryCode = it },
+                        value = recoveryCode, onValueChange = { vm.recoveryCode.value = it },
                         label = { Text(stringResource(R.string.enroll_recovery_code)) },
                         modifier = Modifier.fillMaxWidth(), singleLine = true)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -330,15 +296,15 @@ internal fun EnrollScreen(app: App, onDone: () -> Unit) {
                                     .setBeepEnabled(false)
                                     .setOrientationLocked(false))
                         }) { Text(stringResource(R.string.enroll_scan)) }
-                        TextButton(enabled = !busy, onClick = {
-                            showRecovery = false; recoveryCode = ""
-                        }) { Text(stringResource(R.string.enroll_have_code_close)) }
+                        TextButton(enabled = !busy, onClick = { vm.closeRecovery() }) {
+                            Text(stringResource(R.string.enroll_have_code_close))
+                        }
                     }
                 } else {
                     Text(stringResource(R.string.enroll_have_code_desc),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    OutlinedButton(enabled = !busy, onClick = { showRecovery = true }) {
+                    OutlinedButton(enabled = !busy, onClick = { vm.openRecovery() }) {
                         Text(stringResource(R.string.enroll_join))
                     }
                 }
@@ -356,29 +322,7 @@ internal fun EnrollScreen(app: App, onDone: () -> Unit) {
             }
 
             Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
-                val url = baseUrl.trim().trimEnd('/')
-                if (url.isEmpty()) {
-                    error = serverRequired
-                    return@Button
-                }
-                if (!SERVER_URL.matches(url)) {
-                    error = serverInvalid
-                    return@Button
-                }
-                scope.launch {
-                    busy = true
-                    error = null
-                    val outcome = runCatching {
-                        enroll(app, url, deviceName.trim(),
-                            recoveryCode.trim().ifEmpty { null })
-                    }
-                    busy = false
-                    outcome.fold(
-                        onSuccess = { code ->
-                            if (code == null) onDone() else issuedCode = code
-                        },
-                        onFailure = { error = it.message ?: it::class.java.simpleName })
-                }
+                vm.submit(serverRequired, serverInvalid, onDone)
             }) {
                 Text(stringResource(
                     if (showRecovery) R.string.enroll_join else R.string.enroll_create))

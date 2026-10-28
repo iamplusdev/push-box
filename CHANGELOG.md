@@ -83,6 +83,17 @@
 - `:app:testDebugUnitTest` 全绿（**29 run / 0 fail**）。
 - 搬移逐段 diff 校验：ConversationDetail 53 行、PushBoxTopBar 25 行、enroll 18 行区段与原文逐行一致，仅 `private` → `internal` 一处差异；MainActivity.kt 的 git diff 只有 1 行新增（通配导入），其余全是删除。
 
+### S7 第二阶段：EnrollScreen 试点 ViewModel
+
+1. **新建 EnrollViewModel**（`ui/screens/EnrollViewModel.kt`，手写 Factory 传 App，不引 DI 框架）：首启表单的全部状态（主机/端口/HTTPS/设备名/恢复码/历史/忙碌/错误/恢复码卡）从 `remember` 迁进 StateFlow，`baseUrl` 用 `combine` 派生；提交从组合级 `rememberCoroutineScope` 迁到 `viewModelScope`。两个可观测的行为收益：旋转/进程重建表单不再清空；注册请求进行中旋转不再被打断（原实现组合销毁即取消请求、busy 卡死）。
+2. **纯逻辑提为顶层函数**（可单测）：`buildBaseUrl`、`parseServerUrl`（历史回填拆三格）。UI 层只剩取文案、扫码 launcher（Activity result 必须留在组合里）与渲染。
+3. **EnrollLogicTest 五用例**：buildBaseUrl 默认端口/去空白、parseServerUrl 拆回三格、build→parse→build 往返一致、SERVER_URL 正则收放。
+
+### 第二阶段用例
+
+- `:app:compileDebugKotlin`、`:app:assembleDebug` 通过；`:app:testDebugUnitTest` **34 run / 0 fail**（+5 新增）。
+- UI 渲染与提交链路未在真机跑过（本环境无设备）：状态迁移与按钮回调逐一对照旧实现改写，逻辑分支由 EnrollLogicTest 钉住，如实说明。
+
 ---
 
 ## 未发布 —— 三端优化第三轮：品牌色统一（S3）
