@@ -118,6 +118,18 @@
 - `:app:compileDebugKotlin`、`:app:assembleDebug`、`:app:compileDebugAndroidTestKotlin` 通过；`:app:testDebugUnitTest` **46 run / 0 fail / 0 error**（新增 ChannelsLogicTest 五例：名称去空白/回落/截 24 字、未改草稿不发字段、仅改动字段带值、空串与非数字视为未提交、数值 helper 与当前值比较）。
 - `adb devices -l` 没有连接设备，未执行真机走查：频道创建/接入/治理位保存的请求链路未与真实服务端联调过，此处只证明编译、逻辑分支与状态迁移。设置页迁移仍是后续子步骤。
 
+### S7 第三阶段 c：设置页与更新检查 ViewModel
+
+1. **设置页请求迁入 SettingsViewModel**：设备列表/刷新、吊销他端、轮换恢复码、按频道通知行、清空本地库、清已读图片缓存、更新检查与下载进度全部走 `viewModelScope`；实例挂在 Activity 上，设置页切二级页与根节点的更新确认框共用同一份状态，旋转或切页不再取消已发出的请求。系统面板（安装器、"安装未知应用"权限页、电池优化、通知设置）与权限判定仍留在 UI——它们要 Activity 与系统回执。
+2. **恢复码改从存储重新读**：页面拿到的 `identity` 是进页那一刻的快照，轮换后它已经过期，旧实现换了码却在原地显示旧码。现在进页时读一次存储、轮换成功即更新；只有"本次页面上刚轮换成功"才自动摊开新码，重进本页仍默认打码。
+3. **更新检查三态化**：`updateCheckKind` 提为顶层纯函数（无 apk 资产＝发布未打包 / 有新版本 / 已最新），确认框由 ViewModel 设定 `pendingUpdate`；下载完成后只交出文件，撤掉确认框与拉起安装面板由 UI 做。装包 effect 挂在对话框早退之前——下载完成时 `pendingUpdate` 已清空、框内内容不再组合，埋在框里就永远不会执行。安装器拉起失败从原来"写进已消失弹窗的错误行"改为 Toast，用户至少看得到原因。
+4. **守护测试**：SettingsLogicTest 断言 ViewModel 里不出现 `startActivity`/`FileProvider`/`canRequestPackageInstalls`，以及装包 effect 在早退之前、不回到组合级 scope。
+
+### 第三阶段 c 用例
+
+- `:app:compileDebugKotlin`、`:app:assembleDebug`、`:app:compileDebugAndroidTestKotlin` 通过；`:app:testDebugUnitTest` **50 run / 0 fail / 0 error**（新增 SettingsLogicTest 四例：三态判定、总长未知时进度为 0、ViewModel 不碰安装器、装包 effect 在早退之前）。
+- `adb devices -l` 没有连接设备：设备吊销、恢复码轮换、更新检查/下载/安装均未与真实服务端或 GitHub Releases 联调，也未做真机走查；上述结论只覆盖编译、纯逻辑与源码约定。S7 三个阶段至此结束。
+
 ---
 
 ## 未发布 —— 三端优化第三轮：品牌色统一（S3）

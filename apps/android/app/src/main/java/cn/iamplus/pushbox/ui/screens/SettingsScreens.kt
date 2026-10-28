@@ -84,7 +84,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -204,18 +203,21 @@ internal enum class SettingsPage(@param:StringRes val title: Int) {
 @Composable
 internal fun SettingsTab(identity: Identity, page: SettingsPage?, onPage: (SettingsPage?) -> Unit,
     modifier: Modifier, onLogout: () -> Unit) {
+    val app = App.get(LocalContext.current)
+    // 二级页共用一个实例：切页不丢正在拉的设备列表与更新进度，退出身份时随 ViewModelStore 一起清掉
+    val vm: SettingsViewModel = viewModel(factory = SettingsViewModel.factory(app))
     // 进二级页时首屏会离开组合，滚动位置也跟着丢；按页名留一份 saveable 状态，
     // 返回时还停在原来那一屏，而不是被弹回顶部。
     val states = rememberSaveableStateHolder()
     states.SaveableStateProvider(page?.name ?: "root") {
         when (page) {
             null -> SettingsRoot(identity, modifier, onPage)
-            SettingsPage.Connect -> SettingsConnectPage(identity, modifier, onLogout)
-            SettingsPage.Notify -> SettingsNotifyPage(identity, modifier)
+            SettingsPage.Connect -> SettingsConnectPage(identity, vm, modifier, onLogout)
+            SettingsPage.Notify -> SettingsNotifyPage(identity, vm, modifier)
             SettingsPage.Security -> SettingsSecurityPage(modifier)
             SettingsPage.KeepAlive -> SettingsKeepAlivePage(modifier)
-            SettingsPage.Data -> SettingsDataPage(modifier)
-            SettingsPage.About -> SettingsAboutPage(modifier)
+            SettingsPage.Data -> SettingsDataPage(vm, modifier)
+            SettingsPage.About -> SettingsAboutPage(vm, modifier)
         }
     }
 }
@@ -365,25 +367,35 @@ internal fun SettingsRoot(identity: Identity, modifier: Modifier, onPage: (Setti
 
 /** 二级页「接入与设备」：当前地址、设备身份与恢复码、本空间全部设备。 */
 @Composable
-internal fun SettingsConnectPage(identity: Identity, modifier: Modifier, onLogout: () -> Unit) {
-    val context = LocalContext.current
-    val app = App.get(context)
-    val scope = rememberCoroutineScope()
+internal fun SettingsConnectPage(identity: Identity, vm: SettingsViewModel, modifier: Modifier,
+    onLogout: () -> Unit) {
     var showConfirm by remember { mutableStateOf(false) }
     var revealCode by remember { mutableStateOf(false) }
-    var rotating by remember { mutableStateOf(false) }
     var rotateConfirm by remember { mutableStateOf(false) }
-    var rotationError by remember { mutableStateOf<String?>(null) }
-    var devices by remember { mutableStateOf<List<PushBoxApi.DeviceInfo>?>(null) }
-    var devicesTick by remember { mutableIntStateOf(0) }
-    var devicesError by remember { mutableStateOf<String?>(null) }
-    var busyDevice by remember { mutableStateOf(false) }
+    // 只有"这一次刚轮换成功"才自动摊开新码；重进本页拿到存储里那份时保持打码
+    var expectReveal by remember { mutableStateOf(false) }
     var revokeTarget by remember { mutableStateOf<PushBoxApi.DeviceInfo?>(null) }
-    LaunchedEffect(devicesTick) {
-        devices = null; devicesError = null
-        runCatching { PushBoxApi(identity.baseUrl, app.http).listDevices(identity) }
-            .onSuccess { devices = it }
-            .onFailure { devicesError = it.message ?: it::class.java.simpleName }
+    val devices by vm.devices.collectAsState()
+    val devicesError by vm.devicesError.collectAsState()
+    val busyDevice by vm.devicesBusy.collectAsState()
+    val rotating by vm.rotating.collectAsState()
+    val rotationError by vm.rotationError.collectAsState()
+    val recoveryCode by vm.recoveryCode.collectAsState()
+    LaunchedEffect(Unit) {
+        vm.reloadDevices(identity)
+        vm.loadRecoveryCode()
+    }
+    // 轮换成功后旧码已作废，直接摊开新码——这时候还让用户点一次"显示"没有意义
+    LaunchedEffect(expectReveal, rotating, recoveryCode) {
+        if (expectReveal && !rotating && recoveryCode != identity.recoveryCode && recoveryCode != null) {
+            revealCode = true
+            expectReveal = false
+        }
+    }
+
+    // 轮换失败就别留着"等新码"的念头：下次重进本页不该顺手把旧码摊开
+    LaunchedEffect(rotationError) {
+        if (rotationError != null) expectReveal = false
     }
 
     SettingsPageColumn(modifier) {
@@ -400,14 +412,15 @@ internal fun SettingsConnectPage(identity: Identity, modifier: Modifier, onLogou
         SettingsSection(stringResource(R.string.section_device), heading = true) {
             InfoRow(stringResource(R.string.device_name_label), Build.MODEL ?: "-")
             CopyableField(stringResource(R.string.device_id_label), identity.deviceId)
-            RecoveryCodeRow(identity.recoveryCode, revealed = revealCode,
+            // 换过恢复码的话以存储里那份为准：identity 是本页进来那一刻的快照
+            RecoveryCodeRow(recoveryCode ?: identity.recoveryCode, revealed = revealCode,
                 onToggle = { revealCode = !revealCode })
             // §14 轮换恢复码：旧码立即作废（已加入的设备不受影响，只影响后续扫码添加）
             rotationError?.let {
                 Text(it, style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error)
             }
-            TextButton(enabled = !rotating, onClick = { rotationError = null; rotateConfirm = true }) {
+            TextButton(enabled = !rotating, onClick = { rotateConfirm = true }) {
                 Text(stringResource(R.string.recovery_code_rotate))
             }
         }
@@ -430,7 +443,7 @@ internal fun SettingsConnectPage(identity: Identity, modifier: Modifier, onLogou
                     DeviceRow(dev, busy = busyDevice, onRevoke = { revokeTarget = dev })
                 }
             }
-            TextButton(enabled = !busyDevice, onClick = { devicesTick++ }) {
+            TextButton(enabled = !busyDevice, onClick = { vm.reloadDevices(identity) }) {
                 Text(stringResource(R.string.devices_refresh))
             }
         }
@@ -460,15 +473,7 @@ internal fun SettingsConnectPage(identity: Identity, modifier: Modifier, onLogou
             confirmButton = {
                 TextButton(enabled = !busyDevice, onClick = {
                     revokeTarget = null
-                    busyDevice = true
-                    scope.launch {
-                        runCatching {
-                            PushBoxApi(identity.baseUrl, app.http)
-                                .revokeDevice(identity, target.deviceId)
-                        }.onFailure { devicesError = it.message ?: it::class.java.simpleName }
-                        busyDevice = false
-                        devicesTick++
-                    }
+                    vm.revokeDevice(identity, target.deviceId)
                 }) { Text(stringResource(R.string.confirm_ok)) }
             },
             dismissButton = {
@@ -485,16 +490,8 @@ internal fun SettingsConnectPage(identity: Identity, modifier: Modifier, onLogou
             confirmButton = {
                 TextButton(enabled = !rotating, onClick = {
                     rotateConfirm = false
-                    rotating = true
-                    scope.launch {
-                        runCatching {
-                            PushBoxApi(identity.baseUrl, app.http).rotateRecoveryCode(identity)
-                        }.onSuccess {
-                            app.identity.saveRecoveryCode(it)
-                            revealCode = true
-                        }.onFailure { rotationError = it.message ?: it::class.java.simpleName }
-                        rotating = false
-                    }
+                    expectReveal = true
+                    vm.rotateRecoveryCode(identity)
                 }) { Text(stringResource(R.string.confirm_ok)) }
             },
             dismissButton = {
@@ -507,7 +504,7 @@ internal fun SettingsConnectPage(identity: Identity, modifier: Modifier, onLogou
 
 /** 二级页「提醒与频道」：新频道默认档位、按频道导航，以及首屏那三个开关的细则。 */
 @Composable
-internal fun SettingsNotifyPage(identity: Identity, modifier: Modifier) {
+internal fun SettingsNotifyPage(identity: Identity, vm: SettingsViewModel, modifier: Modifier) {
     val context = LocalContext.current
     val app = App.get(context)
     val importance by app.defaultImportance.collectAsState()
@@ -559,7 +556,7 @@ internal fun SettingsNotifyPage(identity: Identity, modifier: Modifier) {
     }
 
     if (showChannelNotify) {
-        ChannelNotifyDialog(identity, onDismiss = { showChannelNotify = false })
+        ChannelNotifyDialog(identity, vm, onDismiss = { showChannelNotify = false })
     }
 }
 
@@ -645,10 +642,8 @@ internal fun SettingsKeepAlivePage(modifier: Modifier) {
 
 /** 二级页「清理与导出」：两个危险动作分开写清楚后果，导出不动任何本地数据。 */
 @Composable
-internal fun SettingsDataPage(modifier: Modifier) {
+internal fun SettingsDataPage(vm: SettingsViewModel, modifier: Modifier) {
     val context = LocalContext.current
-    val app = App.get(context)
-    val scope = rememberCoroutineScope()
     var showClear by remember { mutableStateOf(false) }
     var showClearMedia by remember { mutableStateOf(false) }
     val stamp = remember {
@@ -687,7 +682,7 @@ internal fun SettingsDataPage(modifier: Modifier) {
             confirmButton = {
                 TextButton(onClick = {
                     showClear = false
-                    scope.launch(Dispatchers.IO) { app.db.clearAllTables() }
+                    vm.clearLocalData()
                 }) { Text(stringResource(R.string.confirm_ok)) }
             },
             dismissButton = {
@@ -705,11 +700,7 @@ internal fun SettingsDataPage(modifier: Modifier) {
             confirmButton = {
                 TextButton(onClick = {
                     showClearMedia = false
-                    scope.launch(Dispatchers.IO) {
-                        val rows = app.dao.readMessagesWithMedia()
-                            .map { it.msgId to it.mediaCount }
-                        cn.iamplus.pushbox.ui.ImageCache.clearForReadMessages(rows)
-                    }
+                    vm.clearReadMediaCache()
                 }) { Text(stringResource(R.string.confirm_ok)) }
             },
             dismissButton = {
@@ -722,10 +713,9 @@ internal fun SettingsDataPage(modifier: Modifier) {
 
 /** 二级页「关于与帮助」：版本与更新、接口摘要（默认折叠）、脱敏日志说明。 */
 @Composable
-internal fun SettingsAboutPage(modifier: Modifier) {
+internal fun SettingsAboutPage(vm: SettingsViewModel, modifier: Modifier) {
     val context = LocalContext.current
     val app = App.get(context)
-    val scope = rememberCoroutineScope()
     var apiOpen by rememberSaveable { mutableStateOf(false) }
 
     SettingsPageColumn(modifier) {
@@ -733,7 +723,7 @@ internal fun SettingsAboutPage(modifier: Modifier) {
             val versionName = remember { cn.iamplus.pushbox.net.UpdateApi.currentVersion(context).versionName }
             InfoRow(stringResource(R.string.app_name), versionName)
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            UpdateControls(context, app, scope)
+            UpdateControls(context, app, vm)
         }
 
         SettingsSection(stringResource(R.string.about_api_doc_title), heading = true) {
@@ -1002,25 +992,12 @@ internal data class ChannelNotifyRow(val channelNo: String, val name: String, va
  * 渠道重要度建好后只能由系统设置改，App 里只做导航与状态展示。
  */
 @Composable
-internal fun ChannelNotifyDialog(identity: Identity, onDismiss: () -> Unit) {
+internal fun ChannelNotifyDialog(identity: Identity, vm: SettingsViewModel, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val app = App.get(context)
-    var rows by remember { mutableStateOf<List<ChannelNotifyRow>?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var tick by remember { mutableStateOf(0) }
-    LaunchedEffect(tick) {
-        rows = null; error = null
-        runCatching { PushBoxApi(identity.baseUrl, app.http).channelListPage(identity).channels }
-            .onSuccess { list ->
-                val notifier = cn.iamplus.pushbox.notify.Notifier(context)
-                // 顺手对齐系统渠道名：用户从这一行点进系统设置时看到的应该是频道名而不是号码
-                notifier.syncChannelNames(list.associate { it.channelNo to it.name })
-                rows = list.map {
-                    ChannelNotifyRow(it.channelNo, it.name, notifier.channelImportanceOf(it.channelNo))
-                }
-            }
-            .onFailure { error = it.message ?: it::class.java.simpleName }
-    }
+    val rows by vm.notifyRows.collectAsState()
+    val error by vm.notifyError.collectAsState()
+    // 每次打开都重拉：渠道重要度可能刚在系统设置里改过
+    LaunchedEffect(Unit) { vm.reloadNotifyRows(identity) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.notif_manage_title)) },
@@ -1036,7 +1013,7 @@ internal fun ChannelNotifyDialog(identity: Identity, onDismiss: () -> Unit) {
                         Text(stringResource(R.string.notif_manage_error, error!!),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.error)
-                        TextButton(onClick = { tick++ }) {
+                        TextButton(onClick = { vm.reloadNotifyRows(identity) }) {
                             Text(stringResource(R.string.channels_refresh))
                         }
                     }

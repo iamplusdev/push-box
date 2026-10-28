@@ -777,35 +777,14 @@ internal fun DeviceRow(dev: PushBoxApi.DeviceInfo, busy: Boolean, onRevoke: () -
 /** 关于页的版本块：自动检查开关 + 手动"检查更新"。查到新版只把它交给根节点的 [UpdateConfirmDialog]，
  *  下载并安装这一步统一在那只确认框里点，和冷启动静默查到的走同一条路。 */
 @Composable
-internal fun UpdateControls(context: android.content.Context, app: App,
-    scope: kotlinx.coroutines.CoroutineScope) {
+internal fun UpdateControls(context: android.content.Context, app: App, vm: SettingsViewModel) {
     val bodyMedium = MaterialTheme.typography.bodyMedium
     val variant = MaterialTheme.colorScheme.onSurfaceVariant
-    var checking by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var status by remember { mutableStateOf<String?>(null) }
-    val current = remember { cn.iamplus.pushbox.net.UpdateApi.currentVersion(context) }
+    val checking by vm.checking.collectAsState()
+    val status by vm.checkStatus.collectAsState()
+    val error by vm.checkError.collectAsState()
+    val current = remember { cn.iamplus.pushbox.net.UpdateApi.currentVersion(context).versionName }
     val autoCheck by app.autoCheckUpdate.collectAsState()
-
-    fun doCheck() {
-        checking = true; error = null; status = null
-        scope.launch {
-            runCatching { cn.iamplus.pushbox.net.UpdateApi.check(app.http) }
-                .onSuccess {
-                    // 发现新版就交给确认框：这里不留下载按钮，避免"两个入口都能起下载"
-                    if (it.apkUrl != null &&
-                        cn.iamplus.pushbox.net.UpdateApi.isNewer(it.version, current.versionName)) {
-                        app.pendingUpdate.value = it
-                    } else if (it.apkUrl == null) {
-                        status = context.getString(R.string.update_no_release)
-                    } else {
-                        status = context.getString(R.string.update_latest)
-                    }
-                }
-                .onFailure { error = it.message ?: it::class.java.simpleName }
-            checking = false
-        }
-    }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         androidx.compose.foundation.layout.Row(
@@ -823,11 +802,14 @@ internal fun UpdateControls(context: android.content.Context, app: App,
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Text(stringResource(R.string.update_source),
                 style = bodyMedium, color = variant, modifier = Modifier.weight(1f))
-            TextButton(onClick = { doCheck() }, enabled = !checking) {
+            TextButton(onClick = { vm.checkUpdate(current) }, enabled = !checking) {
                 Text(stringResource(if (checking) R.string.update_checking else R.string.update_check))
             }
         }
-        status?.let { Text(it, style = bodyMedium, color = variant) }
+        status?.let {
+            Text(stringResource(if (it == UpdateCheckKind.NoRelease) R.string.update_no_release
+                else R.string.update_latest), style = bodyMedium, color = variant)
+        }
         error?.let { Text(it, style = bodyMedium, color = MaterialTheme.colorScheme.error) }
     }
 }
@@ -839,57 +821,24 @@ internal fun UpdateControls(context: android.content.Context, app: App,
 @Composable
 internal fun UpdateConfirmDialog(app: App) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    // 与设置页同一个 Activity 级实例：下载进度不会因为这里重新组合而丢
+    val vm: SettingsViewModel = viewModel(factory = SettingsViewModel.factory(app))
     val latest by app.pendingUpdate.collectAsState()
+    val apk by vm.downloadedApk.collectAsState()
+    // 装包只能由 Activity 拉起，所以这一步留在组合层。它必须挂在早退之前：
+    // 下载完成时 pendingUpdate 已被清空，框里那段内容不会再组合，埋在里面就永远不放。
+    LaunchedEffect(apk) {
+        val file = apk ?: return@LaunchedEffect
+        val problem = startInstall(context, file)
+        vm.consumeDownloadedApk()
+        app.pendingUpdate.value = null
+        if (problem != null) Toast.makeText(context, problem, Toast.LENGTH_LONG).show()
+    }
     val info = latest ?: return
-    var progress by remember(info) { mutableStateOf<Pair<Long, Long>?>(null) }
-    var error by remember(info) { mutableStateOf<String?>(null) }
+    val progress by vm.downloadProgress.collectAsState()
+    val error by vm.downloadError.collectAsState()
     val bodyMedium = MaterialTheme.typography.bodyMedium
     val variant = MaterialTheme.colorScheme.onSurfaceVariant
-
-    fun startInstall(file: java.io.File) {
-        val pm = context.packageManager
-        if (!pm.canRequestPackageInstalls()) {
-            // 未授予"安装未知应用"：先跳系统设置页，用户开回来后再点一次才会真正拉起安装
-            val settings = android.content.Intent(
-                android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                android.net.Uri.parse("package:${context.packageName}"))
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            runCatching { context.startActivity(settings) }
-                .onFailure { error = "无法打开系统设置：${it.message}" }
-            error = "请先在系统设置里允许本应用安装未知应用，再回来点一次。"
-            return
-        }
-        val uri = androidx.core.content.FileProvider.getUriForFile(
-            context, "${context.packageName}.fileprovider", file)
-        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        runCatching { context.startActivity(intent) }
-            .onFailure { error = "无法打开安装面板：${it.message}" }
-    }
-
-    fun startDownload() {
-        val url = info.apkUrl ?: return
-        error = null
-        scope.launch {
-            runCatching {
-                val dir = java.io.File(context.cacheDir, "updates").apply { mkdirs() }
-                val dest = java.io.File(dir, info.apkName)
-                cn.iamplus.pushbox.net.UpdateApi.download(app.http, url, dest) { d, t ->
-                    progress = d to t
-                }
-                dest
-            }.onSuccess { file ->
-                // 下完就撤掉待处理版本：确认框随即消失（latest 变 null），安装面板接手这一屏
-                app.pendingUpdate.value = null
-                startInstall(file)
-            }.onFailure { error = it.message ?: it::class.java.simpleName }
-            progress = null
-        }
-    }
 
     AlertDialog(
         onDismissRequest = { if (progress == null) app.pendingUpdate.value = null },
@@ -902,7 +851,7 @@ internal fun UpdateConfirmDialog(app: App) {
                 }
                 val p = progress
                 if (p != null) {
-                    val pct = if (p.second > 0) (p.first * 100 / p.second).toInt() else 0
+                    val pct = downloadPercent(p.first, p.second)
                     Text(stringResource(R.string.update_downloading, "$pct%"),
                         style = bodyMedium, color = variant)
                 } else {
@@ -912,7 +861,7 @@ internal fun UpdateConfirmDialog(app: App) {
             }
         },
         confirmButton = {
-            TextButton(onClick = { startDownload() }, enabled = progress == null) {
+            TextButton(onClick = { vm.downloadUpdate(info) }, enabled = progress == null) {
                 Text(stringResource(R.string.update_download))
             }
         },
@@ -922,4 +871,28 @@ internal fun UpdateConfirmDialog(app: App) {
             }
         }
     )
+}
+
+/**
+ * 拉起系统安装面板。返回 null 表示已拉起；否则返回要告诉用户的原因。
+ * 未授予"安装未知应用"时先跳系统设置页——用户开回来后再点一次下载/安装才会真正拉起。
+ */
+internal fun startInstall(context: android.content.Context, file: java.io.File): String? {
+    if (!context.packageManager.canRequestPackageInstalls()) {
+        val settings = android.content.Intent(
+            android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+            android.net.Uri.parse("package:${context.packageName}"))
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(settings) }
+        return "请先在系统设置里允许本应用安装未知应用，再回来点一次。"
+    }
+    val uri = androidx.core.content.FileProvider.getUriForFile(
+        context, "${context.packageName}.fileprovider", file)
+    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, "application/vnd.android.package-archive")
+        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    return runCatching { context.startActivity(intent) }
+        .exceptionOrNull()?.let { "无法打开安装面板：${it.message}" }
 }
