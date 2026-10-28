@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using PushBox.Windows.Themes;
+using PushBox.Windows.Update;
 
 namespace PushBox.Windows.Settings;
 
@@ -48,6 +49,15 @@ public sealed record ClientSettings
 
     /// <summary>主题三档（默认跟随系统）。存成 <c>"system"/"light"/"dark"</c>：手改 settings.json 也看得懂。</summary>
     public ThemeChoice Theme { get; init; } = ThemeChoice.System;
+
+    /// <summary>
+    /// 更新包下载走哪条网络（默认跟随系统）。存在这儿而不是只活在更新确认框里：
+    /// "这台机器上要挂代理才能下 GitHub"是机器的属性，下一次升级还得用同一档。
+    /// </summary>
+    public UpdateProxyMode UpdateProxy { get; init; } = UpdateProxyMode.System;
+
+    /// <summary>自定义那一档的地址（<c>127.0.0.1:7890</c>）。写歪了不改档位，下载时按系统那一条走。</summary>
+    public string UpdateProxyAddress { get; init; } = "";
 
     /// <summary>
     /// 主窗几何（<c>Views.WindowGeometry</c> 的五个数）。用可空是因为"没记过"和"记成 0,0"含义不同：
@@ -115,6 +125,8 @@ public sealed record ClientSettings
             CloseToTray = Bool(root, "close_to_tray", Defaults.CloseToTray),
             AutoCheckUpdate = Bool(root, "auto_check_update", Defaults.AutoCheckUpdate),
             Theme = ThemeOf(root),
+            UpdateProxy = ProxyModeOf(root),
+            UpdateProxyAddress = Text(root, "update_proxy_address"),
             WindowLeft = Number(root, "window_left"),
             WindowTop = Number(root, "window_top"),
             WindowWidth = Number(root, "window_width"),
@@ -140,6 +152,8 @@ public sealed record ClientSettings
             ["close_to_tray"] = CloseToTray,
             ["auto_check_update"] = AutoCheckUpdate,
             ["theme"] = ThemeKey(Theme),
+            ["update_proxy"] = ProxyKey(UpdateProxy),
+            ["update_proxy_address"] = UpdateProxyAddress,
             // 没记过时写 null：读回来还是 null，不会被当成"窗口在 (0,0)"或"列宽 0"
             ["window_left"] = WindowLeft,
             ["window_top"] = WindowTop,
@@ -177,6 +191,30 @@ public sealed record ClientSettings
             _ => ThemeChoice.System
         };
     }
+
+    /// <summary>认不出、缺项、旧版本写的别的词都回"跟随系统"——那是没被人动过的那一档。</summary>
+    private static UpdateProxyMode ProxyModeOf(JsonElement root)
+    {
+        var text = Text(root, "update_proxy").Trim().ToLowerInvariant();
+        return text switch
+        {
+            "direct" => UpdateProxyMode.Direct,
+            "custom" => UpdateProxyMode.Custom,
+            _ => UpdateProxyMode.System
+        };
+    }
+
+    private static string ProxyKey(UpdateProxyMode mode) => mode switch
+    {
+        UpdateProxyMode.Direct => "direct",
+        UpdateProxyMode.Custom => "custom",
+        _ => "system"
+    };
+
+    private static string Text(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString() ?? ""
+            : "";
 
     private static string ThemeKey(ThemeChoice theme) => theme switch
     {

@@ -191,7 +191,7 @@ public partial class App : Application
             open.Activate();
             return;
         }
-        var window = new UpdatePromptWindow(update, latest, ExitApp)
+        var window = new UpdatePromptWindow(update, latest, ExitApp, _settings, ApplySettings)
         {
             Owner = VisibleMainWindow
         };

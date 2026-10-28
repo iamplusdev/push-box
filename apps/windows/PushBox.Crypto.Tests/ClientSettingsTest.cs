@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using PushBox.Windows.Settings;
 using PushBox.Windows.Themes;
+using PushBox.Windows.Update;
 using Xunit;
 
 namespace PushBox.Crypto.Tests;
@@ -176,6 +177,28 @@ public sealed class ClientSettingsTest : IDisposable
         Assert.Equal(0, settings.QuietEndMinute);
         // 关掉静默时窗口值原样留着，再打开就是上次那一段
         Assert.Equal(ClientSettings.MinutesPerDay - 1, settings.WithQuietWindow(false, 1439, 0).QuietStartMinute);
+    }
+
+    /// <summary>
+    /// 更新下载的代理那一档是"这台机器怎么上网"，下次升级还要用，所以必须落盘；
+    /// 存成 <c>"system"/"direct"/"custom"</c>，手改坏了也只是回到"跟随系统"，不作废整份设置。
+    /// </summary>
+    [Fact]
+    public void TheUpdateProxySurvivesARoundTrip()
+    {
+        var saved = new ClientSettings
+        {
+            UpdateProxy = UpdateProxyMode.Custom,
+            UpdateProxyAddress = "127.0.0.1:7890"
+        };
+        saved.Save(_dir);
+
+        var loaded = ClientSettings.Load(_dir);
+        Assert.Equal(UpdateProxyMode.Custom, loaded.UpdateProxy);
+        Assert.Equal("127.0.0.1:7890", loaded.UpdateProxyAddress);
+
+        File.WriteAllText(ClientSettings.FilePathIn(_dir), "{\"update_proxy\":\"socks\"}");
+        Assert.Equal(UpdateProxyMode.System, ClientSettings.Load(_dir).UpdateProxy);
     }
 
     [Fact]

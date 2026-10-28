@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Reflection;
@@ -22,6 +23,93 @@ public sealed record GitHubRelease(string Tag, string Version, string Notes,
 {
     /// <summary>没有可下载的 windows 安装包时，界面上要能说"有新版本但这台升不了"，而不是假装没更新。</summary>
     public bool HasInstaller => InstallerUrl is { Length: > 0 };
+}
+
+/// <summary>
+/// 下载到某一刻的读数。<see cref="Total"/> 为 0 表示服务端没给 Content-Length（走 chunked 时可能），
+/// 此时 <see cref="Percent"/> 是 -1——界面只报已下多少，不编一个假百分比。
+/// </summary>
+public readonly record struct DownloadTick(long Done, long Total, double BytesPerSecond)
+{
+    public bool HasTotal => Total > 0;
+
+    public int Percent => HasTotal ? (int)Math.Min(100L, Done * 100L / Total) : -1;
+}
+
+/// <summary>
+/// 把每 80KB 一次的字节回调压成"人看得清"的频率。一个 40MB 的包按 80KB 一格要回调 500 次，
+/// 每次都 <c>IProgress.Report</c> 到 UI 线程——进度那行字一秒最多看得清两三次，多出来的只是排队。
+/// 顺手把字节差算成速度：界面上"还有多久"就是拿它除出来的。
+/// </summary>
+public sealed class DownloadMeter
+{
+    /// <summary>两格之间最短的间隔。再短就只是在刷同一行字。</summary>
+    public static readonly TimeSpan MinInterval = TimeSpan.FromMilliseconds(200);
+
+    private bool _started;
+    private long _lastDone;
+    private TimeSpan _lastAt;
+    private double _speed;
+
+    /// <summary>
+    /// 算这一格的读数；没到间隔就返回 null。第一格<b>总</b>发：那一下让界面从"正在连接"换成
+    /// "下载中 0%"，用户才知道请求真发出去了。速度要到第二格才有意义（之前没有时间差可比）。
+    /// </summary>
+    public DownloadTick? Sample(long done, long total, TimeSpan elapsed)
+    {
+        if (!_started)
+        {
+            _started = true;
+            _lastDone = done;
+            _lastAt = elapsed;
+            return new DownloadTick(done, total, 0);
+        }
+
+        var span = elapsed - _lastAt;
+        if (span < MinInterval) return null;
+
+        // 瞬时速度丢一次包就会从 3 MB/s 掉到 20 KB/s，直接写上去就是一行自己在跳的字。
+        // 平滑一次：新读数只占四成，方向还是对的，抖动却看不出来了
+        var instant = (done - _lastDone) / span.TotalSeconds;
+        _speed = _speed > 0 ? _speed * 0.6 + instant * 0.4 : instant;
+        _lastDone = done;
+        _lastAt = elapsed;
+        return new DownloadTick(done, total, _speed);
+    }
+
+    /// <summary>收尾那一格不看间隔：不补这一下，进度会停在 98% 而文件其实已经下完。</summary>
+    public DownloadTick Finish(long done, long total) => new(done, total, _speed);
+}
+
+/// <summary>下载包走哪条网络。系统代理是默认——机器上本来就配了代理的人不该再填一遍。</summary>
+public enum UpdateProxyMode
+{
+    System,
+    Direct,
+    Custom
+}
+
+/// <summary>一次下载的代理口径（设置里存的就是这一份）。</summary>
+public sealed record ProxyChoice(UpdateProxyMode Mode = UpdateProxyMode.System, string Address = "")
+{
+    /// <summary>
+    /// "127.0.0.1:7890" 与 "http://127.0.0.1:7890" 都认，其余一律 null：
+    /// 只收 http(s) 代理，且必须显式写端口——<c>Uri</c> 会把 "7890" 当成主机名 + 80 端口，
+    /// 那样一个手滑的地址会变成一条指向陌生主机的代理。
+    /// </summary>
+    public static Uri? AddressOf(string? text)
+    {
+        var value = (text ?? "").Trim();
+        if (value.Length == 0) return null;
+        if (!value.Contains("://", StringComparison.Ordinal)) value = "http://" + value;
+        return Uri.TryCreate(value, UriKind.Absolute, out var uri)
+               && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+               && !uri.IsDefaultPort
+            ? uri
+            : null;
+    }
+
+    public Uri? Endpoint => AddressOf(Address);
 }
 
 /// <summary>
@@ -54,12 +142,19 @@ public sealed class UpdateClient
     private readonly HttpClient _http;
     private readonly TimeSpan _checkTimeout;
 
-    public UpdateClient(HttpClient? http = null, TimeSpan? checkTimeout = null)
+    /// <summary>下载用的客户端按代理口径现造：同一个 <see cref="HttpClientHandler"/> 不能改代理再复用
+    /// （改了也不会对已建的连接生效），而用户完全可能"这一把直连、下一把挂代理"地重试。
+    /// 交给构造参数是为了用例能塞一个假的传输层。</summary>
+    private readonly Func<ProxyChoice?, HttpClient> _downloadClient;
+
+    public UpdateClient(HttpClient? http = null, TimeSpan? checkTimeout = null,
+        Func<ProxyChoice?, HttpClient>? downloadClient = null)
     {
         _checkTimeout = checkTimeout ?? TimeSpan.FromSeconds(20);
         _http = http ?? new HttpClient();
         // 检查这一趟要设超时；真正的 setup.exe 下载走另一个客户端（见 DownloadAsync），那里必须不限时
         if (http == null) _http.Timeout = _checkTimeout;
+        _downloadClient = downloadClient ?? CreateDownloadClient;
     }
 
     /// <summary>
@@ -227,9 +322,11 @@ public sealed class UpdateClient
     /// 流式下载 setup.exe 到 <paramref name="dest"/>：先写 <c>dest+".tmp"</c> 再整文件改名，
     /// 与 <see cref="Media.MediaCache.Put"/> 同一条"中途被杀不留半个包"的口径（那半个包下次是装不上的）。
     /// 这里必须换一个不限总超时的客户端：一次检查 20 秒足够，但一个几十 MB 的安装包在慢网上不该被 20 秒掐断。
+    /// <paramref name="progress"/> 是掐过频的读数（见 <see cref="DownloadMeter"/>），
+    /// <paramref name="proxy"/> 决定这一把走哪条网络——失败重试时可以换一档再试。
     /// </summary>
-    public async Task DownloadAsync(string url, string dest, IProgress<(long done, long total)>? progress,
-        CancellationToken ct = default)
+    public async Task DownloadAsync(string url, string dest, IProgress<DownloadTick>? progress,
+        ProxyChoice? proxy = null, CancellationToken ct = default)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
         var temp = dest + ".tmp";
@@ -242,7 +339,7 @@ public sealed class UpdateClient
             // 上一次的半截临时文件删不掉（被占用）也没关系，下面 Create 会覆盖
         }
 
-        using var client = CreateDownloadClient();
+        using var client = _downloadClient(proxy);
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.UserAgent.ParseAdd(UserAgent);
         // Accept: octet-stream 让 GitHub 直发二进制而非又包一层 JSON
@@ -256,19 +353,23 @@ public sealed class UpdateClient
             throw new HttpRequestException($"下载失败：HTTP {code}");
         }
 
-        var total = response.Content.Headers.ContentLength ?? -1L;
+        // 0 = 服务端没给长度（chunked）：界面只报已下多少，不编假百分比
+        var total = response.Content.Headers.ContentLength ?? 0L;
         await using var src = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         await using var dst = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None,
             81920, useAsync: true);
 
         var buffer = new byte[81920];
+        var meter = new DownloadMeter();
+        var clock = Stopwatch.StartNew();
         long done = 0L;
         int read;
         while ((read = await src.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
         {
             await dst.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
             done += read;
-            progress?.Report((done, total));
+            // meter 自己按 200ms 掐：每 80KB 报一次，界面一秒要刷几十下，而人只看得清两三下
+            if (meter.Sample(done, total, clock.Elapsed) is { } tick) progress?.Report(tick);
         }
 
         await dst.FlushAsync(ct).ConfigureAwait(false);
@@ -278,19 +379,42 @@ public sealed class UpdateClient
         if (total > 0 && done != total)
             throw new IOException($"下载不完整：期望 {total.ToString(CultureInfo.InvariantCulture)} 字节，实际 {done.ToString(CultureInfo.InvariantCulture)}");
 
+        // 最后一格不看间隔：不然界面停在上一次的百分比上，看起来像卡住了
+        progress?.Report(meter.Finish(done, total));
         File.Move(temp, dest, true);
     }
 
-    /// <summary>下载专用客户端：不设总超时（大文件），只留一个较宽的读超时兜底断流。</summary>
-    private static HttpClient CreateDownloadClient() => new(new HttpClientHandler
+    /// <summary>
+    /// 下载专用客户端：不设总超时（大文件），也不复用检查那一只——检查 20 秒就该有结论，
+    /// 而一个几十 MB 的安装包在慢网上不该被 20 秒掐断。
+    /// 代理按用户选的那一档现配：默认跟随系统，直连就把 <c>UseProxy</c> 关掉，
+    /// 自定义则填一支 <see cref="WebProxy"/>——设置里那个代理开着但下载走不通时，重试前换这一档。
+    /// </summary>
+    private static HttpClient CreateDownloadClient(ProxyChoice? proxy) => new(HandlerFor(proxy))
     {
-        AllowAutoRedirect = true
-    })
-    {
-        Timeout = System.Threading.Timeout.InfiniteTimeSpan,
-        // 单次读超过 2 分钟才算断流；正常传输不受它影响
-        // （HttpClient 没有独立的 ReadTimeout，这里用 CancellationToken 由调用方控制取消）
+        Timeout = System.Threading.Timeout.InfiniteTimeSpan
     };
+
+    /// <summary>
+    /// 代理三档落到 handler 上。自定义写歪了（<see cref="ProxyChoice.AddressOf"/> 给 null）时
+    /// <b>不</b>报错、也不退回直连：原样留成系统默认那一条，至少还有一个能下完的可能，
+    /// 而错误可以在界面上说清——为了一个填歪的端口把下载拦下来没有第二个好处。
+    /// </summary>
+    public static HttpClientHandler HandlerFor(ProxyChoice? proxy)
+    {
+        var handler = new HttpClientHandler { AllowAutoRedirect = true };
+        switch (proxy?.Mode ?? UpdateProxyMode.System)
+        {
+            case UpdateProxyMode.Direct:
+                handler.UseProxy = false;
+                break;
+            case UpdateProxyMode.Custom when proxy?.Endpoint is { } endpoint:
+                handler.Proxy = new WebProxy(endpoint);
+                break;
+        }
+
+        return handler;
+    }
 
     /// <summary>
     /// 拉起 Inno 安装并交出退出权：<see cref="Process.Start"/> 之后立刻调用 <paramref name="beforeExit"/>

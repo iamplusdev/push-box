@@ -459,31 +459,34 @@ public class ThemeTest
     [Fact]
     public void TheSettingsInputsCarryTheirOwnThemedTemplate()
     {
-        var doc = XDocument.Parse(TokenFiles.Text("Views/SettingsWindow.xaml"));
-        string Template(string target) => doc.Descendants()
+        // 输入框那三份现在是设置页与更新确认框共用的一本（Themes/Inputs.xaml）：两处各自养一份模板，
+        // 深色下必定一半对一半错。列表仍只有设置页在用，还留在它自己那一页
+        var inputs = XDocument.Parse(TokenFiles.Text("Themes/Inputs.xaml"));
+        var settings = XDocument.Parse(TokenFiles.Text("Views/SettingsWindow.xaml"));
+        string Template(XDocument doc, string target) => doc.Descendants()
             .Single(e => e.Name.LocalName == "Style"
                          && (string?)e.Attribute("TargetType") == target
                          && e.Attribute(X + "Key") is null)
             .ToString();
 
-        var box = Template("TextBox");
+        var box = Template(inputs, "TextBox");
         Assert.Contains("IsMouseOver", box);
         Assert.Contains("IsKeyboardFocusWithin", box);
         Assert.Contains("IsEnabled", box);
         Assert.Contains("PART_ContentHost", box);
 
         // 弹层底色、选项高亮也在模板里，不能让下拉那一层落回系统白
-        var combo = Template("ComboBox");
+        var combo = Template(inputs, "ComboBox");
         Assert.Contains("PART_Popup", combo);
         Assert.Contains("Bg.Elevated", combo);
         Assert.Contains("IsKeyboardFocusWithin", combo);
-        var item = Template("ComboBoxItem");
+        var item = Template(inputs, "ComboBoxItem");
         Assert.Contains("IsHighlighted", item);
 
         // 两处列表（频道/设备）共用这一份：条目是卡片，悬停与选中都走 token，不再是系统蓝条
-        var list = Template("ListBox");
+        var list = Template(settings, "ListBox");
         Assert.Contains("ItemsPresenter", list);
-        var row = Template("ListBoxItem");
+        var row = Template(settings, "ListBoxItem");
         Assert.Contains("IsMouseOver", row);
         Assert.Contains("IsSelected", row);
         Assert.Contains("Bg.AccentTint", row);

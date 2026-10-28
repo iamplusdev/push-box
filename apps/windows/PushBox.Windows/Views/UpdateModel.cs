@@ -75,14 +75,14 @@ public sealed class UpdateModel
     /// 所以下载（可在线程池）与拉起（回 UI 线程）分开，由调用方在拿到路径后于 UI 线程完成。
     /// </summary>
     public async Task<Outcome<string>> DownloadAsync(GitHubRelease latest,
-        IProgress<(long done, long total)>? progress, CancellationToken ct = default)
+        IProgress<DownloadTick>? progress, ProxyChoice? proxy = null, CancellationToken ct = default)
     {
         if (!latest.HasInstaller)
             return Outcome<string>.Bad(new InvalidOperationException("这次没有可下载的安装包"));
         try
         {
             var dest = InstallerPathOf(latest.InstallerName);
-            await _client.DownloadAsync(latest.InstallerUrl!, dest, progress, ct).ConfigureAwait(false);
+            await _client.DownloadAsync(latest.InstallerUrl!, dest, progress, proxy, ct).ConfigureAwait(false);
             return Outcome<string>.Good(dest);
         }
         catch (Exception e)
@@ -90,6 +90,32 @@ public sealed class UpdateModel
             return Outcome<string>.Bad(e);
         }
     }
+
+    /// <summary>
+    /// 下载那一行字：百分比、已下多少 / 一共多少、当前速度、还剩多久。
+    /// 只报已下字节的情况是服务端没给长度（chunked），这时不编百分比，也不猜剩余时间。
+    /// </summary>
+    public static string ProgressLine(DownloadTick tick)
+    {
+        var done = SettingsModel.BytesLabel(tick.Done);
+        var head = tick.HasTotal
+            ? $"下载中… {tick.Percent}%（{done} / {SettingsModel.BytesLabel(tick.Total)}）"
+            : $"下载中… {done}";
+
+        // 第一格还没有时间差可比（速度是 0）；<1 B/s 的读数写出来也只是噪声
+        if (tick.BytesPerSecond < 1) return head;
+        var speed = SettingsModel.BytesLabel((long)tick.BytesPerSecond) + "/s";
+        if (!tick.HasTotal || tick.Done >= tick.Total) return $"{head} · {speed}";
+
+        var left = (tick.Total - tick.Done) / tick.BytesPerSecond;
+        return $"{head} · {speed} · {RemainingLabel(TimeSpan.FromSeconds(left))}";
+    }
+
+    /// <summary>剩余时间只要粗到"大约"：网速本来就在飘，报到秒级是假精确。</summary>
+    public static string RemainingLabel(TimeSpan left) =>
+        left.TotalHours >= 1 ? $"剩余约 {(int)left.TotalHours} 小时 {left.Minutes} 分"
+        : left.TotalMinutes >= 1 ? $"剩余约 {(int)left.TotalMinutes} 分 {left.Seconds} 秒"
+        : $"剩余约 {Math.Max(1, (int)Math.Ceiling(left.TotalSeconds))} 秒";
 
     /// <summary>供托盘/静默检查复用：只判断"这台有没有可装的新版"，不弹任何界面。</summary>
     public async Task<GitHubRelease?> NewInstallerOrNullAsync(CancellationToken ct = default)

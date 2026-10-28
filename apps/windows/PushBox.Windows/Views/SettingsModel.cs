@@ -8,6 +8,7 @@ using PushBox.Windows.Data;
 using PushBox.Windows.Net;
 using PushBox.Windows.Settings;
 using PushBox.Windows.Themes;
+using PushBox.Windows.Update;
 
 namespace PushBox.Windows.Views;
 
@@ -508,6 +509,26 @@ public sealed class SettingsModel
     {
         ThemeChoice.Light => 1,
         ThemeChoice.Dark => 2,
+        _ => 0
+    };
+
+    // ---- 更新下载的代理口径（三档）--------------------------------------------------------------------
+
+    /// <summary>更新确认框里那个下拉的三项，顺序就是 <see cref="ProxyModeOf"/> 给出的下标。</summary>
+    public static IReadOnlyList<string> ProxyLabels { get; } = new[] { "跟随系统", "强制直连", "自定义" };
+
+    /// <summary>下拉下标 → 代理档位。越界（控件还没选中）按"跟随系统"处理。</summary>
+    public static UpdateProxyMode ProxyModeOf(int index) => index switch
+    {
+        1 => UpdateProxyMode.Direct,
+        2 => UpdateProxyMode.Custom,
+        _ => UpdateProxyMode.System
+    };
+
+    public static int ProxyModeIndexOf(UpdateProxyMode mode) => mode switch
+    {
+        UpdateProxyMode.Direct => 1,
+        UpdateProxyMode.Custom => 2,
         _ => 0
     };
 

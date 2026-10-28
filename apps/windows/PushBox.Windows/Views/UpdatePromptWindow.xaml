@@ -8,6 +8,15 @@
         Background="{DynamicResource Bg.Page}"
         FontFamily="{DynamicResource Font.UI}"
         TextOptions.TextFormattingMode="Display" UseLayoutRounding="True">
+    <Window.Resources>
+        <ResourceDictionary>
+            <!-- 输入框/下拉框与设置页同一套（深色下不落回系统白底），那三份隐式样式收在 Themes/Inputs.xaml -->
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/PushBox.Windows;component/Themes/Inputs.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+
     <!-- D32 的更新确认框：发现新版先问一句，点"下载并安装"才动手；装完让用户重启。
          自动检查与手动检查共用这一扇，保证两条路的"确认"长同一个样、只有一处下载/安装代码。 -->
     <StackPanel Margin="20,16,20,16">
@@ -17,6 +26,29 @@
         <TextBlock x:Name="SourceLine" FontSize="{x:Static controls:MarkdownStyle.LabelSize}"
                    Margin="0,6,0,0"
                    Text="来自 GitHub Releases"
+                   Foreground="{DynamicResource Fg.Secondary}" />
+
+        <!-- 下载走哪条网络。默认跟随系统：机器上本来就配了代理的人不该再填一遍；
+             代理开着但下载卡住时，可以在这里换成直连或自己填一个端口，然后按"重试下载"再走一趟 -->
+        <Grid Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="下载代理" VerticalAlignment="Center"
+                       FontSize="{x:Static controls:MarkdownStyle.LabelSize}"
+                       Foreground="{DynamicResource Fg.Secondary}" />
+            <ComboBox x:Name="ProxyBox" Grid.Column="1" Width="112" Margin="10,0,0,0"
+                      AutomationProperties.Name="下载代理"
+                      SelectionChanged="OnProxyModeChanged" />
+            <TextBox x:Name="ProxyAddress" Grid.Column="2" Margin="8,0,0,0"
+                     AutomationProperties.Name="代理地址"
+                     Visibility="Collapsed" LostFocus="OnProxyAddressEdited" />
+        </Grid>
+        <TextBlock x:Name="ProxyHint" Margin="0,6,0,0" Visibility="Collapsed" TextWrapping="Wrap"
+                   Text="形如 127.0.0.1:7890；留空或写法无效时按“跟随系统”下载"
+                   FontSize="{x:Static controls:MarkdownStyle.LabelSize}"
                    Foreground="{DynamicResource Fg.Secondary}" />
         <ScrollViewer MaxHeight="160" Margin="0,10,0,0" VerticalScrollBarVisibility="Auto"
                       x:Name="NotesScroll" Visibility="Collapsed">

@@ -658,7 +658,8 @@ public partial class SettingsWindow : Window
             open.Activate();
             return;
         }
-        var window = new UpdatePromptWindow(_update, latest, _beforeExit) { Owner = this };
+        // 代理那一档存在设置里：确认框改完就交回这一页，同一次会话里下次升级还是这一档
+        var window = new UpdatePromptWindow(_update, latest, _beforeExit, _settings, Update) { Owner = this };
         _prompt = window;
         window.Closed += (_, _) => _prompt = null;
         window.Show();

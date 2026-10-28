@@ -12,6 +12,12 @@
          左边一列窄导航、右边一屏内容（微信 PC 设置那一屏的形状），三块面板叠在同一格靠 Visibility 切换。
          这里只放控件与文案：留空算不算提交、按钮该不该出现在这一行、这段话怎么说，全在 SettingsModel。 -->
     <Window.Resources>
+        <ResourceDictionary>
+        <!-- 输入框/下拉框/下拉项那三份隐式样式与更新确认框共用，收在 Themes/Inputs.xaml 里 -->
+        <ResourceDictionary.MergedDictionaries>
+            <ResourceDictionary Source="/PushBox.Windows;component/Themes/Inputs.xaml" />
+        </ResourceDictionary.MergedDictionaries>
+
         <!-- 导航项样式：增加圆角、过渡效果与键盘焦点框（Tab 到哪一项要看得见） -->
         <Style x:Key="NavItemStyle" TargetType="RadioButton">
             <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
@@ -46,137 +52,6 @@
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="Margin" Value="0,0,12,0" />
             <Setter Property="Foreground" Value="{DynamicResource Fg.Secondary}" />
-        </Style>
-        
-        <!-- 输入框：圆角 + 主题底色，hover 深描边、聚焦 accent 描边、禁用减淡。
-             不给模板的话深色模式下这里是一片系统白底、字却是浅灰的；默认模板的
-             hover/焦点描边也全是系统浅蓝，与两套色板都对不上 -->
-        <Style TargetType="TextBox">
-            <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
-            <Setter Property="Height" Value="32" />
-            <Setter Property="Padding" Value="10,0" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
-            <Setter Property="CaretBrush" Value="{DynamicResource Accent}" />
-            <Setter Property="SelectionBrush" Value="{DynamicResource Accent}" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="TextBox">
-                        <Border x:Name="Bd" Background="{DynamicResource Bg.Page}"
-                                BorderBrush="{DynamicResource Divider}" BorderThickness="1"
-                                CornerRadius="4" SnapsToDevicePixels="True">
-                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
-                                          VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Fg.Secondary}" />
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Accent}" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="Bd" Property="Opacity" Value="0.55" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        
-        <!-- 下拉框：表面与输入框同一套。默认模板的下拉弹层在深色下仍是系统白底，
-             这里连弹层与选项高亮一起换 token -->
-        <Style TargetType="ComboBox">
-            <Setter Property="FontSize" Value="{x:Static controls:MarkdownStyle.SmallSize}" />
-            <Setter Property="Height" Value="32" />
-            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
-            <Setter Property="Padding" Value="8,0" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ComboBox">
-                        <Grid>
-                            <Border x:Name="Shell" Background="{DynamicResource Bg.Page}"
-                                    BorderBrush="{DynamicResource Divider}" BorderThickness="1"
-                                    CornerRadius="4" SnapsToDevicePixels="True">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="24" />
-                                    </Grid.ColumnDefinitions>
-                                    <ContentPresenter Grid.Column="0" Margin="{TemplateBinding Padding}"
-                                                      VerticalAlignment="Center"
-                                                      Content="{TemplateBinding SelectionBoxItem}"
-                                                      ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
-                                                      ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
-                                                      ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}" />
-                                    <Path Grid.Column="1" Data="M0,0 L4,4 8,0"
-                                          Stroke="{DynamicResource Fg.Secondary}" StrokeThickness="1.5"
-                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                </Grid>
-                            </Border>
-                            <ToggleButton x:Name="Toggle" Focusable="False" IsTabStop="False"
-                                          Background="Transparent" BorderThickness="0" ClickMode="Press"
-                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
-                                <ToggleButton.Template>
-                                    <ControlTemplate TargetType="ToggleButton">
-                                        <Border Background="Transparent" />
-                                    </ControlTemplate>
-                                </ToggleButton.Template>
-                            </ToggleButton>
-                            <Popup x:Name="PART_Popup" Placement="Bottom" Focusable="False"
-                                   AllowsTransparency="True" PopupAnimation="Fade"
-                                   IsOpen="{TemplateBinding IsDropDownOpen}">
-                                <Border Background="{DynamicResource Bg.Elevated}"
-                                        BorderBrush="{DynamicResource Divider}" BorderThickness="1"
-                                        CornerRadius="4" Margin="0,2,0,0" Padding="2"
-                                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
-                                        MaxHeight="{TemplateBinding MaxDropDownHeight}">
-                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                        <ItemsPresenter />
-                                    </ScrollViewer>
-                                </Border>
-                            </Popup>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Shell" Property="BorderBrush" Value="{DynamicResource Fg.Secondary}" />
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                                <Setter TargetName="Shell" Property="BorderBrush" Value="{DynamicResource Accent}" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="Shell" Property="Opacity" Value="0.55" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- 下拉选项：悬停/选中铺浅绿底，选中加粗 -->
-        <Style TargetType="ComboBoxItem">
-            <Setter Property="Foreground" Value="{DynamicResource Fg.Primary}" />
-            <Setter Property="Padding" Value="8,6" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ComboBoxItem">
-                        <Border x:Name="Shell" Background="Transparent" CornerRadius="4" Margin="2,1"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsHighlighted" Value="True">
-                                <Setter TargetName="Shell" Property="Background"
-                                        Value="{DynamicResource Bg.AccentTint}" />
-                                <Setter Property="Foreground" Value="{DynamicResource Accent}" />
-                            </Trigger>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter Property="FontWeight" Value="SemiBold" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
         </Style>
         
         <!-- 列表：默认模板是白底 + 系统蓝选中条，深色下整块发白、选中也还是蓝的。
@@ -246,6 +121,7 @@
         </Style>
         
         <!-- Section 标题与说明直接用 §9.2 的 Text.* 档位，不在这一页另立一套字号 -->
+        </ResourceDictionary>
     </Window.Resources>
 
     <Grid>
