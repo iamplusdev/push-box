@@ -11,6 +11,7 @@
 #
 # 前提：装了 Inno Setup 6（本机在 D:\Apps\DE\Inno Setup 6，装法见 docs/Windows开发环境安装教程.md §5）。
 # 没有就只跑到 publish 那一步并说明缺什么 —— 这个脚本不打"假装成功"的包。
+# 向导的简体中文由 installer/Languages/ChineseSimplified.isl 提供（随仓库走，不依赖编译机的 <Inno>\Languages）。
 # ============================================================================
 set -euo pipefail
 
@@ -49,6 +50,13 @@ if [[ ! -x "$iscc" && ! -f "$iscc" ]]; then
     echo "找不到 ISCC：$iscc" >&2
     echo "publish 产物已经在 $publish_dir，但安装包没编出来。装 Inno Setup 6 后重跑，" >&2
     echo "或用 ISCC=<路径> 指认它（装法见 docs/Windows开发环境安装教程.md §5）。" >&2
+    exit 1
+fi
+
+if [[ ! -f "$here/Languages/ChineseSimplified.isl" ]]; then
+    echo "缺少向导中文语言文件：$here/Languages/ChineseSimplified.isl" >&2
+    echo "它是随仓库走的（issrc 6.7.3 那一版），别从别处拷一份版本不同的进来——" >&2
+    echo "[Messages] 里多一条编译器不认识的键会直接编不过。" >&2
     exit 1
 fi
 

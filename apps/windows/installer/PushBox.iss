@@ -48,6 +48,12 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; §8 开头那句"仅 Win10/11"在这里落地（Win10 = 10.0）。
 MinVersion=10.0
 
+; 语言只在"系统 UI 语言"这一层猜一次，不在向导前多一屏"请选择安装语言"：
+; 中文 Windows 直接是简体中文，其余落到 [Languages] 的第一条（也是简体中文），英文系统命中 English。
+; 静默安装（/VERYSILENT）本来就不走这一屏，取值不影响无人值守那一条。
+ShowLanguageDialog=no
+LanguageDetectionMethod=uilanguage
+
 ; per-user 安装：不请求管理员，也不给"以管理员身份安装"的对话框入口
 ; （PrivilegesRequiredOverridesAllowed 留空是 Inno 6 的默认，这里写出来是为了别被"顺手加个 dialog"改坏）。
 PrivilegesRequired=lowest
@@ -78,16 +84,29 @@ VersionInfoDescription={#MyAppName} {#MyAppVersion} 安装包
 VersionInfoCompany={#MyAppPublisher}
 
 [Languages]
-; 只挂 Inno 自带的英文向导：官方分发里没有 ChineseSimplified.isl（它属于"unofficial translators"，
-; 要单独下载到 <Inno>\Languages\ 才能引用）。界面文案（任务勾选项、[Run] 那一行、卸载清理的提示）
-; 是我们自己写的中文，向导按钮仍是英文 —— 这不影响"无人值守"这条验收，静默模式下两者都不出现。
-Name: "default"; MessagesFile: "compiler:Default.isl"
+; 中文优先、英文兜底（2026-10-28 步 7/7）。Inno 官方分发里没有简体中文（它属于 unofficial translators，
+; 官方只带 Default.isl 与二十几种语言），所以 ChineseSimplified.isl 跟这一页一起收在 installer/Languages ——
+; 编译机不必再往 <Inno>\Languages\ 里另塞一份，CI（choco innosetup）与本机（D:\Apps\DE）拿的是同一个文件。
+; 取的是 issrc 6.7.3 那一版；Inno 升大版本时这份也要跟着换——[Messages] 里多一条它不认识的键就编不过。
+; 第一条是默认与兜底语言：系统 UI 语言既不是中文也不是英文时，向导仍是简体中文。
+Name: "zh"; MessagesFile: "Languages\ChineseSimplified.isl"
+Name: "en"; MessagesFile: "compiler:Default.isl"
+
+[CustomMessages]
+; 这三行是我们自己写的向导文案，.isl 里没有对应的键，所以每种语言各给一份：
+; 英文系统走的就是下面这三行，不让它在中英混排里读"附加快捷方式："。
+DesktopIcon=在桌面创建快捷方式
+ExtraShortcuts=附加快捷方式：
+LaunchDescription=立即启动 PushBox（首次启动完成注册或加入，并登记通知与协议）
+en.DesktopIcon=Create a desktop shortcut
+en.ExtraShortcuts=Additional shortcuts:
+en.LaunchDescription=Launch PushBox now (finish registering or joining on first start; notifications and protocol are registered then)
 
 [Tasks]
 ; 桌面图标默认不勾（unchecked 不是可省的装饰：不写就是默认勾上，而 /VERYSILENT 会把默认勾选一起装上，
 ; 于是"无人值守装到干净机器"的结果是别人桌面上凭空多一个图标）。这是一个常驻托盘的应用，
 ; 桌面上多一个图标不代表多一个入口。
-Name: "desktopicon"; Description: "在桌面创建快捷方式"; GroupDescription: "附加快捷方式："; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:DesktopIcon}"; GroupDescription: "{cm:ExtraShortcuts}"; Flags: unchecked
 
 [Files]
 ; 整个 publish 目录原样搬进去。[Files] 没有"给这一行写注释"的参数（Comments 属于 [Tasks]），
@@ -105,7 +124,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDi
 [Run]
 ; 装完顺手起一次：首启两屏（register / join）在那儿等着，HKCU 的 AUMID 与 pushbox: 协议也是在这一步写进去的。
 ; skipifsilent 让无人值守那一条不额外起进程——干净机器验收量的是"装上、能起、能卸"，弹窗只会挡住脚本。
-Filename: "{app}\{#MyAppExeName}"; Description: "立即启动 PushBox（首次启动完成注册或加入，并登记通知与协议）"; \
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchDescription}"; \
     Flags: postinstall nowait skipifsilent
 
 [UninstallDelete]
