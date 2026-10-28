@@ -159,12 +159,22 @@ class MediaFetchServiceTest {
   @Test
   @DisplayName("⑦ 公网跳点重定向到内网：每一跳重校验，不会跟着打进 127.0.0.1")
   void blocksRedirectIntoPrivate() {
-    String msgId = message(
-        "https://httpbin.org/redirect-to?url=http%3A%2F%2F127.0.0.1%3A9%2Fa.png&status_code=302");
+    // 这条路原先靠 httpbin.org 扮演"公网跳点"，由它回 302 指向内网。2026-10-28 起上游对
+    // "重定向到 127.0.0.1"的请求直接回 403（防开放重定向），第一跳就收不到 Location，
+    // 判据再也走不到第二跳。这里把网络那一层换成脚本化的 302：验的东西没变——
+    // 第一跳的响应只用来取 Location，指到内网时第二跳必须被判 ssrf_blocked。
+    // 首跳用公网字面 IP，SSRF 校验不做 DNS 解析，这条用例因此不碰外网。
+    String msgId = message("https://1.1.1.1/a.png");
+    MediaFetchService.Transport real = fetcher.transport;
+    fetcher.transport = (target, config, maxBytes) ->
+        new MediaFetchService.Raw(302, "http://127.0.0.1:9/a.png", null, null);
+    try {
+      assertThat(fetcher.fetch(msgId)).isEqualTo("failed");
 
-    assertThat(fetcher.fetch(msgId)).isEqualTo("failed");
-
-    assertThat(media(msgId, 0).getString("error")).isEqualTo("ssrf_blocked");
+      assertThat(media(msgId, 0).getString("error")).isEqualTo("ssrf_blocked");
+    } finally {
+      fetcher.transport = real;
+    }
   }
 
   @Test

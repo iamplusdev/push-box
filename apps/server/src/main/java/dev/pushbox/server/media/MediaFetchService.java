@@ -77,6 +77,15 @@ public class MediaFetchService {
   /** 只在任务运行期间占用，条目数上限就是抓取池大小，不需要额外的过期策略。 */
   private final Set<String> avatarInFlight = ConcurrentHashMap.newKeySet();
 
+  /** 一次跳的 GET。默认走钉定 IP 的真客户端，用例可以换成只回脚本响应的实现。 */
+  @FunctionalInterface
+  interface Transport {
+
+    Raw get(SsrfGuard.Target target, RequestConfig config, long maxBytes) throws IOException;
+  }
+
+  Transport transport = this::httpGet;
+
   public MediaFetchService(PbStore store, MediaObjects objects, PbProperties props,
       AbuseControlService abuse) {
     this.store = store;
@@ -340,8 +349,8 @@ public class MediaFetchService {
           .setResponseTimeout(Timeout.ofMilliseconds(Math.min(media.getTimeout().toMillis(), remaining)))
           .setRedirectsEnabled(false)
           .build();
-      try (CloseableHttpClient client = pinnedClient(target, config)) {
-        Raw raw = client.execute(new HttpGet(target.uri()), response -> read(response, maxBytes));
+      try {
+        Raw raw = transport.get(target, config, maxBytes);
         if (raw.status() >= 300 && raw.status() < 400 && raw.location() != null) {
           if (hops >= media.getMaxRedirects()) {
             throw new MediaFetchException(MediaFetchException.SSRF_BLOCKED, "重定向超过 " + hops + " 跳");
@@ -357,6 +366,13 @@ public class MediaFetchService {
       } catch (IOException e) {
         throw translate(e);
       }
+    }
+  }
+
+  private Raw httpGet(SsrfGuard.Target target, RequestConfig config, long maxBytes)
+      throws IOException {
+    try (CloseableHttpClient client = pinnedClient(target, config)) {
+      return client.execute(new HttpGet(target.uri()), response -> read(response, maxBytes));
     }
   }
 
@@ -569,7 +585,7 @@ public class MediaFetchService {
     }
   }
 
-  private record Raw(int status, String location, String contentType, byte[] body) {}
+  record Raw(int status, String location, String contentType, byte[] body) {}
 
   private record Downloaded(byte[] body, String contentType) {}
 
