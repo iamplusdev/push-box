@@ -94,6 +94,19 @@
 - `:app:compileDebugKotlin`、`:app:assembleDebug` 通过；`:app:testDebugUnitTest` **34 run / 0 fail**（+5 新增）。
 - UI 渲染与提交链路未在真机跑过（本环境无设备）：状态迁移与按钮回调逐一对照旧实现改写，逻辑分支由 EnrollLogicTest 钉住，如实说明。
 
+### S7 第三阶段 a：消息页 ViewModel
+
+1. **消息数据与写操作迁入 MessagesViewModel**：主壳的会话列表改收集 StateFlow；置顶、免打扰、锁屏隐私、改名、头像落盘、清空会话、已读上报、删除消息、拉取全文都走 `viewModelScope`。详情与列表共用 Activity 中同一实例，离开气泡或切换页面不再取消已提交的任务；全文加载状态按消息 ID 保存并防重复点击，结束或失败后复位。
+2. **搜索与结果成对发布**：250ms 防抖与 Room 查询组装迁入 ViewModel 的冷流；空白输入立即清筛选，新查询取消旧订阅，查询词和对应结果一起发布。详情销毁即取消订阅，不按会话 ID 无限创建 ViewModel；搜索输入/开关仍用 `rememberSaveable`，滚动、首次瞬移、命中定位、通知可见登记与弹窗留在 Compose。本地标已读与撤通知由详情的 `LaunchedEffect` 调用 ViewModel 挂起函数，仍随离屏取消，避免清掉离屏后到达的新消息；只有已读网络上报进入 `viewModelScope`。
+3. **退出身份先取消旧任务**：更换服务器时先显示加载态、清理 ViewModelStore，再清数据库与身份，避免旧请求继续写入新身份的数据。
+4. **第二阶段表述勘误**：普通 ViewModel/StateFlow 只跨配置变更保留内存状态，不保证进程死亡后的表单恢复；此前“旋转/进程重建表单不再清空”中的“进程重建”不成立。这里未给注册表单补 SavedStateHandle，也未将密钥写入 saved state。
+
+### 第三阶段 a 用例
+
+- `:app:compileDebugKotlin`、`:app:assembleDebug`、`:app:compileDebugAndroidTestKotlin` 通过；`:app:testDebugUnitTest` **41 run / 0 fail / 0 error**（新增 MessagesFlowTest 六例：加载与空结果区分、快速输入仅查最终词、清空取消待查词、新查询取消旧订阅、离屏取消订阅、不同页面查询与结果隔离）。
+- ConversationStateSourceTest 四例通过：既有会话两把 ID 外层 key、不拿会话行当状态键、首次落位用瞬移三例，加上本地已读/撤通知留在详情协程、仅上报进 ViewModel 的新守护断言；这些是源码检查，不等价于 UI 实测。
+- `adb devices -l` 没有连接设备，未执行真机/模拟器的旋转、滚动定位、菜单操作与网络提交走查；不据编译和 JVM 测试宣称交互验收通过。频道与设置迁移仍是后续子步骤。
+
 ---
 
 ## 未发布 —— 三端优化第三轮：品牌色统一（S3）

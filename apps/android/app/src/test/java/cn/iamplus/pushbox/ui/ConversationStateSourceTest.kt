@@ -66,6 +66,23 @@ class ConversationStateSourceTest {
             screen.contains("nearBottom -> listState.animateScrollToItem(rows.lastIndex)"))
     }
 
+    @Test
+    fun localReadAndNotificationCancellationStayInTheDetailCoroutine() {
+        assertTrue(Regex("""LaunchedEffect\(conversation.channelNo, conversation.senderId\)\s*\{\s*vm.markRead\(conversation\)""")
+            .containsMatchIn(region("ConversationScreen")))
+        val vm = uiSources().first { it.contains("class MessagesViewModel(") }
+        val start = vm.indexOf("suspend fun markRead(")
+        assertTrue("本地标已读必须是详情调用的挂起函数", start >= 0)
+        val end = vm.indexOf("\n    fun delete(", start)
+        assertTrue(end > start)
+        val read = vm.substring(start, end)
+        val background = read.indexOf("viewModelScope.launch")
+        assertTrue(background >= 0)
+        assertTrue(read.indexOf("app.dao.markConversationRead") in 0 until background)
+        assertTrue(read.indexOf("app.notifier.cancelConversation") in 0 until background)
+        assertTrue(read.indexOf(".reportRead(") > background)
+    }
+
     /** 取 `fun <name>(...)` 到它自己那一列的 `}` 为止的整段源码（跨拆分后的文件找）。 */
     private fun region(name: String): String {
         for (src in uiSources()) {

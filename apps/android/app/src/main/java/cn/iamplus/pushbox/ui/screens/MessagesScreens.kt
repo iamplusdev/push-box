@@ -118,15 +118,9 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cn.iamplus.pushbox.data.MessageRow
-import cn.iamplus.pushbox.net.PushBoxApi
 import cn.iamplus.pushbox.sync.SyncEngine
-import cn.iamplus.pushbox.ui.ImageCache
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -183,7 +177,6 @@ import cn.iamplus.pushbox.push.PushService
 import cn.iamplus.pushbox.push.SyncWorker
 import cn.iamplus.pushbox.ui.LocalPushBoxColors
 import cn.iamplus.pushbox.ui.PushBoxTheme
-import kotlinx.coroutines.Job
 import cn.iamplus.pushbox.App
 import cn.iamplus.pushbox.R
 
@@ -192,7 +185,14 @@ internal fun MessagesTab(identity: Identity, conversations: List<ConversationRow
     modifier: Modifier, onOpen: (ConversationRow, String?) -> Unit,
     onNavigateToChannels: (() -> Unit)? = null) {
     val app = App.get(LocalContext.current)
-    val scope = rememberCoroutineScope()
+    val vm: MessagesViewModel = viewModel(factory = MessagesViewModel.factory(app))
+    val clearError by vm.clearError.collectAsState()
+    LaunchedEffect(clearError) {
+        clearError?.let {
+            Toast.makeText(app, "本地已清空，但同步到其他设备失败：$it", Toast.LENGTH_LONG).show()
+            vm.consumeClearError()
+        }
+    }
     var menuFor by remember { mutableStateOf<ConversationRow?>(null) }
     var renameFor by remember { mutableStateOf<ConversationRow?>(null) }
     // §7.4 本地"设头像"：记住当前要设头像的会话，SAF 回来后把选中的图落到 filesDir 并写库。
@@ -202,10 +202,7 @@ internal fun MessagesTab(identity: Identity, conversations: List<ConversationRow
         val row = avatarFor
         avatarFor = null
         if (uri != null && row != null) {
-            scope.launch(Dispatchers.IO) {
-                val path = persistAvatar(app.applicationContext, row, uri)
-                if (path != null) app.dao.setAvatar(row.channelNo, row.senderId, path)
-            }
+            vm.setAvatar(row, uri)
         }
     }
 
@@ -248,22 +245,15 @@ internal fun MessagesTab(identity: Identity, conversations: List<ConversationRow
     if (menuRow != null) {
         ConversationMenu(menuRow, onDismiss = { menuFor = null },
             onTogglePin = {
-                scope.launch(Dispatchers.IO) {
-                    app.dao.setPinned(menuRow.channelNo, menuRow.senderId, !menuRow.pinned)
-                }
+                vm.togglePin(menuRow)
                 menuFor = null
             },
             onToggleMute = {
-                scope.launch(Dispatchers.IO) {
-                    app.dao.setMuted(menuRow.channelNo, menuRow.senderId, !menuRow.muted)
-                }
+                vm.toggleMute(menuRow)
                 menuFor = null
             },
             onToggleLockPrivate = {
-                scope.launch(Dispatchers.IO) {
-                    app.dao.setLockPrivate(menuRow.channelNo, menuRow.senderId,
-                        !menuRow.lockPrivate)
-                }
+                vm.toggleLockPrivate(menuRow)
                 menuFor = null
             },
             onRename = { renameFor = menuRow; menuFor = null },
@@ -271,34 +261,12 @@ internal fun MessagesTab(identity: Identity, conversations: List<ConversationRow
                 avatarPicker.launch(
                     androidx.activity.result.PickVisualMediaRequest(
                         ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-            onClear = {
-                val contextForToast = app.applicationContext
-                scope.launch(Dispatchers.IO) {
-                    // §7.3/§5.2 D13：先本地即时清空，再上报服务端以广播 scope tombstone（他端隐藏、重装不回放）；
-                    // 服务端失败不阻断本机（best-effort，与已读游标上报同策略）。
-                    app.dao.conversationMedia(menuRow.channelNo, menuRow.senderId)
-                        .forEach { ImageCache.evictMessage(it.msgId, it.mediaCount) }
-                    app.dao.clearConversation(menuRow.channelNo, menuRow.senderId)
-                    val result = runCatching {
-                        PushBoxApi(identity.baseUrl, app.http)
-                            .clearConversation(identity, menuRow.channelNo, menuRow.senderId)
-                    }
-                    result.onFailure {
-                        android.os.Handler(android.os.Looper.getMainLooper()).post {
-                            android.widget.Toast.makeText(contextForToast,
-                                "本地已清空，但同步到其他设备失败：${it.message}",
-                                android.widget.Toast.LENGTH_LONG).show()
-                        }
-                    }
-                }
-            })
+            onClear = { vm.clear(menuRow, identity) })
     }
     val renameRow = renameFor
     if (renameRow != null) {
         RenameDialog(renameRow, onDismiss = { renameFor = null }, onSave = { name ->
-            scope.launch(Dispatchers.IO) {
-                app.dao.renameConversation(renameRow.channelNo, renameRow.senderId, name)
-            }
+            vm.rename(renameRow, name)
         })
     }
 }
@@ -461,23 +429,14 @@ internal fun ConversationScreen(app: App, conversation: ConversationRow, focusMs
     var rawQuery by rememberSaveable(conversation.channelNo, conversation.senderId) {
         mutableStateOf("")
     }
-    var query by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(rawQuery) {
-        if (rawQuery.isBlank()) {
-            query = null
-        } else {
-            delay(250)
-            query = rawQuery.trim()
-        }
-    }
-    // 同上：null 是"还没读到第一帧"。Room 的第一次发射不是同步的，把空列表当结果
-    // 会让每个会话都先闪一下"还没有消息"。
-    // 键只有 query：外层 key 已经保证"换会话 = 重建"，这里再挂会话行就等于
-    // 行内容一变（看一眼就把未读清零）就重新订阅一次 Room，列表整棵拆掉重进——
-    // 那一下就是"切会话卡"里能数出来的那一帧。
-    val rowsState by remember(query) {
-        app.dao.messagesFlow(conversation.channelNo, conversation.senderId, query)
-    }.collectAsState(initial = null)
+    val vm: MessagesViewModel = viewModel(factory = MessagesViewModel.factory(app))
+    val fetching by vm.fetching.collectAsState()
+    // 外层 key 隔离会话，冷流只在详情可见时订阅，不为每个打开过的会话保留 ViewModel。
+    val result by remember(vm) {
+        vm.messages(conversation.channelNo, conversation.senderId, snapshotFlow { rawQuery })
+    }.collectAsState(initial = ConversationMessages())
+    val query = result.query
+    val rowsState = result.rows
     val rows = rowsState.orEmpty()
 
     // 告诉收消息那条链路"这一屏正开着"：它据此不弹通知、不给这条涨红点。
@@ -490,18 +449,7 @@ internal fun ConversationScreen(app: App, conversation: ConversationRow, focusMs
     // 开屏那一次就够：正在看的这条不涨红点（ViewedConversation 那道门），所以行内容
     // 后续再变也没新的要标；挂行本身等于每次变更都重发一遍已读上报。
     LaunchedEffect(conversation.channelNo, conversation.senderId) {
-        withContext(Dispatchers.IO) {
-            app.dao.markConversationRead(conversation.channelNo, conversation.senderId)
-        }
-        // 红点清了就要把通知一起撤掉，否则角标停在通知里那个旧 number 上，看着像还有三条没读
-        app.notifier.cancelConversation(conversation.channelNo, conversation.senderId)
-        // §5.2 已读游标上报：尽力而为，服务端尚未实现该端点时静默失败，本地红点照常清（不阻塞 UI）
-        val live = app.identity.load()
-        if (live != null) runCatching {
-            PushBoxApi(live.baseUrl, app.http).reportRead(live,
-                listOf(PushBoxApi.ReadEntry(conversation.channelNo, conversation.senderId,
-                    conversation.lastSeq)))
-        }
+        vm.markRead(conversation)
     }
 
     val listState = rememberLazyListState()
@@ -688,6 +636,8 @@ internal fun ConversationScreen(app: App, conversation: ConversationRow, focusMs
                                 dayKey(rows[index - 1].createdAt) != dayKey(row.createdAt)
                             MessageBubble(row, conversation.displayName, showTime = showTime,
                                 highlighted = highlightId == row.msgId,
+                                fetching = row.msgId in fetching,
+                                onFetchFulltext = { vm.fetchFulltext(row.msgId) },
                                 onClick = if (query == null) null else {
                                     {
                                         // 先关筛选；定位交给 pendingFocus，等全量那一帧回来再滚
@@ -725,17 +675,7 @@ internal fun ConversationScreen(app: App, conversation: ConversationRow, focusMs
     val target = selected
     if (target != null) {
         MessageActionSheet(target, onDismiss = { selected = null },
-            onDelete = {
-                scope.launch(Dispatchers.IO) {
-                    // 乐观本地即时隐藏（§4.4 D13），顺带把这条的图从缓存丢掉
-                    app.dao.tombstoneMessage(target.msgId)
-                        ?.let { ImageCache.evictMessage(it.msgId, it.mediaCount) }
-                    val live = app.identity.load()
-                    if (live != null) runCatching {           // 上报服务端，失败不影响本机
-                        PushBoxApi(live.baseUrl, app.http).deleteMessage(live, target.msgId)
-                    }
-                }
-            })
+            onDelete = { vm.delete(target) })
     }
 }
 
@@ -835,9 +775,8 @@ internal fun messageText(row: MessageRow): String = row.body ?: row.summary ?: r
 
 @Composable
 internal fun MessageBubble(row: MessageRow, senderName: String, showTime: Boolean = true,
-    highlighted: Boolean = false, onClick: (() -> Unit)? = null, onLong: () -> Unit) {
-    val app = App.get(LocalContext.current)
-    val scope = rememberCoroutineScope()
+    highlighted: Boolean = false, fetching: Boolean, onFetchFulltext: () -> Unit,
+    onClick: (() -> Unit)? = null, onLong: () -> Unit) {
     val colors = LocalPushBoxColors.current
     val context = LocalContext.current
     val text = messageText(row)
@@ -894,22 +833,7 @@ internal fun MessageBubble(row: MessageRow, senderName: String, showTime: Boolea
                 // §5.3 实时帧被 frame-max-bytes 削过正文：本机这条只是前缀，点一下按 id 回捞全文。
                 // 落库后 messagesFlow 会重新发射，这个按钮随 truncated 位一起消失。
                 if (row.truncated) {
-                    var fetching by remember(row.msgId) { mutableStateOf(false) }
-                    TextButton(enabled = !fetching, onClick = {
-                        scope.launch(Dispatchers.IO) {
-                            fetching = true
-                            val live = app.identity.load()
-                            val full = live?.let {
-                                runCatching {
-                                    PushBoxApi(it.baseUrl, app.http).fulltext(it, row.msgId)
-                                }.getOrNull()
-                            }
-                            full?.content?.takeIf { it.isNotBlank() }?.let {
-                                app.dao.setFulltext(row.msgId, it)
-                            }
-                            fetching = false
-                        }
-                    }) {
+                    TextButton(enabled = !fetching, onClick = onFetchFulltext) {
                         Text(stringResource(if (fetching) R.string.message_fulltext_loading
                             else R.string.message_fulltext))
                     }

@@ -39,10 +39,7 @@ internal fun parseServerUrl(url: String): ServerParts {
     )
 }
 
-/**
- * 首启表单的试点 ViewModel：状态进 StateFlow（旋转/进程重建不清空），
- * 提交走 viewModelScope（组合销毁不再打断注册请求）。后续屏幕按这个形状跟进。
- */
+// 普通 ViewModel 只保留配置变更期间的状态，不保证进程死亡后的表单恢复。
 internal class EnrollViewModel(private val app: App) : ViewModel() {
 
     val serverHost = MutableStateFlow("")

@@ -116,6 +116,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cn.iamplus.pushbox.data.MessageRow
 import cn.iamplus.pushbox.net.PushBoxApi
@@ -429,6 +430,7 @@ private fun launchBiometricUnlock(activity: FragmentActivity, onSuccess: () -> U
 private fun PushBoxRoot(deepLink: kotlinx.coroutines.flow.MutableStateFlow<Pair<String, String>?>) {
     val app = App.get(LocalContext.current)
     val scope = rememberCoroutineScope()
+    val viewModelStore = checkNotNull(LocalViewModelStoreOwner.current).viewModelStore
     var refresh by remember { mutableStateOf(0) }
     // 三态而不是"null 即没注册"：DataStore 是异步读的，把 null 直接当"还没有身份"
     // 会让每次冷启动都先画一帧注册页，然后才跳回会话列表。
@@ -481,7 +483,9 @@ private fun PushBoxRoot(deepLink: kotlinx.coroutines.flow.MutableStateFlow<Pair<
             KeepAliveGuideScreen(onDone = { app.finishKeepAliveGuide() })
         }
         else -> MainShell(live, deepLink, onLogout = {
-            // 更换服务器=重新注册：停服务、清库清身份，回到首启注册页
+            // 先卸载旧界面并取消 ViewModel 任务，再清库，避免旧身份的请求写回新会话。
+            identityReady = false
+            viewModelStore.clear()
             scope.launch {
                 PushService.stop(app)
                 SyncWorker.cancel(app)
@@ -548,7 +552,8 @@ private fun MainShell(identity: Identity,
     var openFocus by rememberSaveable { mutableStateOf<String?>(null) }
     // null 是"还没读到第一帧"，与"一条会话都没有"必须分开：
     // 冷启动时把空列表当结果，列表页会先闪一屏"还没有会话"。
-    val conversationsState by app.dao.conversations().collectAsState(initial = null)
+    val messagesVm: MessagesViewModel = viewModel(factory = MessagesViewModel.factory(app))
+    val conversationsState by messagesVm.conversations.collectAsState()
     val conversations = conversationsState.orEmpty()
     val open = remember(openChannel, openSender, openFocus, conversations) {
         val channel = openChannel
