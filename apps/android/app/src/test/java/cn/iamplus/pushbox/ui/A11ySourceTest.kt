@@ -16,8 +16,6 @@ import org.junit.Test
  */
 class A11ySourceTest {
 
-    private val main: String = sourceOf("src/main/java/cn/iamplus/pushbox/MainActivity.kt")
-
     private val strings: String = sourceOf("src/main/res/values/strings.xml")
 
     /** 工作目录可能是 app 模块（Gradle 默认），也可能是仓库根（IDE 直接跑），两处都试一遍。 */
@@ -27,11 +25,24 @@ class A11ySourceTest {
         return file.readText()
     }
 
+    /** UI 代码已拆到 MainActivity.kt 与 ui/ 下多个文件，断言要么扫全部，要么定位到函数所在文件。 */
+    private fun uiSources(): List<String> {
+        val root = listOf(
+            File("src/main/java/cn/iamplus/pushbox"),
+            File("app/src/main/java/cn/iamplus/pushbox"),
+        ).firstOrNull { it.isDirectory }
+            ?: error("找不到 UI 源码目录（工作目录 ${File(".").absolutePath}）")
+        return root.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .map { it.readText() }
+            .toList()
+    }
+
     @Test
     fun backArrowsAreAnnounced() {
         assertFalse(
             "返回箭头又变回了 contentDescription = null，读屏点上去只会说\"按钮\"",
-            main.contains("ArrowBack, contentDescription = null"),
+            uiSources().any { it.contains("ArrowBack, contentDescription = null") },
         )
         assertTrue("缺少返回键文案", strings.contains("""<string name="action_back">"""))
     }
@@ -65,10 +76,13 @@ class A11ySourceTest {
     }
 
     private fun functionBody(name: String): String {
-        val start = main.indexOf("private fun $name(")
-        require(start >= 0) { "MainActivity.kt 里找不到 $name" }
-        val end = main.indexOf("\n}\n", start)
-        require(end > start) { "$name 的结尾没找到" }
-        return main.substring(start, end)
+        for (src in uiSources()) {
+            val match = Regex("""(?:private|internal) fun $name\(""").find(src) ?: continue
+            val start = match.range.first
+            val end = src.indexOf("\n}\n", start)
+            require(end > start) { "$name 的结尾没找到" }
+            return src.substring(start, end)
+        }
+        error("UI 源码里找不到 $name")
     }
 }

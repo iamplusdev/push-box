@@ -67,6 +67,24 @@
 
 ---
 
+## 未发布 —— 三端优化第七轮：Android 大文件拆分（S7 第一阶段）
+
+> 承接第六轮（S6）。S6 收的是 Web 管理台与安装页，这一轮收 Android 端的**结构口**：MainActivity.kt 4352 行一个类装下首启注册、会话列表、对话详情、频道、设置、更新检查十几屏与全部共享小件，改一个屏幕要在整文件里找符号。第一阶段只做纯搬移，不改一行行为；ViewModel 试点（EnrollScreen）留到第二阶段。
+
+### S7 改了什么
+
+1. **MainActivity 拆五个文件**（4352 行 → 756 行，新建 `ui/screens/` 包）：EnrollScreens.kt（首启注册/恢复码）、MessagesScreens.kt（会话列表/对话详情/MdBlock）、ChannelsScreens.kt（频道页/设备行/更新）、SettingsScreens.kt（设置页/二维码/导出）、Common.kt（跨屏共享件：顶栏 PushBoxTopBar、未读行 ConversationRowView、LoadingState、connectionLabel、enroll、curlExample 等）。MainActivity.kt 只留 Activity 生命周期、App 锁、主壳 MainShell、底栏与省电提示条。
+2. **可见性收窄**：搬走的顶层声明 `private` → `internal`（跨文件共享的最小可见性）；PushBoxTopBar 不碰任何实例状态，从 MainActivity 类成员提为顶层函数，Enroll 与消息两屏共用；MainActivity.kt 只加一行通配导入。
+3. **源码守护测试跟拆分走**：A11ySourceTest / ConversationStateSourceTest 原来只读 MainActivity.kt，现在扫 ui 包全部 .kt 文件、同时认 private/internal 两种声明（否则"MainActivity.kt 里找不到 ConversationRowView"这类假失败）。
+
+### 用例
+
+- `:app:compileDebugKotlin`、`:app:assembleDebug` 通过。
+- `:app:testDebugUnitTest` 全绿（**29 run / 0 fail**）。
+- 搬移逐段 diff 校验：ConversationDetail 53 行、PushBoxTopBar 25 行、enroll 18 行区段与原文逐行一致，仅 `private` → `internal` 一处差异；MainActivity.kt 的 git diff 只有 1 行新增（通配导入），其余全是删除。
+
+---
+
 ## 未发布 —— 三端优化第三轮：品牌色统一（S3）
 
 > 承接第二轮（S2）。S2 收的是安全口，这一轮收的是三端的**颜色口**：Android、Windows、管理台、安装页四个入口各自一套绿/蓝（#07C160 / #0F7A4F / #409eff / #07c160），而"连接中"在两端都借的是离线橙——"断了要人管"和"正在自己好"同色，扫一眼分不出该等还是该管。改法是全部收敛到品牌绿 #0F7A4F，并把"连接中"拆成独立的蓝。

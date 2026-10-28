@@ -20,13 +20,17 @@ import org.junit.Test
  */
 class ConversationStateSourceTest {
 
-    private val main: String = sourceOf("src/main/java/cn/iamplus/pushbox/MainActivity.kt")
-
     /** 工作目录可能是 app 模块（Gradle 默认），也可能是仓库根（IDE 直接跑），两处都试一遍。 */
-    private fun sourceOf(relative: String): String {
-        val file = listOf(File(relative), File("app", relative)).firstOrNull { it.isFile }
-            ?: error("找不到 $relative（工作目录 ${File(".").absolutePath}）")
-        return file.readText()
+    private fun uiSources(): List<String> {
+        val root = listOf(
+            File("src/main/java/cn/iamplus/pushbox"),
+            File("app/src/main/java/cn/iamplus/pushbox"),
+        ).firstOrNull { it.isDirectory }
+            ?: error("找不到 UI 源码目录（工作目录 ${File(".").absolutePath}）")
+        return root.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .map { it.readText() }
+            .toList()
     }
 
     @Test
@@ -62,12 +66,15 @@ class ConversationStateSourceTest {
             screen.contains("nearBottom -> listState.animateScrollToItem(rows.lastIndex)"))
     }
 
-    /** 取 `private fun <name>(...)` 到它自己那一列的 `}` 为止的整段源码。 */
+    /** 取 `fun <name>(...)` 到它自己那一列的 `}` 为止的整段源码（跨拆分后的文件找）。 */
     private fun region(name: String): String {
-        val start = main.indexOf("private fun $name(")
-        require(start >= 0) { "MainActivity.kt 里找不到 $name" }
-        val end = main.indexOf("\n}\n", start)
-        require(end > start) { "$name 的结尾没找到" }
-        return main.substring(start, end)
+        for (src in uiSources()) {
+            val match = Regex("""(?:private|internal) fun $name\(""").find(src) ?: continue
+            val start = match.range.first
+            val end = src.indexOf("\n}\n", start)
+            require(end > start) { "$name 的结尾没找到" }
+            return src.substring(start, end)
+        }
+        error("UI 源码里找不到 $name")
     }
 }
