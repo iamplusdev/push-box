@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using PushBox.Windows.Data;
 using PushBox.Windows.Media;
@@ -320,6 +321,11 @@ public sealed class MainWindowTest : IDisposable
                 Assert.True(realized < total,
                     $"时间线把 {total} 条全排了（虚拟化没生效）");
                 Assert.True(realized <= 40, $"看得见的行数不该是 {realized}");
+                // 光"屏外不排版"还不够：行本身是数据、由模板按需建，屏外的条目才连气泡都不存在。
+                // 回到 Items.Add(建好的控件) 那种写法时这里会掉到 0——那时整条历史又被建了一遍
+                var built = window.TimelineBuiltProbe;
+                Assert.True(built > 0, "一行控件都没建出来：行模板没挂上");
+                Assert.True(built <= realized, $"建出来的行 {built} 比生成出来的容器 {realized} 还多");
                 // 打开会话仍然从最新一条看起
                 Assert.True(window.TimelineFromBottomProbe <= 1,
                     $"没贴底：离底还有 {window.TimelineFromBottomProbe}");
@@ -340,6 +346,150 @@ public sealed class MainWindowTest : IDisposable
 
         thread.Start();
         Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "虚拟化用例没有按时跑完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    /// <summary>
+    /// 重画一次不换集合、也不重建行。原来每次 Refresh 都 <c>Items.Clear()</c> 再逐条建控件，
+    /// 面板收到的是 Reset：滚动位置、拖选、已经取到的图一起没，屏幕还会先弹回顶部。
+    /// 现在行是数据、由模板按需建，所以"同一份集合 + 同一批容器"就是这一步真正的判据。
+    /// </summary>
+    [Fact]
+    public void ARepaintKeepsTheTimelineCollectionAndItsRowsInPlace()
+    {
+        for (var seq = 1; seq <= 200; seq++) _db.ApplyMessage(Msg(seq, "m" + seq, Grafana));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new MainWindow(_db, _identities,
+                    new ReadReporter(_db, _identities, Offline()),
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader())
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = -10000,
+                    Top = -10000,
+                    ShowActivated = false
+                };
+                window.Show();
+                Sta.PumpUntil(() => window.IsLoaded);
+                window.OpenConversation(Channel, Grafana);
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0
+                                    && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(100);
+
+                var count = window.TimelineItemCountProbe;
+                var source = window.TimelineSourceProbe;
+                var container = FirstRealizedContainer(window);
+                Assert.NotNull(container);
+
+                window.Repaint();
+                Sta.PumpFor(100);
+
+                Assert.Same(source, window.TimelineSourceProbe);
+                Assert.Equal(count, window.TimelineItemCountProbe);
+                // 容器还是那一个：整份换掉时面板会把这批容器全部丢掉重生成
+                Assert.Same(container, FirstRealizedContainer(window));
+                Assert.True(window.TimelineFromBottomProbe <= 1,
+                    $"重画一次就离底 {window.TimelineFromBottomProbe}——时间线被整条重建了");
+
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "重画一次没有按时跑完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    /// <summary>
+    /// 往上翻到顶会补进来一页历史。新的一页<b>插在前面</b>，上面长出来的那段高度必须补进偏移，
+    /// 正在读的那条才不会被推到视野外——判据就是"补完之后屏上第一条还是刚才那条"。
+    /// 顺带钉住补页不换集合：整份换掉的话滚动位置只能靠猜，而这正是它要靠容器去校的原因。
+    /// </summary>
+    [Fact]
+    public void AnEarlierPageKeepsTheReaderInPlaceInsteadOfSnappingToTheTop()
+    {
+        for (var seq = 1; seq <= 200; seq++) _db.ApplyMessage(Msg(seq, "m" + seq, Grafana));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new MainWindow(_db, _identities,
+                    new ReadReporter(_db, _identities, Offline()),
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader())
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = -10000,
+                    Top = -10000,
+                    ShowActivated = false
+                };
+                window.Show();
+                Sta.PumpUntil(() => window.IsLoaded);
+                window.OpenConversation(Channel, Grafana);
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0
+                                    && window.TimelineFromBottomProbe <= 1);
+                // 落底之后还有两轮布局才把"这一屏摆好了"标上，翻页判定要等那一下
+                Sta.PumpFor(100);
+
+                var scroller = Scroller(window);
+                var before = window.TimelineItemCountProbe;
+                var source = window.TimelineSourceProbe;
+
+                // 先退一格（这时候还不该翻页），记下摆在最上面的是哪一条、离视口顶多远
+                scroller.ScrollToVerticalOffset(1);
+                Sta.PumpFor(100);
+                Assert.Equal(before, window.TimelineItemCountProbe);
+                var top = FirstRealizedId(window);
+                Assert.NotNull(top);
+                var anchorTop = TopOf(window, top!, scroller);
+                Assert.NotNull(anchorTop);
+
+                scroller.ScrollToVerticalOffset(0);
+                Sta.PumpUntil(() => window.TimelineItemCountProbe > before);
+                // 补页之后要几轮布局才摆稳，视角是那几轮里钉住的
+                Sta.PumpFor(300);
+
+                Assert.Same(source, window.TimelineSourceProbe);
+                Assert.True(scroller.VerticalOffset > 0,
+                    $"补了一页，偏移却是 {scroller.VerticalOffset}——正在读的那条被推到视野外了");
+                var settled = TopOf(window, top!, scroller);
+                Assert.True(settled is not null,
+                    $"补页之后 {top} 连容器都没有了：off={scroller.VerticalOffset}");
+                // 基准是在偏移 1 处量的，翻页发生在偏移 0，两者本来就差一个像素
+                Assert.True(Math.Abs(settled!.Value - anchorTop!.Value) <= 2,
+                    $"{top} 原来在 {anchorTop}，补完跑到 {settled}——那一页把它推走了");
+
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "往上补一页没有按时跑完");
         Assert.True(failure is null, failure?.ToString());
     }
 
@@ -673,6 +823,63 @@ public sealed class MainWindowTest : IDisposable
         thread.Start();
         Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "读会话行模板没有按时完成");
         Assert.True(failure is null, failure?.ToString());
+    }
+
+    /// <summary>时间线那根滚动条住在 ItemsControl 的模板里（虚拟化要求它自己就是内容的宿主），只能顺可视树找。</summary>
+    private static ScrollViewer Scroller(MainWindow window) =>
+        Find<ScrollViewer>((DependencyObject)window.FindName("Timeline")!)
+        ?? throw new InvalidOperationException("时间线模板里没有滚动条");
+
+    private static T? Find<T>(DependencyObject root) where T : DependencyObject
+    {
+        if (root is T hit) return hit;
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            if (Find<T>(VisualTreeHelper.GetChild(root, i)) is { } found) return found;
+        }
+
+        return null;
+    }
+
+    /// <summary>屏上第一条真的排出来的那一条的容器（虚拟化下只有视口附近有）。</summary>
+    private static FrameworkElement? FirstRealizedContainer(MainWindow window)
+    {
+        var timeline = (ItemsControl)window.FindName("Timeline")!;
+        for (var i = 0; i < timeline.Items.Count; i++)
+        {
+            if (timeline.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement row) return row;
+        }
+
+        return null;
+    }
+
+    /// <summary>屏上第一条消息是哪一条——补页前后它不变，才算视角没被推走。</summary>
+    private static string? FirstRealizedId(MainWindow window)
+    {
+        var timeline = (ItemsControl)window.FindName("Timeline")!;
+        for (var i = 0; i < timeline.Items.Count; i++)
+        {
+            if (timeline.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement { DataContext: MessageItem m })
+                return m.MsgId;
+        }
+
+        return null;
+    }
+
+    /// <summary>某一条消息的容器相对视口顶纵坐标；它没被生成出来就是 null。</summary>
+    private static double? TopOf(MainWindow window, string msgId, ScrollViewer scroller)
+    {
+        var timeline = (ItemsControl)window.FindName("Timeline")!;
+        for (var i = 0; i < timeline.Items.Count; i++)
+        {
+            if (timeline.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement { DataContext: MessageItem m } row
+                && m.MsgId == msgId)
+            {
+                return row.TranslatePoint(new Point(0, 0), scroller).Y;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>把窗口建在给定"服务端"上：三个上报者共用同一个 handler，用例数请求时不必区分是谁发的。</summary>

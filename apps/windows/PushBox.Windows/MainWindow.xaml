@@ -313,6 +313,14 @@
                                 <VirtualizingStackPanel Orientation="Vertical" />
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
+                        <!-- 行是"数据"而不是"建好的控件"：屏外的条目因此连气泡都没有，只有面板生成出来的
+                             那几行才走 TimelineRow 建一棵树。配置从窗口上取（换主题才换一份） -->
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <controls:TimelineRow Item="{Binding}"
+                                    Config="{Binding RowConfig, RelativeSource={RelativeSource AncestorType={x:Type Window}}}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
                         <ItemsControl.ItemContainerStyle>
                             <Style TargetType="FrameworkElement">
                                 <Setter Property="Margin" Value="0,0,0,8" />

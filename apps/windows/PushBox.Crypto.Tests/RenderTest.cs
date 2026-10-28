@@ -1049,3 +1049,83 @@ public class AvatarTest
         return path;
     }
 }
+
+/// <summary>
+/// 时间线的行模板（§8.1）：<c>ItemsSource</c> + <see cref="TimelineRow"/> 之后，屏外的条目只是一个数据对象，
+/// 建控件这一步挪进了模板。所以这里断的是"数据到了才建、建出来的正是这一条该有的样子"。
+/// </summary>
+public class TimelineRowTest
+{
+    private static readonly MarkdownStyle Style = Paint.Style();
+
+    private static MessageItem Item(string text = "正文", int mediaCount = 0, string? link = null) =>
+        new("01HXYZ", 7, "ch", "sender", text, "info", null, 1_700_000_000_000, mediaCount, null, link);
+
+    /// <summary>行要的那几样：这里只关心"建出来的是哪一支"，取字节与动作都给空。</summary>
+    private static TimelineConfig Config(UIElement? media = null) => new(Style,
+        _ => media, null, null,
+        new MessageCommands(_ => { }, _ => { }, _ => { }, _ => { }));
+
+    [Fact]
+    public void AMessageRowIsABubbleAndADateRowIsADivider()
+    {
+        Sta.Run(() =>
+        {
+            var config = Config();
+
+            // 消息走气泡：三列 Grid（头像 / 间距 / 气泡），和 BubbleView 的契约一致
+            var bubble = Assert.IsType<Grid>(config.Build(Item()));
+            Assert.Equal(3, bubble.ColumnDefinitions.Count);
+            Assert.Equal(HorizontalAlignment.Left, bubble.HorizontalAlignment);
+
+            // 日期头是居中的那行灰字，不是气泡
+            var divider = Assert.IsType<Grid>(config.Build(new DateDivider("2026年10月28日")));
+            Assert.Equal("2026年10月28日", Assert.IsType<TextBlock>(divider.Children[0]).Text);
+            Assert.Same(Style.Muted, ((TextBlock)divider.Children[0]).Foreground);
+        });
+    }
+
+    /// <summary>两样缺一样就不该建：绑定落地顺序不定，谁后到谁触发，早到的那一半不能先建一棵空树。</summary>
+    [Fact]
+    public void TheRowWaitsForBothTheItemAndTheConfig()
+    {
+        Sta.Run(() =>
+        {
+            var row = new TimelineRow { Item = Item() };
+            Assert.Null(row.Child);
+
+            row = new TimelineRow { Config = Config() };
+            Assert.Null(row.Child);
+
+            row.Item = Item();
+            Assert.NotNull(row.Child);
+            row.Config = null;
+            Assert.Null(row.Child);
+        });
+    }
+
+    /// <summary>
+    /// 回收模式下同一个行实例会被换上下一条数据，所以 <see cref="TimelineRow.Item"/> 一变就得重建——
+    /// 菜单也跟着这一条走：纯图那一条不该留着上一条"复制正文"的项。
+    /// </summary>
+    [Fact]
+    public void RecyclingARowBuildsTheNextMessageInsteadOfKeepingTheFirst()
+    {
+        Sta.Run(() =>
+        {
+            var row = new TimelineRow { Config = Config(), Item = Item("有正文") };
+            var first = (FrameworkElement)row.Child!;
+            Assert.Contains(BubbleView.CopyTextTag, Tags(first));
+
+            row.Item = Item(text: string.Empty, mediaCount: 1);
+            Assert.NotSame(first, row.Child);
+            var next = (FrameworkElement)row.Child!;
+            Assert.Contains(BubbleView.CopyImageTag, Tags(next));
+            Assert.DoesNotContain(BubbleView.CopyTextTag, Tags(next));
+        });
+    }
+
+    private static List<string> Tags(FrameworkElement node) =>
+        node.ContextMenu?.Items.OfType<MenuItem>().Select(item => item.Tag as string ?? string.Empty).ToList()
+        ?? new List<string>();
+}

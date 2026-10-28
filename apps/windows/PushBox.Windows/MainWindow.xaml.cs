@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
@@ -38,8 +39,8 @@ public partial class MainWindow : Window
     /// <summary>时间线是不是停在底部：只有停在底部才有"来新消息就跟到底"的语义，正在翻历史时不该被拽走。</summary>
     private bool _stuckToBottom = true;
 
-    /// <summary>刚往上翻出一页历史：下一次布局要把多出来的那段高度补回滚动位置。</summary>
-    private bool _restoringScroll;
+    /// <summary>刚往上翻出一页历史、这一屏还在重新摆位：这时候的偏移和"贴不贴底"都作不得数。</summary>
+    private bool _holding;
 
     /// <summary>这一屏的首次布局已经落到底了。落底之前不许按"到顶了"翻页——
     /// 虚拟化面板刚开始排的时候偏移还在 0，那不是用户在翻历史，是这一屏还没摆好。</summary>
@@ -47,6 +48,12 @@ public partial class MainWindow : Window
 
     /// <summary>没贴在底部时落进来的新消息数（§9.3 的胶囊），回到底部就清零。</summary>
     private int _newBelow;
+
+    /// <summary>时间线那一份行数据（<see cref="SyncTimeline"/> 往后补的就是它）。</summary>
+    private ObservableCollection<TimelineItem>? _rows;
+
+    /// <summary>行模板那一份配置。换主题才会换（<see cref="ConfigFor"/>）。</summary>
+    private TimelineConfig? _rowConfig;
 
     /// <summary>会话列表那一栏的宽度。默认 260，用户拖过手柄之后记住拖到的值——
     /// <see cref="ApplyPaneWidth"/> 每次窗口尺寸变化都会重摆列宽，不回记就会把用户拖的宽度抹掉。</summary>
@@ -205,6 +212,24 @@ public partial class MainWindow : Window
     public double TimelineFromBottomProbe => TimelineScroll is { } scroller
         ? scroller.ScrollableHeight - scroller.VerticalOffset
         : 0;
+
+    /// <summary>
+    /// 可视树里一共几行（<see cref="TimelineRow"/>）。行是模板按需建的，所以这个数只跟视口走；
+    /// 它要是跟着条目总数走，说明"建控件"又回到了换数据的那一趟里。
+    /// </summary>
+    public int TimelineBuiltProbe => CountRows(Timeline);
+
+    private static int CountRows(DependencyObject root)
+    {
+        var count = root is TimelineRow ? 1 : 0;
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            count += CountRows(VisualTreeHelper.GetChild(root, i));
+        return count;
+    }
+
+    /// <summary>时间线背后那一份行数据。重画时整份换掉的话这个实例会换一个——
+    /// 面板收到的是 Reset，滚动位置、拖选、已经取到的图跟着一起没。</summary>
+    public object? TimelineSourceProbe => Timeline.ItemsSource;
 
     public Visibility NoConversationProbe => NoConversationBar.Visibility;
     public Visibility BackButtonProbe => BackButton.Visibility;
@@ -456,22 +481,6 @@ public partial class MainWindow : Window
         _ => null
     };
 
-    /// <summary>
-    /// 气泡右键菜单在这里接上：菜单的形状在 <see cref="BubbleView.ContextMenuFor"/>（能在 STA 用例里直接断），
-    /// 四件事落在这里——复制只写剪贴板，删除走二次确认与上报。
-    /// 菜单归气泡根节点，但"复制正文"该复制哪一段只有正文自己知道：拖选了一段就复制那段，
-    /// 没选才复制整条（菜单项文字也跟着改，见 <see cref="BubbleView.ContextMenuFor"/>）。
-    /// </summary>
-    private void AttachMessageMenu(FrameworkElement node, MessageItem item)
-    {
-        var body = BubbleView.SelectableOf(node);
-        node.ContextMenu = BubbleView.ContextMenuFor(item, new MessageCommands(
-            CopyText: CopyText,
-            CopyImage: id => _ = CopyImageAsync(id),
-            CopyLink: CopyText,
-            Delete: id => _ = DeleteMessageFromUiAsync(id)), () => body?.SelectedText);
-    }
-
     /// <summary>复制这一条的文字。剪贴板被别的进程攥着时 <c>SetText</c> 会抛，而这行字本来就在屏幕上，
     /// 抄得走就不值得为它弹一个框（与设置页那份 <c>CopyToClipboard</c> 同一个口径）。</summary>
     private static void CopyText(string text)
@@ -701,28 +710,38 @@ public partial class MainWindow : Window
         ConversationEmptyButton.Tag = empty.Action;
     }
 
+    /// <summary>
+    /// 把时间线那一份行数据同步成 <paramref name="next"/>：头尾相同的都留着，只换中间那段。
+    /// 来新消息于是只是尾部追加，往上补一页只是头部插入，两种都不动整条集合——
+    /// 整份换掉的代价不只是重建所有行，连"正在读的是哪一条"也会一起丢掉。
+    /// </summary>
+    private void SyncTimeline(IReadOnlyList<TimelineItem> next)
+    {
+        if (_rows is not { } rows)
+        {
+            Timeline.ItemsSource = _rows = new ObservableCollection<TimelineItem>(next);
+            return;
+        }
+
+        // 行都是 record：值相等就是"这一行没变"，不必拿引用去猜
+        var head = 0;
+        while (head < rows.Count && head < next.Count && Equals(rows[head], next[head])) head++;
+        var tail = 0;
+        while (tail < rows.Count - head && tail < next.Count - head
+               && Equals(rows[rows.Count - 1 - tail], next[next.Count - 1 - tail])) tail++;
+
+        var gone = rows.Count - head - tail;
+        var added = next.Count - head - tail;
+        for (var i = 0; i < gone; i++) rows.RemoveAt(head);
+        for (var i = 0; i < added; i++) rows.Insert(head + i, next[head + i]);
+    }
+
     private void RenderTimeline(MarkdownStyle style)
     {
         var items = _model.Timeline();
-        Timeline.Items.Clear();
-        foreach (var item in items)
-        {
-            var node = item switch
-            {
-                DateDivider divider => BubbleView.Divider(divider.Label, style),
-                MessageItem message => BubbleView.Build(message, style, MediaOf(message, style), OpenLink,
-                    id => _ = _model.ExpandAsync(id)),
-                _ => new TextBlock()
-            };
-            // §9.3 在 PC 上的落点：手机是左滑/长按，PC 是右键。删除是危险动作，所以只有菜单这一条入口，
-            // 不加键盘快捷键——按错一下就把一条消息删掉的代价比少按一次鼠标大得多
-            if (item is MessageItem target)
-            {
-                AttachMessageMenu(node, target);
-            }
-
-            Timeline.Items.Add(node);
-        }
+        // 配置先摆好再换数据：换上去的那一趟就按它建行，晚一步的话新行拿到的还是旧主题那份画刷
+        RowConfig = ConfigFor(style);
+        SyncTimeline(items);
 
         var opened = _model.Selected is not null;
         NoConversationBar.Visibility = opened ? Visibility.Collapsed : Visibility.Visible;
@@ -732,6 +751,31 @@ public partial class MainWindow : Window
         TimelineEmpty.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
         if (empty) PaintTimelineEmpty(_model.TimelineEmptyState);
     }
+
+    /// <summary>
+    /// 行模板要的那份配置（见 <see cref="TimelineConfig"/>）。它只跟主题走：会话、滚动、未读都不在里面，
+    /// 所以一轮里同一份能一直用下去。做成窗口的属性而不是每次直接塞给模板，是因为行是靠绑定取的——
+    /// 换主题那一刻得能通知到已经建好的那几行。
+    /// </summary>
+    public static readonly DependencyProperty RowConfigProperty = DependencyProperty.Register(
+        nameof(RowConfig), typeof(TimelineConfig), typeof(MainWindow), new PropertyMetadata(null));
+
+    public TimelineConfig? RowConfig
+    {
+        get => (TimelineConfig?)GetValue(RowConfigProperty);
+        set => SetValue(RowConfigProperty, value);
+    }
+
+    private TimelineConfig ConfigFor(MarkdownStyle style) =>
+        _rowConfig is { } cached && ReferenceEquals(cached.Style, style)
+            ? cached
+            : _rowConfig = new TimelineConfig(style, item => MediaOf(item, style), OpenLink,
+                id => _ = _model.ExpandAsync(id),
+                new MessageCommands(
+                    CopyText: CopyText,
+                    CopyImage: id => _ = CopyImageAsync(id),
+                    CopyLink: CopyText,
+                    Delete: id => _ = DeleteMessageFromUiAsync(id)));
 
     private void PaintTimelineEmpty(MainModel.EmptyState empty)
     {
@@ -808,11 +852,14 @@ public partial class MainWindow : Window
     {
         var scroller = TimelineScroll;
         if (scroller is null) return;
+        // 冒泡上来的还有气泡正文里那几个自己的 ScrollViewer（每颗都报 ext==vh==46），
+        // 照单全收就会把它们的"高度变化"一笔笔加到时间线的偏移上。只认时间线自己那根
+        if (!ReferenceEquals(e.OriginalSource, scroller)) return;
 
-        // 往上翻历史刚补了一页：把新长出来的那段高度补回偏移，眼睛盯着的那条消息才不会被推走
-        if (_restoringScroll && e.ExtentHeightChange > 0)
+        // 补页那几帧是在给这一屏重新找位置，不是用户在滚：每长高多少就把偏移推多少，
+        // 盯着的那一条才留在原地。这一段里"到顶了"和"贴不贴底"都不作数
+        if (_holding)
         {
-            _restoringScroll = false;
             scroller.ScrollToVerticalOffset(scroller.VerticalOffset + e.ExtentHeightChange);
             return;
         }
@@ -828,8 +875,94 @@ public partial class MainWindow : Window
         // 这一屏还没摆好就先别翻页：虚拟化面板在首次布局时偏移本来就是 0，那不是"用户翻到顶了"
         if (!_timelineSettled) return;
         if (e.VerticalOffset > 0 || e.ExtentHeight <= e.ViewportHeight) return;
-        if (!_model.LoadEarlier()) return;
-        _restoringScroll = true;
+        var first = FirstRealized(scroller);
+        if (first is null) return;
+
+        // 旗子要在补页**之前**降下来：插进去那一下随即就会长出高度并回抛 ScrollChanged，
+        // 那几帧正是要靠它把偏移跟着推下去的
+        _holding = true;
+        if (!_model.LoadEarlier())
+        {
+            _holding = false;
+            return;
+        }
+
+        // 已经开始往回翻历史了，怎么算都不在底部
+        _stuckToBottom = false;
+        _ = HoldAnchorAsync(first.Value.Item, first.Value.Top);
+    }
+
+    /// <summary>
+    /// 屏上第一条真的排出来的消息，连同它在视口里的纵坐标——补页之后要把它放回这个高度。
+    /// 只认消息：日期头的位置是"这一天从哪开始"算出来的，它本来就该跟着新的历史留在最上面。
+    /// </summary>
+    private (MessageItem Item, double Top)? FirstRealized(ScrollViewer scroller)
+    {
+        for (var i = 0; i < Timeline.Items.Count; i++)
+        {
+            if (Timeline.Items[i] is not MessageItem item) continue;
+            if (Timeline.ItemContainerGenerator.ContainerFromIndex(i) is not FrameworkElement row) continue;
+            return (item, row.TranslatePoint(new Point(0, 0), scroller).Y);
+        }
+
+        return null;
+    }
+
+    /// <summary>按消息号找回那一行的容器：这一行自己的数据会变（补进来的新消息可能把它那条时间戳吃掉），
+    /// 所以记录本身认不出来，能认的只有 <see cref="MessageItem.MsgId"/>。</summary>
+    private FrameworkElement? RowOf(string msgId)
+    {
+        for (var i = 0; i < Timeline.Items.Count; i++)
+        {
+            if (Timeline.Items[i] is MessageItem m && m.MsgId == msgId
+                && Timeline.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement row)
+            {
+                return row;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 插在头部的那些行是分批量出来的：一次 <see cref="ScrollChangedEventArgs.ExtentHeightChange"/>
+    /// 只报一小截（先报估出来的一行，隔几轮才报整页），所以补一次就收工的话，
+    /// 真正的增高会落在旗子已经降下之后。这里在 <see cref="_holding"/> 期间等布局走稳，
+    /// 再按锚点那一行在视口里的实际高度校掉残差——长得不是"要高出来那一段"的部分（比如某一行
+    /// 的高度自己变了）只有靠它才量得准。
+    /// 连着几轮"既没长高、锚点也没动"才收旗：面板把估值换成实测值时总高度可以不变，但位置会挪。
+    /// </summary>
+    private async Task HoldAnchorAsync(MessageItem anchor, double anchorTop)
+    {
+        try
+        {
+            var quiet = 0;
+            for (var round = 0; round < 12 && quiet < 3; round++)
+            {
+                await Dispatcher.Yield(DispatcherPriority.Loaded);
+                var scroller = TimelineScroll;
+                if (scroller is null) return;
+                if (RowOf(anchor.MsgId) is not { } row)
+                {
+                    quiet++;
+                    continue;
+                }
+
+                var moved = row.TranslatePoint(new Point(0, 0), scroller).Y - anchorTop;
+                if (Math.Abs(moved) < 0.5)
+                {
+                    quiet++;
+                    continue;
+                }
+
+                quiet = 0;
+                scroller.ScrollToVerticalOffset(scroller.VerticalOffset + moved);
+            }
+        }
+        finally
+        {
+            _holding = false;
+        }
     }
 
     /// <summary>换一屏（打开会话、切会话、点胶囊）：回到最新一条，上一屏的"新消息"数不带过来。</summary>
