@@ -288,7 +288,8 @@ class Notifier(private val context: Context) {
         when (level) {
             "error" -> "#D93025"
             "warning" -> "#B06900"
-            else -> "#07C160"
+            // 通知小图标的着色点：跟随三端品牌绿（原来那个 #07C160 是已退役的主色）
+            else -> "#0F7A4F"
         })
 
     /**

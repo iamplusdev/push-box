@@ -5,6 +5,7 @@ import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import 'element-plus/dist/index.css'
 // 必须排在 Element 之后：两边都是 :root 上的自定义属性，同权重时后写的赢
 import './styles/typography.css'
+import './styles/colors.css'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 
 import App from './App.vue'

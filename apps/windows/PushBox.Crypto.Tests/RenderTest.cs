@@ -955,7 +955,7 @@ public class AvatarTest
     [Fact]
     public void ThePaletteIsTheSixColorsAndroidUses()
     {
-        Assert.Equal(new[] { 0x07C160, 0x198CFF, 0xFA5151, 0xB06900, 0x7B61FF, 0x00B3A7 },
+        Assert.Equal(new[] { 0x0F7A4F, 0x198CFF, 0xFA5151, 0xB06900, 0x7B61FF, 0x00B3A7 },
             AvatarVisual.Palette.Select(c => c.R << 16 | c.G << 8 | c.B).ToArray());
     }
 

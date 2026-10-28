@@ -679,12 +679,12 @@ public sealed class MainModel
 
     public DeviceIdentity Identity() => _identities.Load();
 
-    /// <summary>顶栏那颗点与那两个字用的颜色 token：在线绿、断链橙、要人处理的红、还没启动灰。
-    /// 三种状态靠颜色一眼分开，比靠读字快——用户扫一眼左下角就知道该不该管。</summary>
+    /// <summary>顶栏那颗点与那两个字用的颜色 token：在线绿、连接中蓝、断链橙、要人处理的红、还没启动灰。
+    /// 四种状态靠颜色一眼分开，比靠读字快——用户扫一眼左下角就知道该不该管。</summary>
     public static string StateToken(SyncState state) => state switch
     {
         SyncState.Online => "Accent",
-        SyncState.Connecting => "State.Offline",
+        SyncState.Connecting => "State.Connecting",
         SyncState.Offline => "State.Offline",
         SyncState.Blocked => "Level.Error",
         _ => "Fg.Secondary"

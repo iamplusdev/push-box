@@ -29,8 +29,8 @@ data class PushBoxColors(
     val textPrimary: Color,
     val levelError: Color,
     val levelWarning: Color,
-    val levelInfo: Color,
     val offline: Color,
+    val connecting: Color,
     val unreadBadge: Color,
 )
 
@@ -44,8 +44,11 @@ private val LightPushBoxColors = PushBoxColors(
     textPrimary = Color(0xFF161415),
     levelError = Color(0xFFF5222D),
     levelWarning = Color(0xFFFF8C00),
-    levelInfo = Color(0xFF757575),
-    offline = Color(0xFFFF8C00),
+    // 连接状态字要压在 #EDEDED 的顶栏上：#FF8C00 只有 2.0:1 读不清，#A65300 是 4.65:1，
+    // 肉眼看仍是同一个橙。
+    offline = Color(0xFFA65300),
+    // 连接中与 PC 的 State.Connecting 同值同语义：#1A73E8 在 #EDEDED 顶栏上只有 3.9:1，#155FBD 是 5.3:1。
+    connecting = Color(0xFF155FBD),
     // 未读气泡是白字，底色就得压到能让白字站住：#F5222D 上白字只有 4.1:1，
     // 12sp 的小字不够 AA；#D32F2F 是 4.98:1，肉眼看还是同一个红。
     unreadBadge = Color(0xFFD32F2F),
@@ -61,8 +64,9 @@ private val DarkPushBoxColors = PushBoxColors(
     textPrimary = Color(0xFFE0E0E0),
     levelError = Color(0xFFFF5252),
     levelWarning = Color(0xFFFFB74D),
-    levelInfo = Color(0xFF9E9E9E),
     offline = Color(0xFFFFA726),
+    // 与 PC 的 State.Connecting 同值：#1A73E8 在 #141414 顶栏上只有 4.1:1，#5B9BEF 是 6.5:1。
+    connecting = Color(0xFF5B9BEF),
     // 同上：#FF4D4F 上白字只有 3.3:1；#C62828 是 5.6:1，且在 #1F1F1F 的会话行上仍分得出来。
     unreadBadge = Color(0xFFC62828),
 )

@@ -1206,12 +1206,13 @@ onMounted(() => {
 .variable-tag {
   cursor: pointer;
   color: var(--el-color-primary);
-  background: #eef4ff;
-  border-color: #d6e4ff;
+  /* 品牌绿的同族浅底（与 colors.css 的 light-7/9 同值）：原来 #eef4ff 是 Element 蓝的浅底 */
+  background: #e7f2ed;
+  border-color: #b7d7ca;
 }
 
 .variable-tag:hover {
-  background: #e0ebff;
+  background: #cfe4dc;
   border-color: var(--el-color-primary);
 }
 

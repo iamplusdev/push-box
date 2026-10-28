@@ -4167,14 +4167,14 @@ private fun rememberCopyAction(value: String): () -> Unit {
 /** 顶栏与设置页共用：把 SyncEngine 状态翻译成"已连接/连接中/未连接" + 颜色。 */
 @Composable
 private fun connectionLabel(state: SyncEngine.State): Pair<String, Color> {
-    val offlineColor = LocalPushBoxColors.current.offline
+    val pbColors = LocalPushBoxColors.current
     return when (state) {
         is SyncEngine.State.Online ->
             stringResource(R.string.state_connected) to MaterialTheme.colorScheme.primary
         is SyncEngine.State.Offline ->
-            stringResource(R.string.state_disconnected) to offlineColor
+            stringResource(R.string.state_disconnected) to pbColors.offline
         else ->
-            stringResource(R.string.state_connecting) to offlineColor
+            stringResource(R.string.state_connecting) to pbColors.connecting
     }
 }
 
@@ -4283,9 +4283,10 @@ private fun Avatar(name: String, avatarPath: String? = null, senderId: String? =
     }
 }
 
-/** 与 PC 的 AvatarVisual.Palette 逐值对齐：同名会话在两个屏上必须同色。 */
+/** 与 PC 的 AvatarVisual.Palette 逐值对齐：同名会话在两个屏上必须同色。
+ * 第一格从 #07C160 收进品牌绿 #0F7A4F：首字是白字，#07C160 上只有 2.4:1，#0F7A4F 是 5.4:1。 */
 private val AVATAR_PALETTE = listOf(
-    Color(0xFF07C160), Color(0xFF198CFF), Color(0xFFFA5151),
+    Color(0xFF0F7A4F), Color(0xFF198CFF), Color(0xFFFA5151),
     Color(0xFFB06900), Color(0xFF7B61FF), Color(0xFF00B3A7),
 )
 

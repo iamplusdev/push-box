@@ -41,6 +41,9 @@
     <!-- 分割线要比菜单底/卡片底都深一档：与 Bg.Elevated 同值时，菜单栏的右边框直接消失 -->
     <SolidColorBrush x:Key="Divider" Color="#CFCFCF" />
     <SolidColorBrush x:Key="State.Offline" Color="#FF8C00" />
+    <!-- 连接中是第四态，不再复用离线橙：橙留给"断了要人管"，蓝留给"正在自己好"。
+         连接中那两个字要压在 #FAFAFA 的顶栏上，#1A73E8 只有 4.3:1，#155FBD 是 5.9:1 -->
+    <SolidColorBrush x:Key="State.Connecting" Color="#155FBD" />
     <SolidColorBrush x:Key="Level.Error" Color="#F5222D" />
     <SolidColorBrush x:Key="Level.Warning" Color="#FF8C00" />
     <SolidColorBrush x:Key="Level.Info" Color="#757575" />

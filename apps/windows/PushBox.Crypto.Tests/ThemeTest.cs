@@ -98,6 +98,8 @@ public class ThemeTest
         ["Badge.Unread"] = "#F5222D",
         ["Divider"] = "#CFCFCF",
         ["State.Offline"] = "#FF8C00",
+        // 连接中与离线分开：橙留给"断了要人管"，蓝留给"正在自己好"（#155FBD 在 #FAFAFA 上 5.9:1）
+        ["State.Connecting"] = "#155FBD",
         ["Level.Error"] = "#F5222D",
         ["Level.Warning"] = "#FF8C00",
         ["Level.Info"] = "#757575",
@@ -141,6 +143,8 @@ public class ThemeTest
         ["Badge.Unread"] = "#FF4D4F",
         ["Divider"] = "#333333",
         ["State.Offline"] = "#FFA726",
+        // 深底上连接中的蓝要变亮：原始 #1A73E8 在 #1A1A1A 上只有 3.9:1，#5B9BEF 是 6.1:1
+        ["State.Connecting"] = "#5B9BEF",
         ["Level.Error"] = "#FF5252",
         ["Level.Warning"] = "#FFB74D",
         ["Level.Info"] = "#9E9E9E",

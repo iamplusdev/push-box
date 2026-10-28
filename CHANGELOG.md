@@ -9,6 +9,24 @@
 
 ---
 
+## 未发布 —— 三端优化第三轮：品牌色统一（S3）
+
+> 承接第二轮（S2）。S2 收的是安全口，这一轮收的是三端的**颜色口**：Android、Windows、管理台、安装页四个入口各自一套绿/蓝（#07C160 / #0F7A4F / #409eff / #07c160），而"连接中"在两端都借的是离线橙——"断了要人管"和"正在自己好"同色，扫一眼分不出该等还是该管。改法是全部收敛到品牌绿 #0F7A4F，并把"连接中"拆成独立的蓝。
+
+### S3 改了什么
+
+1. **品牌绿 #0F7A4F 全端收敛**：Windows 与 Android 的头像板第一格从 #07C160 换 #0F7A4F（白字 5.4:1，原来只有 2.4:1；两端六色仍逐值对齐，同名会话两端同色不变）；Android 通知小图标着色点跟进；安装页 `--accent`/`--accent-dark` 换 #0F7A4F/#0C623F；管理台覆盖 Element 主色系（`--el-color-primary` 与 light-3..9/dark-2 按 Element 混色公式从主色推出，只改主色的话 hover/disabled 的浅色底还停在蓝族），Dashboard 图表柱、定时任务变量 chips 的蓝族浅底（#eef4ff 系 → 绿族 light-7/8/9 同值）、登录页紫蓝渐变 → 品牌绿渐变一起收。
+2. **"连接中"拆成第四态**：原来 Windows 的 `StateToken(Connecting)` 返回 State.Offline、Android 的 `connectionLabel` else 分支也借离线橙。现在 Windows 新增 `State.Connecting` token（浅 #155FBD / 深 #5B9BEF），Android `PushBoxColors` 加 `connecting` 字段。计划初稿的 #1A73E8 被实测否掉（浅底 4.3:1、深底 3.9:1 均不到 4.5——那是命中高亮的专用蓝，靠加粗说话，不适合当状态字）。改值后的实测：Windows 浅顶栏 #FAFAFA 上 #155FBD 5.9:1、深 #1A1A1A 上 #5B9BEF 6.1:1；Android 浅顶栏 #EDEDED 上 5.3:1、深顶栏 #141414 上 6.5:1。
+3. **对比度兜底**：Android 离线橙 #FF8C00 → #A65300（#EDEDED 顶栏上 2.0:1 → 4.65:1，深色仍 #FFA726）；安装页 `--muted` #7a828e → #68707a（#f2f5f9 上 3.55:1 → 4.59:1、白卡 5.02:1）；管理台变量 chips 的文字压在 light-9 浅底上 4.68:1。顺手删掉 Android `PushBoxColors.levelInfo` 死字段。
+
+### 用例
+
+- Windows `dotnet test` 全绿：ThemeTest 两份 token 字典补 `State.Connecting` 键并把两个 hex 钉死、RenderTest 头像板六色断言换新首色、MainModelTest 钉 `Connecting → State.Connecting`。
+- Android `compileDebugKotlin` 通过（`PushBoxColors` 新增字段只有 Theme.kt 一处构造）；web-admin `vue-tsc -b && vite build` 通过；server 重打包后 `scripts/install-page-smoke.sh` 6/6。
+- 全部对比度数字用 WCAG 公式逐对实测后写进各文件注释；本文与设计方案 D81 引用的是同一批数字。
+
+---
+
 ## 未发布 —— 三端优化第二轮：XFF 信任收口（S2）
 
 > 承接第一轮（S1）。S1 收的是安装页的写入口，这一轮收的是限流与登录锁定的**身份键**：`Requests.clientIp` 原来无条件取 `X-Forwarded-For` 首段，直连部署里客户端可以自填 XFF 让每次请求换个"身份"（爆破锁定、限流全失效），而 compose 拓扑里若反过来只信 remoteAddr，所有人又会并成 Caddy 一个桶。改法是按**来源是否可信**收口。

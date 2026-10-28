@@ -48,10 +48,11 @@ public sealed class NullOrEmptyToVisibilityConverter : IValueConverter
 /// </summary>
 public static class AvatarVisual
 {
-    /// <summary>Android 的 AVATAR_PALETTE，六个色一模一样，两端同名会话在两个屏上同色。</summary>
+    /// <summary>Android 的 AVATAR_PALETTE，六个色一模一样，两端同名会话在两个屏上同色。
+    /// 第一格从 #07C160 收进品牌绿 #0F7A4F：首字是白字，#07C160 上只有 2.4:1，#0F7A4F 是 5.4:1。</summary>
     public static readonly IReadOnlyList<Color> Palette = new[]
     {
-        Color.FromRgb(0x07, 0xC1, 0x60), Color.FromRgb(0x19, 0x8C, 0xFF), Color.FromRgb(0xFA, 0x51, 0x51),
+        Color.FromRgb(0x0F, 0x7A, 0x4F), Color.FromRgb(0x19, 0x8C, 0xFF), Color.FromRgb(0xFA, 0x51, 0x51),
         Color.FromRgb(0xB0, 0x69, 0x00), Color.FromRgb(0x7B, 0x61, 0xFF), Color.FromRgb(0x00, 0xB3, 0xA7),
     };
 

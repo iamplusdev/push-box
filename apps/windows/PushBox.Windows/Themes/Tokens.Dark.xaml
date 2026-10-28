@@ -33,6 +33,8 @@
     <SolidColorBrush x:Key="Badge.Unread" Color="#FF4D4F" />
     <SolidColorBrush x:Key="Divider" Color="#333333" />
     <SolidColorBrush x:Key="State.Offline" Color="#FFA726" />
+    <!-- 连接中的蓝在深底上要走"变亮"这一侧：#1A73E8 在 #1A1A1A 上只有 3.9:1，#5B9BEF 是 6.1:1 -->
+    <SolidColorBrush x:Key="State.Connecting" Color="#5B9BEF" />
     <SolidColorBrush x:Key="Level.Error" Color="#FF5252" />
     <SolidColorBrush x:Key="Level.Warning" Color="#FFB74D" />
     <SolidColorBrush x:Key="Level.Info" Color="#9E9E9E" />

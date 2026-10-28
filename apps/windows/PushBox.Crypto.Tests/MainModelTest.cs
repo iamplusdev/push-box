@@ -460,10 +460,10 @@ public sealed class MainModelTest : IDisposable
         Assert.Equal("在线", MainModel.StateDetail(new SyncState.Online(12L)));
         Assert.Equal("离线", MainModel.StateDetail(new SyncState.Offline(string.Empty, TimeSpan.Zero)));
 
-        // 三种状态三种颜色：在线绿、断链橙、要人处理的红；没启动是灰，不假装自己在连
+        // 四种状态四种颜色：在线绿、连接中蓝、断链橙、要人处理的红；没启动是灰，不假装自己在连
         Assert.Equal("Accent", MainModel.StateToken(new SyncState.Online(1L)));
         Assert.Equal("State.Offline", MainModel.StateToken(new SyncState.Offline("x", TimeSpan.Zero)));
-        Assert.Equal("State.Offline", MainModel.StateToken(new SyncState.Connecting()));
+        Assert.Equal("State.Connecting", MainModel.StateToken(new SyncState.Connecting()));
         Assert.Equal("Level.Error", MainModel.StateToken(new SyncState.Blocked("x")));
         Assert.Equal("Fg.Secondary", MainModel.StateToken(new SyncState.Idle()));
     }

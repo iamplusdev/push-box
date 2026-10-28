@@ -812,7 +812,7 @@ public partial class MainWindow : Window
         StatusText.Text = MainModel.DescribeState(state);
         // 正文只说"离线/异常"两字，原因挂在悬停上——菜单 60px 宽，一整句会把这一栏撑成字墙
         StatusArea.ToolTip = MainModel.StateDetail(state);
-        // 点与字同色：在线绿 / 断链橙 / 要人处理的红 / 没启动灰，扫一眼就知道该不该管
+        // 点与字同色：在线绿 / 连接中蓝 / 断链橙 / 要人处理的红 / 没启动灰，扫一眼就知道该不该管
         var token = MainModel.StateToken(state);
         StatusDot.Fill = BrushOf(token);
         StatusText.Foreground = BrushOf(token);

@@ -80,7 +80,7 @@ function renderChart() {
     series: [{
       type: 'bar',
       data: trend.value.map(t => t.count),
-      itemStyle: { color: '#409eff', borderRadius: [3, 3, 0, 0] },
+      itemStyle: { color: '#0f7a4f', borderRadius: [3, 3, 0, 0] },
       barMaxWidth: 32
     }]
   })
