@@ -325,6 +325,17 @@
     <string name="image_save_failed">保存失败，请稍后再试</string>
     <string name="image_save_denied">没有存储权限，无法保存</string>
 
+    <!-- §7.4 图片三态与网格折叠：加载失败要给出路，失效态别让人反复重试 -->
+    <string name="image_expired">图片已失效</string>
+    <string name="image_expired_short">已失效</string>
+    <string name="image_load_failed">图片加载失败</string>
+    <string name="image_load_failed_short">加载失败</string>
+    <string name="image_original_expired">原图已失效</string>
+    <string name="image_original_load_failed">原图加载失败</string>
+    <string name="image_retry">重试</string>
+    <string name="image_viewer_page">%1$d / %2$d</string>
+    <string name="image_grid_more">另有 %1$d 张</string>
+
     <!-- 频道治理（§14：App 是唯一控制台，D28） -->
     <string name="channel_governance">治理设置</string>
     <string name="channel_governance_title">频道治理</string>

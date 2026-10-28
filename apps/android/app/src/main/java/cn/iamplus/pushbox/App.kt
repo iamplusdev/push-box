@@ -257,7 +257,8 @@ class App : android.app.Application() {
     /** 退避到什么时候（elapsedRealtime 毫秒，0=没在退避）。UI 观察它置灰按钮并倒数。 */
     val pinLockUntil = MutableStateFlow(0L)
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /** App 级协程域（IO）：广播接收器等"没有 UI scope 可挂"的组件也往这里发，不碰 GlobalScope。 */
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     // 更新检查是低频公开接口（api.github.com 未认证 60 次/小时/IP），一个进程只被动查一次，手点另算。
     @Volatile private var updateCheckedThisProcess = false

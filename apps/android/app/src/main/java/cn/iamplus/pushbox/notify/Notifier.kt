@@ -17,10 +17,7 @@ import cn.iamplus.pushbox.MainActivity
 import cn.iamplus.pushbox.R
 import cn.iamplus.pushbox.net.MessageFrame
 import cn.iamplus.pushbox.ui.AvatarCache
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 
 /**
  * §7.3 通知：默认一个频道一个 NotificationChannel，同频道的所有发送者共用一份提醒设置；
@@ -118,8 +115,9 @@ class Notifier(private val context: Context) {
         summaryId: Int, latest: MessageFrame, lockPrivate: Boolean) {
         val existing = manager.activeNotifications.find { it.tag == null && it.id == summaryId }
         val count = (existing?.notification?.number ?: 0) + 1
+        val countLine = context.getString(R.string.conv_new_messages, count)
         val inboxStyle = NotificationCompat.InboxStyle()
-            .setSummaryText("$count 条新消息")
+            .setSummaryText(countLine)
             .addLine("${latest.displayName}: ${summaryOf(latest)}")
         val readAllIntent = PendingIntent.getBroadcast(context, channelId.hashCode(),
             Intent(context, MarkAllReadReceiver::class.java).apply {
@@ -130,7 +128,7 @@ class Notifier(private val context: Context) {
             .setSmallIcon(R.drawable.ic_stat_pushbox)
             .setStyle(inboxStyle)
             .setContentTitle(latest.displayName)
-            .setContentText("$count 条新消息")
+            .setContentText(countLine)
             .setNumber(count)
             .setGroup(groupId)
             .setGroupSummary(true)
@@ -156,10 +154,10 @@ class Notifier(private val context: Context) {
         manager.notify(summaryId, summary)
     }
 
-    /** 加载大图用于 BigPictureStyle：从缓存取，没有则返回 null（通知只显示文字摘要）。 */
+    /** 加载大图用于 BigPictureStyle：只取内存与磁盘两级缓存，不碰网络（见 ImageCache.loadCachedSync）。 */
     private fun loadBigPictureBitmap(msgId: String): android.graphics.Bitmap? =
         runCatching {
-            cn.iamplus.pushbox.ui.ImageCache.loadSync(msgId, 0, thumb = false)
+            cn.iamplus.pushbox.ui.ImageCache.loadCachedSync(msgId, 0, thumb = false)
         }.getOrNull()
 
     /**
@@ -183,7 +181,9 @@ class Notifier(private val context: Context) {
             val channelNo = intent.getStringExtra(EXTRA_CHANNEL) ?: return
             val senderId = intent.getStringExtra(EXTRA_SENDER_ID) ?: return
             val app = App.get(context)
-            GlobalScope.launch(Dispatchers.IO) {
+            // App 级 scope（SupervisorJob + IO）：广播接收器最多活 10 秒，
+            // GlobalScope 挂着一个不受 App 生命周期管的 IO 协程，进程死了它跟着断，写库可能只写一半
+            app.scope.launch {
                 app.dao.markConversationRead(channelNo, senderId)
             }
             Notifier(context).cancelConversation(channelNo, senderId)

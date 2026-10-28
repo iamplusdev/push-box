@@ -9,6 +9,24 @@
 
 ---
 
+## 未发布 —— 三端优化第四轮：Android 快速修复（S4）
+
+> 承接第三轮（S3）。S3 收的是颜色口，这一轮收 Android 端的**功能口**：键盘弹起时输入框被软键盘盖住、通知大图在出通知的关键路径上打网络、广播接收器里的写库挂在 GlobalScope 上、图片三态文案写死在代码里。
+
+### S4 改了什么
+
+1. **弹窗与注册页让开软键盘**：EnrollScreen 滚动列与五处含输入框的 AlertDialog（会话改名、频道重命名、订阅、频道成员、应用锁）加 `imePadding()`——早先注册页在 3 键导航模式下键盘弹出时会把底部输入行顶出屏幕，各弹窗的输入框也会被盖住。
+2. **通知大图不碰网络**：`ImageCache.loadSync`（runBlocking + 两级落空就发签名 GET）换成 `loadCachedSync`（只查内存与磁盘，没有就返回 null）——大图是装饰性的，消息落库到出通知的 1s 验收线不该被一次可能 404 的 RTT 吃掉；文字摘要照常出，用户进过会话列表后缓存自然有了。
+3. **广播接收器弃 GlobalScope**：`MarkAllReadReceiver` 的写库协程从 GlobalScope 挪到 App 级 scope（SupervisorJob + IO）——广播接收器最多活 10 秒，GlobalScope 挂着的 IO 协程不受 App 生命周期管，进程一死写库可能只写一半。
+4. **图片三态与摘要文案入 strings.xml**：MediaImages 的"图片已失效/加载失败/重试/第 N 张共 M 张/另有 N 张"与 Notifier 的"N 条新消息"全部换成 `stringResource`/`getString`，不再写死在代码里。
+
+### 用例
+
+- Android `compileDebugKotlin` 通过（新增 9 个字符串键，`conv_new_messages` 复用已有键）。
+- Notifier 里 import 清理：`Dispatchers`/`GlobalScope`/`runBlocking` 随改动删除，编译即验证无残留引用。
+
+---
+
 ## 未发布 —— 三端优化第三轮：品牌色统一（S3）
 
 > 承接第二轮（S2）。S2 收的是安全口，这一轮收的是三端的**颜色口**：Android、Windows、管理台、安装页四个入口各自一套绿/蓝（#07C160 / #0F7A4F / #409eff / #07c160），而"连接中"在两端都借的是离线橙——"断了要人管"和"正在自己好"同色，扫一眼分不出该等还是该管。改法是全部收敛到品牌绿 #0F7A4F，并把"连接中"拆成独立的蓝。

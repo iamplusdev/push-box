@@ -150,9 +150,22 @@ object ImageCache {
         }
     }
 
-    /** §7.3 通知用同步版：阻塞当前线程直接返回 Bitmap（用于 BigPictureStyle）。 */
-    fun loadSync(msgId: String, idx: Int, thumb: Boolean): Bitmap? =
-        kotlinx.coroutines.runBlocking { load(msgId, idx, thumb) }
+    /**
+     * §7.3 通知用同步版：只查内存与磁盘两级、**不碰网络**。
+     * 早先是 runBlocking { load(...) }——load 在两级都落空时会打一次签名 GET，
+     * 把消息落库到出通知的 1s 验收线堵在装饰性大图的 RTT 上。两级都没有就返回 null，
+     * 通知退回文字摘要，等用户进过会话列表缓存自然就有了。
+     */
+    fun loadCachedSync(msgId: String, idx: Int, thumb: Boolean): Bitmap? {
+        val context = App.current.applicationContext
+        val key = "$msgId#$idx#${if (thumb) 't' else 'f'}"
+        mem.get(key)?.let { return it }
+        val f = diskFile(context, key)
+        if (f.length() <= 0) return null
+        val bmp = BitmapFactory.decodeFile(f.absolutePath) ?: return null
+        mem.put(key, bmp)
+        return bmp
+    }
 
     private fun decode(bytes: ByteArray): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -285,20 +298,23 @@ fun MediaImage(msgId: String, idx: Int, count: Int = 1, mediaStatus: String? = n
                 color = MaterialTheme.colorScheme.primary)
 
             LoadOutcome.Gone -> Text(
-                if (single) "图片已失效" else "已失效",
+                if (single) stringResource(R.string.image_expired)
+                else stringResource(R.string.image_expired_short),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             LoadOutcome.Missing -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 // 九宫格一格只有 88dp，"图片加载失败"五个字加一个重试按钮会横向溢出到隔壁：
                 // Box 不裁剪子内容，越界的部分直接压在气泡上。所以格子里一律用短词。
-                Text(if (single) "图片加载失败" else "加载失败",
+                Text(if (single) stringResource(R.string.image_load_failed)
+                    else stringResource(R.string.image_load_failed_short),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 TextButton(onClick = {
                     ImageCache.evict(msgId, idx)
                     attempt++
-                }) { Text("重试", style = MaterialTheme.typography.labelSmall) }
+                }) { Text(stringResource(R.string.image_retry),
+                    style = MaterialTheme.typography.labelSmall) }
             }
         }
     }
@@ -365,7 +381,8 @@ private fun ImageViewer(msgId: String, count: Int, start: Int, mediaStatus: Stri
                     }
                     Spacer(Modifier.weight(1f))
                     if (pages > 1) {
-                        Text("${pager.currentPage + 1} / $pages", color = Color.White,
+                        Text(stringResource(R.string.image_viewer_page,
+                            pager.currentPage + 1, pages), color = Color.White,
                             style = MaterialTheme.typography.labelMedium)
                     }
                     Spacer(Modifier.weight(1f))
@@ -464,18 +481,19 @@ private fun ViewerPage(msgId: String, idx: Int, gone: Boolean, active: Boolean,
 
             LoadOutcome.Loading -> CircularProgressIndicator(color = Color.White)
 
-            LoadOutcome.Gone -> Text("原图已失效",
+            LoadOutcome.Gone -> Text(stringResource(R.string.image_original_expired),
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White.copy(alpha = 0.7f))
 
             LoadOutcome.Missing -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("原图加载失败", style = MaterialTheme.typography.bodyMedium,
+                Text(stringResource(R.string.image_original_load_failed),
+                    style = MaterialTheme.typography.bodyMedium,
                     color = Color.White.copy(alpha = 0.7f))
                 TextButton(onClick = {
                     // 与格子同一手法：先丢掉这一格的两级缓存，再让 attempt 进 produceState 的 key
                     ImageCache.evict(msgId, idx)
                     attempt++
-                }) { Text("重试", color = Color.White) }
+                }) { Text(stringResource(R.string.image_retry), color = Color.White) }
             }
         }
     }
@@ -637,7 +655,8 @@ fun MediaGrid(msgId: String, count: Int, mediaStatus: String? = null,
         }
     }
     if (count > GRID_MAX) {
-        Text("另有 ${count - GRID_MAX} 张", style = MaterialTheme.typography.labelSmall,
+        Text(stringResource(R.string.image_grid_more, count - GRID_MAX),
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = GUTTER))
     }

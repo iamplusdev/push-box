@@ -52,6 +52,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -646,8 +647,10 @@ private fun EnrollScreen(app: App, onDone: () -> Unit) {
         })
     }) { inset ->
         Column(
-            Modifier.fillMaxSize().padding(inset).padding(horizontal = 16.dp, vertical = 12.dp)
-                .verticalScroll(rememberScrollState()),
+            // imePadding 在 verticalScroll 之前：键盘弹起时滚动区跟着缩，输入框不会被键盘盖住
+            Modifier.fillMaxSize().padding(inset).imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             SettingsSection(stringResource(R.string.enroll_server)) {
@@ -1284,7 +1287,7 @@ private fun RenameDialog(row: ConversationRow, onDismiss: () -> Unit, onSave: (S
         title = { Text(stringResource(R.string.rename_title)) },
         text = {
             OutlinedTextField(value = text, onValueChange = { text = it },
-                singleLine = true, modifier = Modifier.fillMaxWidth())
+                singleLine = true, modifier = Modifier.fillMaxWidth().imePadding())
         },
         confirmButton = {
             TextButton(onClick = { onSave(text.trim().ifBlank { null }); onDismiss() }) {
@@ -2278,7 +2281,7 @@ private fun ChannelsTab(identity: Identity, modifier: Modifier) {
                 OutlinedTextField(
                     value = renameText, onValueChange = { renameText = it },
                     label = { Text(stringResource(R.string.channel_rename_hint)) },
-                    singleLine = true)
+                    singleLine = true, modifier = Modifier.imePadding())
             },
             confirmButton = {
                 TextButton(enabled = !busy, onClick = {
@@ -2379,7 +2382,8 @@ private fun ChannelsTab(identity: Identity, modifier: Modifier) {
             onDismissRequest = { subscribeTarget = null },
             title = { Text(stringResource(R.string.channel_join_title)) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.imePadding(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(t.channelNo)
                     OutlinedTextField(
                         value = subscribeSecret, onValueChange = { subscribeSecret = it },
@@ -2565,7 +2569,7 @@ private fun ChannelSendersDialog(identity: Identity, channel: PushBoxApi.Channel
         onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(stringResource(R.string.channel_senders_title)) },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()),
+            Column(Modifier.imePadding().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
@@ -3570,7 +3574,8 @@ private fun AppLockDialog(app: App, enabling: Boolean, onDismiss: () -> Unit) {
         title = { Text(stringResource(if (enabling) R.string.app_lock_set_pin
             else R.string.app_lock_disable)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.imePadding(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (enabling) {
                     OutlinedTextField(value = pin, onValueChange = {
                         pin = it.filter { c -> c.isDigit() }.take(6) },
