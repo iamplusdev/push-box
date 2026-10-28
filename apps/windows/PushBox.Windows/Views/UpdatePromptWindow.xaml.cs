@@ -55,6 +55,8 @@ public sealed partial class UpdatePromptWindow : Window
         _settings = settings ?? ClientSettings.Defaults;
         _apply = apply;
         InitializeComponent();
+        // 与首启同一理由：NoResize + SizeToContent 的窗在超高 DPI 小屏上夹 MaxHeight
+        WindowPlacement.FitToWorkArea(this);
         Headline.Text = $"发现新版本 {latest.Version}（当前 {UpdateClient.CurrentVersion()}），是否下载并安装？";
         if (!string.IsNullOrWhiteSpace(latest.Notes))
         {

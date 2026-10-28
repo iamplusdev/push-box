@@ -67,6 +67,9 @@ public class ThemeTest
 {
     private const string Light = "Themes/Tokens.xaml";
     private const string Dark = "Themes/Tokens.Dark.xaml";
+    /// <summary>两份 token 字典各自 merge 的共享层：字体族、字号样式、按钮体系、焦点框。
+    /// 颜色才分深浅两份，样式只有一份——少这个文件，两份字典里的 DynamicResource 引用会全体落空。</summary>
+    private const string Common = "Themes/Common.xaml";
 
     private static readonly XNamespace X = "http://schemas.microsoft.com/winfx/2006/xaml";
 
@@ -264,8 +267,10 @@ public class ThemeTest
     [Fact]
     public void EveryTokenTheWindowsReachForExists()
     {
-        // 键名写错时 DynamicResource 不报错，只是那一处悄悄留着上一份值（或退成默认字号）——所以这条必须当场拦下
+        // 键名写错时 DynamicResource 不报错，只是那一处悄悄留着上一份值（或退成默认字号）——所以这条必须当场拦下。
+        // 样式与字体族收在 Common.xaml，色值在浅色字典里：两边合起来才是窗口能拿到的全部键。
         var keys = new HashSet<string>(TokenFiles.AllKeys(Light));
+        keys.UnionWith(TokenFiles.AllKeys(Common));
         var missing = TokenFiles.UsedKeys().Where(k => !keys.Contains(k)).ToList();
         Assert.Empty(missing);
         Assert.NotEmpty(TokenFiles.UsedKeys());
@@ -322,12 +327,12 @@ public class ThemeTest
         ["EmojiTextBlock"] = "TextBlock"
     };
 
-    /// <summary>每一个样式键 → 它的 TargetType，来源是两份 token 字典加各窗口自己那一页资源。</summary>
+    /// <summary>每一个样式键 → 它的 TargetType，来源是共享样式层、两份 token 字典加各窗口自己那一页资源。</summary>
     private static Dictionary<string, string> StyleTargets()
     {
         var x = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml");
         var map = new Dictionary<string, string>();
-        foreach (var file in new[] { Light, Dark, "MainWindow.xaml", "Views/SettingsWindow.xaml",
+        foreach (var file in new[] { Common, Light, Dark, "MainWindow.xaml", "Views/SettingsWindow.xaml",
                     "Views/FirstLaunchWindow.xaml", "Views/UpdatePromptWindow.xaml" })
         {
             foreach (var e in XDocument.Parse(TokenFiles.Text(file)).Root!.Descendants()
@@ -559,13 +564,14 @@ public class ThemeTest
             e.Name.LocalName == "Setter" && (string?)e.Attribute("Property") == "FocusVisualStyle");
 
         Assert.Equal("{DynamicResource Focus.Visual}", (string?)focus.Attribute("Value"));
-        // 焦点框本身也得在字典里（DynamicResource 拿不到键时不会报错，只是又变回"看不见"）
-        Assert.Contains("Focus.Visual", TokenFiles.AllKeys("Themes/Tokens.xaml"));
-        Assert.Contains("Focus.Visual", TokenFiles.AllKeys("Themes/Tokens.Dark.xaml"));
+        // 焦点框本身也得在字典里（DynamicResource 拿不到键时不会报错，只是又变回"看不见"）。
+        // 样式层只有 Common.xaml 一份，两份 token 字典 merge 它，键在 Common 里就等于两边都在
+        Assert.Contains("Focus.Visual", TokenFiles.AllKeys("Themes/Common.xaml"));
     }
 
     /// <summary>
-    /// §9.4 的按钮体系：五个键两份字典都得有，且每一个都带齐 hover/pressed/disabled 三个触发器。
+    /// §9.4 的按钮体系：六个键都收在 Common.xaml（两份 token 字典 merge 同一份，样式不分深浅色），
+    /// 且每一个都带齐 hover/pressed/disabled 三个触发器与焦点框。
     /// 少一个键那一面就悄悄退回 WPF 默认灰钮，少一个触发器那只按钮就没有按压反馈——两者编译期都不报错，
     /// 要到用户面前才看得出来。
     /// </summary>
@@ -573,23 +579,20 @@ public class ThemeTest
     public void EveryButtonStyleCarriesAllThreeStatesOnBothSides()
     {
         var keys = new[] { "Button.Primary", "Button.Secondary", "Button.Accent", "Button.Danger", "Button.Icon", "Button.Pill" };
-        foreach (var file in new[] { Light, Dark })
+        var doc = XDocument.Parse(TokenFiles.Text(Common));
+        foreach (var key in keys)
         {
-            var doc = XDocument.Parse(TokenFiles.Text(file));
-            foreach (var key in keys)
-            {
-                var style = doc.Root!.Elements()
-                    .SingleOrDefault(e => e.Name.LocalName == "Style" && (string?)e.Attribute(X + "Key") == key);
-                Assert.True(style is not null, $"{file}: 缺 {key}");
-                var markup = style!.ToString();
-                Assert.Contains("IsMouseOver", markup);
-                Assert.Contains("IsPressed", markup);
-                Assert.Contains("IsEnabled", markup);
-                Assert.Contains("Focus.Visual", markup);
-            }
-
-            // 图标字体键也在：⚙/←/✅/⚠️ 已换成 MDL2 字形，键丢了那几处就退回方块字
-            Assert.Contains("Font.Icon", TokenFiles.AllKeys(file));
+            var style = doc.Root!.Elements()
+                .SingleOrDefault(e => e.Name.LocalName == "Style" && (string?)e.Attribute(X + "Key") == key);
+            Assert.True(style is not null, $"Common.xaml: 缺 {key}");
+            var markup = style!.ToString();
+            Assert.Contains("IsMouseOver", markup);
+            Assert.Contains("IsPressed", markup);
+            Assert.Contains("IsEnabled", markup);
+            Assert.Contains("Focus.Visual", markup);
         }
+
+        // 图标字体键也在：⚙/←/✅/⚠️ 已换成 MDL2 字形，键丢了那几处就退回方块字
+        Assert.Contains("Font.Icon", TokenFiles.AllKeys(Common));
     }
 }

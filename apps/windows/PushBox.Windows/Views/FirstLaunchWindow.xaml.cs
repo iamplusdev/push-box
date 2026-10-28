@@ -22,6 +22,8 @@ public partial class FirstLaunchWindow : Window
     public FirstLaunchWindow(OnboardingModel? model)
     {
         InitializeComponent();
+        // NoResize 小窗在超高 DPI 小屏上会比可见区还高：SizeToContent 的窗夹的是 MaxHeight
+        WindowPlacement.FitToWorkArea(this);
         _model = model ?? new OnboardingModel();
         NameBox.Text = OnboardingModel.SuggestedDeviceName();
         

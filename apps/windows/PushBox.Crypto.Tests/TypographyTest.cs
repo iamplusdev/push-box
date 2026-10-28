@@ -26,7 +26,8 @@ public class TypographyTest
     private static readonly string Root = Path.Combine(AppContext.BaseDirectory,
         "..", "..", "..", "..", "PushBox.Windows");
 
-    private static readonly string[] Dictionaries = { "Themes/Tokens.xaml", "Themes/Tokens.Dark.xaml" };
+    /// <summary>字号样式只有一份（浅深两本 token 字典各自 merge 它），不用再扫两份对比。</summary>
+    private static readonly string[] Dictionaries = { "Themes/Common.xaml" };
 
     private static readonly string[] WindowFiles =
     {
@@ -84,7 +85,7 @@ public class TypographyTest
     {
         var offenders = new List<string>();
 
-        foreach (var file in WindowFiles)
+        foreach (var file in WindowFiles.Concat(new[] { "Themes/Common.xaml" }))
         {
             var lines = File.ReadAllLines(Path.Combine(Root, file));
             for (var i = 0; i < lines.Length; i++)
@@ -143,8 +144,8 @@ public class TypographyTest
         Assert.Equal(18, MarkdownStyle.H2Size);
         Assert.Equal(16, MarkdownStyle.H3Size);
 
-        var painted = TextStyles("Themes/Tokens.xaml")
-            .Select(style => Number("Themes/Tokens.xaml", (string)style.Attribute(X + "Key")!, "FontSize"))
+        var painted = TextStyles("Themes/Common.xaml")
+            .Select(style => Number("Themes/Common.xaml", (string)style.Attribute(X + "Key")!, "FontSize"))
             .Distinct()
             .OrderBy(size => size)
             .ToList();

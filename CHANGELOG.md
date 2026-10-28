@@ -27,6 +27,24 @@
 
 ---
 
+## 未发布 —— 三端优化第五轮：Windows 快速修复（S5）
+
+> 承接第四轮（S4）。S4 收的是 Android 端的功能口，这一轮收 Windows 端的**功能口**：小窗在超高 DPI 小屏上开出屏、设置页通知区挤不下、正文展开的竞态、落库高峰重画风暴、两份主题字典里逐字相同的样式要改两遍。
+
+### S5 改了什么
+
+1. **小窗也夹工作区**：主窗自己的 `FitToWorkArea` 夹取逻辑抽成 `WindowPlacement.FitToWorkArea(Window)`，设置/首启/更新确认三扇 NoResize 小窗构造时各调一次——写死的 900×640 在超高 DPI 小屏上比可见区还大，开窗就把底部按钮推出屏幕。`SizeToContent` 的窗 Height 由内容量出、写了不生效，所以那种窗夹的是 MaxHeight。
+2. **设置页通知区可滚动**：NotifyPanel 从裸 StackPanel 包进 ScrollViewer——屏矮时整栏溢出，按钮够不着也滚不动（频道/设备/关于三面板本来就是 ScrollViewer）。
+3. **正文展开去一处竞态**：`MainModel.ExpandAsync` 里 `await _fulltexts.FetchAsync(msgId)` 去掉 ConfigureAwait(false)——`_expanding.Add` 在 UI 线程，一续延走线程池的话 `finally` 里的 Remove 就落在线程池上，HashSet 两边同时进出会竞态；后面的重画与 Raise 也都要求 UI 线程。
+4. **重画合并**：`MainWindow.OnModelChanged` 加 `_refreshQueued` 标记（Interlocked 置位），后台线程一批帧连发 Raise 时同一派发周期只排一次 `Dispatcher.BeginInvoke(Refresh)`，落库高峰不再把 Dispatcher 队列灌满。
+5. **样式字典去重**：两份主题字典里逐字相同的字体族/六档字号/按钮体系/焦点框抽成 `Themes/Common.xaml`，Tokens.xaml 与 Tokens.Dark.xaml 只留各自 31 个色值并 merge Common——改一个样式不再要改两份、漏一份换主题就变形。换主题仍是换两份 token 字典的顺序，机制不变。
+
+### 用例
+
+- Windows `dotnet test` 全绿 **676/676**：ThemeTest 断样式键的四处（键并集、Focus.Visual、六键三态、StyleTargets）与 TypographyTest 三处改读 Common.xaml；MainModelTest/WindowPlacementTest 仍引 MainModel.FitToWorkArea 未动；STA 构造窗口的用例（FirstLaunch/Settings/Update/Typography）在 SystemParameters.WorkArea 下照常通过；AccessibilityTest 对 NotifyPanel 无断言不冲突。
+
+---
+
 ## 未发布 —— 三端优化第三轮：品牌色统一（S3）
 
 > 承接第二轮（S2）。S2 收的是安全口，这一轮收的是三端的**颜色口**：Android、Windows、管理台、安装页四个入口各自一套绿/蓝（#07C160 / #0F7A4F / #409eff / #07c160），而"连接中"在两端都借的是离线橙——"断了要人管"和"正在自己好"同色，扫一眼分不出该等还是该管。改法是全部收敛到品牌绿 #0F7A4F，并把"连接中"拆成独立的蓝。

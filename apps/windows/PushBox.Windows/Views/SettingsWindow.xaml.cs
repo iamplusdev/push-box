@@ -76,10 +76,8 @@ public partial class SettingsWindow : Window
         _logout = logout;
         InitializeComponent();
         // 写死的 900×640 在 1366×768@150% 的可见区（约 910×512）里放不下，开窗就把底下那排按钮推到屏幕外。
-        // 主窗早就在夹了（MainWindow 构造），这扇窗漏了；MinHeight 460 会把夹出来的值再顶回来一点，
-        // 所以只保证"不比工作区更大"，不保证"刚好塞得下 460"
-        Width = MainModel.FitToWorkArea(Width, SystemParameters.WorkArea.Width);
-        Height = MainModel.FitToWorkArea(Height, SystemParameters.WorkArea.Height);
+        // MinHeight 460 会把夹出来的值再顶回来一点，所以只保证"不比工作区更大"，不保证"刚好塞得下 460"
+        WindowPlacement.FitToWorkArea(this);
         PreviewKeyDown += OnPreviewKeyDown;
         // 下拉的项先于回填挂上：SelectedIndex 落在没有 ItemsSource 的空列表上会被压回 -1
         ThemeBox.ItemsSource = SettingsModel.ThemeLabels;

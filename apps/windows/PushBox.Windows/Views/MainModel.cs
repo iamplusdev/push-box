@@ -524,7 +524,10 @@ public sealed class MainModel
         var fetched = false;
         try
         {
-            fetched = await _fulltexts.FetchAsync(msgId).ConfigureAwait(false);
+            // 不套 ConfigureAwait(false)：ExpandAsync 从 UI 线程进来（时间线按钮），_expanding.Add 也在
+            // UI 线程——这里一跳走，finally 里的 Remove 就落在线程池上，HashSet 两边同时进出会竞态；
+            // 后面的 RepullCurrent/Raise 也都在 UI 线程，续延本就不该让线程走开。
+            fetched = await _fulltexts.FetchAsync(msgId);
         }
         catch (Exception e)
         {

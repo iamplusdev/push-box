@@ -21,6 +21,22 @@ public static class WindowPlacement
     /// <summary>至少要有这么宽、这么高露在虚拟屏里，否则当作"那块屏没了"，回到工作区正中。</summary>
     public const double MinVisible = 96;
 
+    /// <summary>
+    /// 把窗口的设计尺寸夹进工作区（0.9 比例，与主窗启动夹取同一档）。
+    /// 主窗自己有一套"恢复上次几何"的流程，这里给 NoResize 的几扇小窗用：
+    /// 超高 DPI 小屏上写死的 900×640 会比可见区还大，开窗就把底下那排按钮推到屏幕外。
+    /// <c>SizeToContent</c> 的窗 Height 由内容量出、写了也不生效，所以那种窗夹的是 MaxHeight。
+    /// </summary>
+    public static void FitToWorkArea(Window window)
+    {
+        var work = SystemParameters.WorkArea;
+        window.Width = MainModel.FitToWorkArea(window.Width, work.Width);
+        if (window.SizeToContent is SizeToContent.Height or SizeToContent.WidthAndHeight)
+            window.MaxHeight = MainModel.FitToWorkArea(work.Height, work.Height);
+        else
+            window.Height = MainModel.FitToWorkArea(window.Height, work.Height);
+    }
+
     /// <param name="workArea">主屏工作区（DIP）。宽高 ≤ 0 表示读不到，原样返回 saved。</param>
     /// <param name="virtualScreen">所有显示器合成的矩形。读不到时退回 workArea（单屏就够）。</param>
     public static WindowGeometry Restore(WindowGeometry saved, Rect workArea, Rect virtualScreen,

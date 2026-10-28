@@ -632,11 +632,16 @@ public partial class MainWindow : Window
 
     // ---- 重画 -------------------------------------------------------------------------------------
 
+    /// <summary>后台线程已排过一次重画（Interlocked 置位）。一批帧连发 Raise 时，
+    /// 同一派发周期只画一次：落库高峰不把 Dispatcher 队列灌满。</summary>
+    private int _refreshQueued;
+
     private void OnModelChanged()
     {
         if (!Dispatcher.CheckAccess())
         {
-            Dispatcher.BeginInvoke(Refresh);
+            if (Interlocked.Exchange(ref _refreshQueued, 1) == 0)
+                Dispatcher.BeginInvoke(Refresh);
             return;
         }
 
@@ -658,6 +663,8 @@ public partial class MainWindow : Window
 
     private void Refresh()
     {
+        // 排过队的那次走到这里就算数；画到一半又有新帧落库，会再置位并排下一次
+        Interlocked.Exchange(ref _refreshQueued, 0);
         // 托盘那一行先报：它读的是纯模型的账（未读数、连接状态），和这一屏画没画出来没有关系。
         // 放在 IsLoaded 之后会漏掉两种常态——"启动就最小化到托盘"根本没渲染过内容，
         // 而关闭后再打开会话（HideToTray 的那条路）窗口也没机会自己重画
