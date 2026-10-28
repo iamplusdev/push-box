@@ -61,6 +61,11 @@
   <header>
     <h1>PushBox 安装</h1>
     <p>填完点「保存并启动」，服务端会立刻接着启动，不需要重启容器；启动完成后本页自动切到管理台。带 <b>*</b> 的必填，其余留空即用默认值。</p>
+    <div class="field" style="margin-top:14px">
+      <label for="setupToken">安装口令</label>
+      <input type="password" id="setupToken" autocomplete="off" placeholder="32 位字符，见服务端启动日志">
+      <p class="hint">服务端启动时在日志里打印的一次性口令（<code>docker logs</code> 可见）。不填对，下面的操作都会被拒绝。</p>
+    </div>
   </header>
 
   <section>
@@ -201,6 +206,8 @@
   }
   $('useS3').addEventListener('change', toggle);
   $('encrypted').addEventListener('change', toggle);
+  // 打开页面的第一件事就是粘口令
+  $('setupToken').focus();
 
   function collect() {
     return {
@@ -260,9 +267,22 @@
   function post(action, body) {
     return fetch('/api/v1/setup' + (action ? '?action=' + action : ''), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Setup-Token': $('setupToken').value.trim()
+      },
       body: JSON.stringify(body)
-    }).then(function (r) { return r.json(); });
+    }).then(function (r) {
+      if (r.status === 401) { throw { token: true }; }
+      if (r.status === 413) { throw { oversize: true }; }
+      return r.json();
+    });
+  }
+
+  function describeError(e) {
+    if (e && e.token) { return '安装口令不对：看服务端启动日志里打印的那串 32 位字符'; }
+    if (e && e.oversize) { return '提交内容过大，服务端拒绝了'; }
+    return '请求失败：' + e;
   }
 
   function busy(button, on, text) {
@@ -295,7 +315,7 @@
     busy(b, true, '测试中…'); say('正在连接数据库…');
     post('test', collect()).then(function (r) {
       say(r.ok ? r.message : r.error, r.ok ? 'ok' : 'err');
-    }).catch(function (e) { say('请求失败：' + e, 'err'); })
+    }).catch(function (e) { say(describeError(e), 'err'); })
       .finally(function () { busy(b, false, old); });
   });
 
@@ -305,7 +325,7 @@
     post('restore', collect()).then(function (r) {
       if (r.ok) { fill(r.config); say('已填回上次的配置，核对后点「保存并启动」。', 'ok'); }
       else { say(r.error, 'err'); }
-    }).catch(function (e) { say('请求失败：' + e, 'err'); })
+    }).catch(function (e) { say(describeError(e), 'err'); })
       .finally(function () { busy(b, false, old); });
   });
 
@@ -323,7 +343,7 @@
       }
       say(r.message + ' 正在等待服务端就绪，完成后本页会自动跳转…', 'ok');
       waitForAdmin(0);
-    }).catch(function (e) { say('请求失败：' + e, 'err'); busy(b, false, old); });
+    }).catch(function (e) { say(describeError(e), 'err'); busy(b, false, old); });
   });
 })();
 </script>

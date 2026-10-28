@@ -41,12 +41,18 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
  *
  * <p>只在文件不存在时监听。文件一落盘这个服务就停了，所以它不会变成一个
  * "谁都能改配置"的常驻入口——已经装好的实例重启也不会再看到这一页。
+ * 未配置的那段窗口里页面本身是公开的（空表单没有秘密），写配置的 POST
+ * 则要过启动横幅里打印的一次性口令（{@link #setupToken}）。
  */
 public class InstallServer {
 
   /** 与 {@code application.yml} 的 server.port 同一个默认值。 */
   public static final int DEFAULT_PORT = 7404;
   static final int MIN_PASSPHRASE_CODE_POINTS = 12;
+
+  /** 写配置的 POST 最多吃 64KB：正常配置 JSON 只有几 KB，再大就是有人在灌。 */
+  static final int MAX_SETUP_BODY_BYTES = 64 * 1024;
+  static final String SETUP_TOKEN_HEADER = "X-Setup-Token";
 
   /** 见 {@link #loadMysqlDriver()}：这个名字是硬编码的，所以它得和真实的连接器类对上。 */
   static final String MYSQL_DRIVER_CLASS = "com.mysql.cj.jdbc.Driver";
@@ -56,6 +62,23 @@ public class InstallServer {
   private final Path configPath;
   private final int port;
   private final CountDownLatch configured = new CountDownLatch(1);
+
+  /**
+   * 一次性安装口令：安装页绑的是服务端将要用的那个端口（默认 7404），公网能连到这个端口的
+   * 人**都**能打开表单。页面上只有一张空表，可以随便看；但写配置的 POST 必须带上这串
+   * 16 字节随机数的 hex——它只打印在启动横幅里（{@code docker logs} 可见），不留文件。
+   */
+  private final String setupToken = newSetupToken();
+
+  static String newSetupToken() {
+    byte[] bytes = new byte[16];
+    new java.security.SecureRandom().nextBytes(bytes);
+    return java.util.HexFormat.of().formatHex(bytes);
+  }
+
+  String setupToken() {
+    return setupToken;
+  }
 
   public InstallServer(Path configPath, int port) {
     this.configPath = configPath;
@@ -81,10 +104,11 @@ public class InstallServer {
         ┌─ PushBox 还没有配置 ────────────────────────────────────────
         │  请在浏览器里打开： http://localhost:%d/
         │  （从别的机器访问就把 localhost 换成这台机器的 IP）
+        │  安装口令： %s（填在安装页顶部；只打在这里，不留文件）
         │  填完提交，服务端会自动接着启动，不需要重启容器。
         │  配置文件将写到： %s
         └────────────────────────────────────────────────────────────
-        %n""", port, configPath);
+        %n""", port, setupToken, configPath);
     try {
       configured.await();
     } catch (InterruptedException e) {
@@ -137,7 +161,18 @@ public class InstallServer {
           Json.writeBytes(Map.of("ok", false, "error", "只接受 POST")));
       return;
     }
-    byte[] body = exchange.getRequestBody().readAllBytes();
+    if (!tokenMatches(exchange)) {
+      respond(exchange, 401, "application/json; charset=utf-8",
+          Json.writeBytes(Map.of("ok", false, "error", "安装口令不对：见服务端启动日志里打印的那串字符")));
+      return;
+    }
+    byte[] body = exchange.getRequestBody().readNBytes(MAX_SETUP_BODY_BYTES + 1);
+    if (body.length > MAX_SETUP_BODY_BYTES) {
+      respond(exchange, 413, "application/json; charset=utf-8",
+          Json.writeBytes(Map.of("ok", false, "error",
+              "提交内容过大（超过 " + MAX_SETUP_BODY_BYTES + " 字节）")));
+      return;
+    }
     String action = exchange.getRequestURI().getQuery() == null
         ? "" : exchange.getRequestURI().getQuery();
     try {
@@ -158,6 +193,17 @@ public class InstallServer {
     } catch (RuntimeException e) {
       respondJson(exchange, 200, Map.of("ok", false, "error", describe(e)));
     }
+  }
+
+  /** 定长比较防时序侧信道：口令长度从横幅上一眼可见，但比对本身不能给捷径。 */
+  private boolean tokenMatches(HttpExchange exchange) {
+    String header = exchange.getRequestHeaders().getFirst(SETUP_TOKEN_HEADER);
+    if (header == null) {
+      return false;
+    }
+    return java.security.MessageDigest.isEqual(
+        header.trim().getBytes(StandardCharsets.UTF_8),
+        setupToken.getBytes(StandardCharsets.UTF_8));
   }
 
   private static RuntimeConfig parse(byte[] body) {

@@ -147,10 +147,11 @@ class InstallServerTest {
       for (String id : new String[] {"dbHost", "dbPort", "dbName", "dbUser", "dbPass", "localPath",
           "useS3", "s3Endpoint", "s3Bucket", "s3Region", "s3Ak", "s3Sk", "s3PathStyle",
           "encrypted", "passphrase", "masterKey", "adminPass", "port", "cidrs",
-          "mediaAllowHosts"}) {
+          "mediaAllowHosts", "setupToken"}) {
         assertThat(html).as("表单缺 %s 这一项", id).contains("id=\"" + id + "\"");
       }
       assertThat(html).contains("/api/v1/setup");
+      assertThat(html).contains("X-Setup-Token");
       // 这个占位符由 InstallServer 返回前换成真实监听端口；占位符本身刻意不带 PB_ 前缀，
       // 否则会撞上"页面里不出现任何环境变量键名"那条闸。
       assertThat(html).contains("name=\"pb-install-port\" content=\"__INSTALL_PORT__\"");
@@ -222,12 +223,7 @@ class InstallServerTest {
       config.getAdmin().setPassword("管理台口令至少要八个字符");
 
       java.net.http.HttpResponse<String> response = java.net.http.HttpClient.newHttpClient().send(
-          java.net.http.HttpRequest
-              .newBuilder(java.net.URI.create("http://127.0.0.1:" + port + "/api/v1/setup"))
-              .header("Content-Type", "application/json")
-              .POST(java.net.http.HttpRequest.BodyPublishers.ofString(
-                  dev.pushbox.core.protocol.Json.write(config)))
-              .build(),
+          post(port, installing.setupToken(), dev.pushbox.core.protocol.Json.write(config)),
           java.net.http.HttpResponse.BodyHandlers.ofString());
 
       assertThat(response.statusCode()).isEqualTo(200);
@@ -298,12 +294,7 @@ class InstallServerTest {
       RuntimeConfig config = valid();
       config.setPort(port);
       java.net.http.HttpResponse<String> saved = client.send(
-          java.net.http.HttpRequest.newBuilder(
-              java.net.URI.create("http://127.0.0.1:" + port + "/api/v1/setup"))
-              .header("Content-Type", "application/json")
-              .POST(java.net.http.HttpRequest.BodyPublishers.ofString(
-                  dev.pushbox.core.protocol.Json.write(config)))
-              .build(),
+          post(port, installing.setupToken(), dev.pushbox.core.protocol.Json.write(config)),
           java.net.http.HttpResponse.BodyHandlers.ofString());
       assertThat(saved.body()).contains("\"ok\":true");
       waiting.join(java.time.Duration.ofSeconds(10));
@@ -312,6 +303,75 @@ class InstallServerTest {
       waiting.interrupt();
       waiting.join(java.time.Duration.ofSeconds(5));
     }
+  }
+
+  @Test
+  @DisplayName("⑯ 写配置要先过一次性安装口令，超限 body 直接 413，口令对了才进表单校验")
+  void setupRequiresTokenAndBoundsTheBody(@TempDir java.nio.file.Path dir) throws Exception {
+    int port;
+    try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
+      port = probe.getLocalPort();
+    }
+    java.nio.file.Path path = dir.resolve("pushbox.json");
+    InstallServer installing = offline(path, port);
+    Thread waiting = new Thread(installing::awaitConfiguration, "install-page");
+    waiting.start();
+    try {
+      awaitListening(port);
+      java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+          .followRedirects(java.net.http.HttpClient.Redirect.NEVER).build();
+
+      java.net.http.HttpResponse<String> noToken = client.send(
+          post(port, null, dev.pushbox.core.protocol.Json.write(valid())),
+          java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(noToken.statusCode()).isEqualTo(401);
+      assertThat(noToken.body()).contains("口令");
+
+      java.net.http.HttpResponse<String> wrongToken = client.send(
+          post(port, "0".repeat(32), dev.pushbox.core.protocol.Json.write(valid())),
+          java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(wrongToken.statusCode()).isEqualTo(401);
+
+      // 超限 body 在 parse 之前就被拦：allowHosts 那份校验根本轮不到它
+      RuntimeConfig oversized = valid();
+      oversized.getMedia().setAllowHosts(List.of("x".repeat(70 * 1024)));
+      java.net.http.HttpResponse<String> tooBig = client.send(
+          post(port, installing.setupToken(), dev.pushbox.core.protocol.Json.write(oversized)),
+          java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(tooBig.statusCode()).isEqualTo(413);
+
+      // 口令对了，才轮到表单校验自己的话
+      RuntimeConfig invalid = valid();
+      invalid.getDatabase().setHost("  ");
+      java.net.http.HttpResponse<String> rejected = client.send(
+          post(port, installing.setupToken(), dev.pushbox.core.protocol.Json.write(invalid)),
+          java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(rejected.statusCode()).isEqualTo(200);
+      assertThat(rejected.body()).contains("数据库地址");
+
+      // 收尾：写一份合法配置让安装页自己退出，免得 interrupt 在测试输出里留一段栈。
+      RuntimeConfig config = valid();
+      config.setPort(port);
+      java.net.http.HttpResponse<String> saved = client.send(
+          post(port, installing.setupToken(), dev.pushbox.core.protocol.Json.write(config)),
+          java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(saved.body()).contains("\"ok\":true");
+      waiting.join(java.time.Duration.ofSeconds(10));
+      assertThat(waiting.isAlive()).as("写盘后安装页没有退出").isFalse();
+    } finally {
+      waiting.interrupt();
+      waiting.join(java.time.Duration.ofSeconds(5));
+    }
+  }
+
+  private static java.net.http.HttpRequest post(int port, String token, String json) {
+    java.net.http.HttpRequest.Builder request = java.net.http.HttpRequest
+        .newBuilder(java.net.URI.create("http://127.0.0.1:" + port + "/api/v1/setup"))
+        .header("Content-Type", "application/json");
+    if (token != null) {
+      request.header(InstallServer.SETUP_TOKEN_HEADER, token);
+    }
+    return request.POST(java.net.http.HttpRequest.BodyPublishers.ofString(json)).build();
   }
 
   /** 安装页是在 awaitConfiguration() 里面才起监听的，所以得先确认它真的在听。 */  private static void awaitListening(int port) throws InterruptedException {

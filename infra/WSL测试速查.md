@@ -44,7 +44,7 @@ cd infra
 | `build` | `docker compose -f docker-compose-wsl.yml build pushbox-server`（用 `infra/Dockerfile`，构建上下文是仓库根） |
 | `up` | 起 MySQL 8.4 + RustFS + 服务端 + Caddy。服务端会**停在安装页上**，这是正常的 |
 | `bucket` | 在 RustFS 上建桶。借 `amazon/aws-cli` 跑在 rustfs 自己的网络命名空间里（compose 没给 rustfs 发布端口，而 `minio/mc` 已从 Docker Hub 下架） |
-| `setup` | 把 `wsl-test.env` 拼成 JSON 提交给安装页，然后等 `/healthz` 通 |
+| `setup` | 从服务端容器日志里取一次性安装口令，把 `wsl-test.env` 拼成 JSON 提交给安装页，然后等 `/healthz` 通 |
 | `down` | 停栈，**卷留着**（配置与图片都还在） |
 | `logs [service]` | 跟日志，默认 `pushbox-server` |
 | `restart` | 重启全部服务 |

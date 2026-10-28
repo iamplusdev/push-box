@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# 安装页冒烟：真起一次 fat jar，验四件只有"跑起来的进程"才验得到的事。
+# 安装页冒烟：真起一次 fat jar，验五件只有"跑起来的进程"才验得到的事。
 #
 #   ① 没有配置文件时安装页真的起得来（端口、页面资源、注入的监听端口都在）；
 #   ② 未配置时除了安装页都 302 回 `/`（同端口复用的那条判据，而不是 404）；
-#   ③ 表单校验先于任何网络（库地址空着就直接被点名，不会去连）；
-#   ④ 连不上库时**一个字节都不落盘**，且错误是"连不上"而不是"找不到驱动"。
+#   ③ 写配置的 POST 要一次性安装口令：不带口令 401，口令在启动日志里；
+#   ④ 表单校验先于任何网络（库地址空着就直接被点名，不会去连）；
+#   ⑤ 连不上库时**一个字节都不落盘**，且错误是"连不上"而不是"找不到驱动"。
 #
-# 为什么单测照不出 ④：`DriverManager` 初始化时用**系统类加载器**跑 ServiceLoader，
+# 为什么单测照不出 ⑤：`DriverManager` 初始化时用**系统类加载器**跑 ServiceLoader，
 # 而 Spring Boot 把 mysql-connector 放在 `BOOT-INF/lib/` 下，只有 LaunchedClassLoader
 # 看得见——于是安装页（它在 Spring 之前跑）直接 getConnection 会报
 # "No suitable driver found"。`mvn test` 与 IDE 跑的都是 exploded classpath，
@@ -111,6 +112,15 @@ if [ "$ready" != 1 ]; then
     echo; echo "结果：0 通过 / 1 失败"; exit 1
 fi
 
+# 一次性安装口令只打在启动横幅里，后续所有写配置的 POST 都要带上它。
+# 只按 32 位 hex 抓，不按中文抓：本机 Windows 控制台可能把横幅写成 GBK，
+# 但口令本身是 ASCII，两种编码下都一样（横幅里口令行先于配置路径行，head -1 取到的就是它）。
+TOKEN="$(grep -o '[0-9a-f]\{32\}' "$LOG" | head -1)"
+if [ -z "$TOKEN" ]; then
+    fail "启动日志里没有安装口令（或格式不是 32 位 hex）"
+    echo; echo "结果：0 通过 / 1 失败"; exit 1
+fi
+
 # ① 页面真的在，而且是安装页而不是别的什么 200。
 body="$(curl -s --max-time 5 "http://127.0.0.1:$PORT/")"
 if grep -q "PushBox 安装" <<<"$body" && grep -q 'id="dbHost"' <<<"$body" \
@@ -129,29 +139,40 @@ else
     fail "② /dashboard 期望 302 回 /，实际：$redirect"
 fi
 
-# ③ 校验先于网络：库地址空着就该被点名，而不是去连一个空地址。
-resp="$(curl -s --max-time 10 -X POST "http://127.0.0.1:$PORT/api/v1/setup" \
+# ③ 写配置要先过一次性安装口令：不带口令 401；带错的也 401。
+code="$(curl -s -o /dev/null --max-time 5 -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/v1/setup" \
         -H 'Content-Type: application/json' --data "$PAYLOAD_INVALID")"
-if grep -q '"ok":false' <<<"$resp" && grep -q '数据库地址不能为空' <<<"$resp"; then
-    pass "③ 表单校验先跑：库地址空着当场被点名"
+if [ "$code" = 401 ]; then
+    pass "③ 不带安装口令的 POST 被拒（401）"
 else
-    fail "③ 空库地址没被 validate() 拦下，回的是：$resp"
+    fail "③ 不带安装口令期望 401，实际：$code"
 fi
 
-# ④ 驱动装得上、连接失败说得清、且不落盘。这一条是本脚本存在的理由。
+# ④ 校验先于网络：库地址空着就该被点名，而不是去连一个空地址。
+resp="$(curl -s --max-time 10 -X POST "http://127.0.0.1:$PORT/api/v1/setup" \
+        -H "X-Setup-Token: $TOKEN" \
+        -H 'Content-Type: application/json' --data "$PAYLOAD_INVALID")"
+if grep -q '"ok":false' <<<"$resp" && grep -q '数据库地址不能为空' <<<"$resp"; then
+    pass "④ 表单校验先跑：库地址空着当场被点名"
+else
+    fail "④ 空库地址没被 validate() 拦下，回的是：$resp"
+fi
+
+# ⑤ 驱动装得上、连接失败说得清、且不落盘。这一条是本脚本存在的理由。
 resp="$(curl -s --max-time 30 -X POST "http://127.0.0.1:$PORT/api/v1/setup" \
+        -H "X-Setup-Token: $TOKEN" \
         -H 'Content-Type: application/json' --data "$PAYLOAD_UNREACHABLE")"
 if grep -q 'No suitable driver' <<<"$resp"; then
-    fail "④ fat jar 里没装上 MySQL 驱动（InstallServer.loadMysqlDriver 失效了）：$resp"
+    fail "⑤ fat jar 里没装上 MySQL 驱动（InstallServer.loadMysqlDriver 失效了）：$resp"
 elif grep -q '"ok":false' <<<"$resp" && grep -q '连不上数据库' <<<"$resp"; then
-    pass "④ 驱动找到了、连接失败被说成「连不上数据库」"
+    pass "⑤ 驱动找到了、连接失败被说成「连不上数据库」"
 else
-    fail "④ 期望「连不上数据库」，实际回的是：$resp"
+    fail "⑤ 期望「连不上数据库」，实际回的是：$resp"
 fi
 if [ -e "$CONFIG" ]; then
-    fail "④ 连不上库却把配置写盘了（$CONFIG）：半份配置比让人重填一遍更糟"
+    fail "⑤ 连不上库却把配置写盘了（$CONFIG）：半份配置比让人重填一遍更糟"
 else
-    pass "④ 连不上库时一个字节都没落盘"
+    pass "⑤ 连不上库时一个字节都没落盘"
 fi
 
 echo

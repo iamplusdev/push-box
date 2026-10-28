@@ -3,7 +3,8 @@
 # 用法: ./deploy-wsl.sh [build|up|setup|bucket|down|logs|restart|clean|help]
 #
 # 服务端不读环境变量：配置从安装页来。所以这套测试栈的"填配置"这一步也由脚本代劳——
-# `up` 起栈（容器会停在安装页上），`setup` 把 wsl-test.env 里的测试值 POST 给 /api/v1/setup，
+# `up` 起栈（容器会停在安装页上），`setup` 从容器日志里取一次性安装口令、
+# 把 wsl-test.env 里的测试值 POST 给 /api/v1/setup，
 # 走的是和真人在浏览器里点「保存并启动」完全相同的一条路。
 
 set -e
@@ -129,8 +130,20 @@ setup() {
         "$(json_escape "$admin_pass")" "$cidrs" "$allow_hosts")
 
     log_info "把配置提交给安装页 http://localhost:$port/api/v1/setup ..."
+    # 安装页要一次性安装口令（只打印在服务端启动日志里）。用 compose ps 拿容器 ID，
+    # 别猜 project 目录名——目录改名之后猜的名字就废了。
+    local container_id setup_token
+    container_id=$(wsl docker compose -f "$WSL_COMPOSE_FILE" --env-file "$WSL_ENV_FILE" ps -q pushbox-server)
+    if [ -z "$container_id" ]; then
+        log_error "找不到 pushbox-server 容器，先确认 $0 up 已经跑过"; exit 1
+    fi
+    setup_token=$(wsl docker logs "$container_id" 2>&1 | grep -o '[0-9a-f]\{32\}' | head -1)
+    if [ -z "$setup_token" ]; then
+        log_error "服务端日志里没有安装口令（容器没到安装页？看 $0 logs）"; exit 1
+    fi
     local resp
     resp=$(wsl curl -s -X POST "http://localhost:$port/api/v1/setup" \
+             -H "X-Setup-Token: $setup_token" \
              -H 'Content-Type: application/json' --data "$payload") || {
         log_error "连不上安装页。先确认 $0 up 已经跑过、容器还在安装页上（$0 logs）"; exit 1; }
     # 回话里带口令吗？不带——install() 只回 ok/message/error，message 是配置文件的绝对路径。
