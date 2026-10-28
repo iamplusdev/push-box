@@ -85,12 +85,21 @@ public class SearchService {
     return query;
   }
 
-  static boolean isNgramSearchable(String query) {
+  public static boolean isNgramSearchable(String query) {
     return query.codePointCount(0, query.length()) >= NGRAM_TOKEN_SIZE;
   }
 
+  /**
+   * MATCH…AGAINST 走 NATURAL LANGUAGE MODE，运算符（+ - ~ * 等）只有 BOOLEAN MODE 才认，
+   * 唯独双引号有语法意义（短语引号）：不对称的引号会让整句 AGAINST 直接报语法错。
+   * 换成空格——它是分词边界，词本身一个都不少；零命中时反正还有 LIKE 兜底。
+   */
+  public static String matchQuery(String query) {
+    return query.replace('"', ' ');
+  }
+
   /** LIKE 的三个通配符都得转义，否则用户输入一个 % 就是"匹配一切"。 */
-  static String likePattern(String query) {
+  public static String likePattern(String query) {
     StringBuilder sb = new StringBuilder(query.length() + 3);
     sb.append('%');
     for (int i = 0; i < query.length(); i++) {

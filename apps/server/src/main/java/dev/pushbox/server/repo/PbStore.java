@@ -486,13 +486,30 @@ public class PbStore {
   // ---------- web admin (cross-space, read-only) ----------
 
   /**
-   * 管理台跨空间消息搜索：不绑定 group_id，只按 LIKE 命中 title/summary/body。
+   * 管理台跨空间消息搜索：≥2 字先走 ngram FULLTEXT（与设备侧 §5.2 同一份索引），
+   * 短词或零命中再退 LIKE。路由在 {@code AdminController} 里按
+   * {@code SearchService.isNgramSearchable} 决定，两条腿的 SQL 在这里。
    * 通配符在 {@link #adminLikePattern} 里转义，channel_no / msg_type / since 全部参数绑定，
    * 与 {@link #searchLike} 同一套安全口径；只是去掉了 group 边界并额外带出频道名。
    */
-  public List<Row> searchAdmin(String rawQuery, String channelNo, String msgType, long since,
+  public List<Row> searchAdminFulltext(String query, String channelNo, String msgType, long since,
       int limit) {
-    String pattern = adminLikePattern(rawQuery.trim());
+    StringBuilder sql = new StringBuilder("""
+        SELECT m.seq, m.msg_id, m.channel_no, m.group_id, m.sender_id, m.msg_type, m.title,
+               m.body, m.summary, m.level, m.media_status, m.created_at,
+               s.display_name AS sender_name, c.name AS channel_name
+        FROM messages m
+        LEFT JOIN senders s ON s.channel_no = m.channel_no AND s.sender_id = m.sender_id
+        LEFT JOIN channels c ON c.channel_no = m.channel_no
+        WHERE m.deleted_at IS NULL
+          AND MATCH(m.title, m.summary, m.body) AGAINST (? IN NATURAL LANGUAGE MODE)""");
+    List<Object> params = new ArrayList<>(List.of(query));
+    appendAdminFilters(sql, params, channelNo, msgType, since, limit);
+    return Db.selectListBySql(sql.toString(), params.toArray());
+  }
+
+  public List<Row> searchAdminLike(String pattern, String channelNo, String msgType, long since,
+      int limit) {
     StringBuilder sql = new StringBuilder("""
         SELECT m.seq, m.msg_id, m.channel_no, m.group_id, m.sender_id, m.msg_type, m.title,
                m.body, m.summary, m.level, m.media_status, m.created_at,
@@ -503,6 +520,13 @@ public class PbStore {
         WHERE m.deleted_at IS NULL
           AND (m.body LIKE ? OR m.title LIKE ? OR m.summary LIKE ?)""");
     List<Object> params = new ArrayList<>(List.of(pattern, pattern, pattern));
+    appendAdminFilters(sql, params, channelNo, msgType, since, limit);
+    return Db.selectListBySql(sql.toString(), params.toArray());
+  }
+
+  /** 两条搜索腿共用的过滤与翻页：channel_no / msg_type / since 参数绑定，limit 夹在调用方。 */
+  private static void appendAdminFilters(StringBuilder sql, List<Object> params, String channelNo,
+      String msgType, long since, int limit) {
     if (channelNo != null && !channelNo.isBlank()) {
       sql.append(" AND m.channel_no = ?");
       params.add(channelNo.trim());
@@ -517,7 +541,6 @@ public class PbStore {
     }
     sql.append(" ORDER BY m.seq DESC LIMIT ?");
     params.add(limit);
-    return Db.selectListBySql(sql.toString(), params.toArray());
   }
 
   /** 管理台概览计数：今日零点之后的消息单独统计。 */

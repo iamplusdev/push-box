@@ -1,8 +1,12 @@
 package dev.pushbox.server.config;
 
+import jakarta.servlet.Filter;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
@@ -53,6 +57,38 @@ public class SpaWebConfig implements WebMvcConfigurer {
         .resourceChain(true)
         .addResolver(new SpaResourceResolver(reservedFirstSegments(props),
             new ClassPathResource("/static/index.html")));
+  }
+
+  /**
+   * 管理台 SPA 的 CSP。没有 Spring Security，用最薄的 Filter 挂头；只给文档（text/html）响应，
+   * 静态资源不背这个头。style-src 的 {@code 'unsafe-inline'} 是 Vue 内联 style 属性
+   * （绑定样式、Element Plus 的 loading 遮罩）绕不开的；脚本没有内联，script-src 只放 'self'。
+   */
+  static final String CSP_POLICY = String.join("; ",
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      "connect-src 'self'",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self'");
+
+  @Bean
+  FilterRegistrationBean<Filter> spaCsp() {
+    FilterRegistrationBean<Filter> registration = new FilterRegistrationBean<>(cspFilter());
+    registration.setUrlPatterns(List.of("/*"));
+    return registration;
+  }
+
+  static Filter cspFilter() {
+    return (request, response, chain) -> {
+      chain.doFilter(request, response);
+      if (response instanceof HttpServletResponse http
+          && http.getContentType() != null && http.getContentType().startsWith("text/html")) {
+        http.setHeader("Content-Security-Policy", CSP_POLICY);
+      }
+    };
   }
 
   /**

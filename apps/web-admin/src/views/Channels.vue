@@ -6,7 +6,7 @@
           v-model="keyword"
           placeholder="搜索号码 / 名称 / 空间"
           clearable
-          style="width: 260px"
+          style="width: 100%; max-width: 260px"
         >
           <template #prefix>
             <el-icon><Search /></el-icon>

@@ -113,4 +113,31 @@ class SpaWebConfigTest {
     assertThat(resolve(r, "channels/12345678")).isNull();
     assertThat(resolve(r, "api/v1/admin/channels")).isNull();
   }
+
+  @Test
+  @DisplayName("⑧ CSP 只挂在文档响应上：管理台页面有，JS/CSS/JSON 不背这个头")
+  void cspOnlyOnHtmlDocuments() throws Exception {
+    jakarta.servlet.Filter filter = SpaWebConfig.cspFilter();
+    jakarta.servlet.FilterChain noop = (req, res) -> { };
+
+    org.springframework.mock.web.MockHttpServletResponse page =
+        new org.springframework.mock.web.MockHttpServletResponse();
+    page.setContentType("text/html;charset=UTF-8");
+    filter.doFilter(new org.springframework.mock.web.MockHttpServletRequest(), page, noop);
+    assertThat(page.getHeader("Content-Security-Policy"))
+        .contains("default-src 'self'").contains("script-src 'self'")
+        .contains("frame-ancestors 'none'");
+
+    org.springframework.mock.web.MockHttpServletResponse asset =
+        new org.springframework.mock.web.MockHttpServletResponse();
+    asset.setContentType("application/javascript");
+    filter.doFilter(new org.springframework.mock.web.MockHttpServletRequest(), asset, noop);
+    assertThat(asset.getHeader("Content-Security-Policy")).isNull();
+
+    org.springframework.mock.web.MockHttpServletResponse api =
+        new org.springframework.mock.web.MockHttpServletResponse();
+    api.setContentType("application/json");
+    filter.doFilter(new org.springframework.mock.web.MockHttpServletRequest(), api, noop);
+    assertThat(api.getHeader("Content-Security-Policy")).isNull();
+  }
 }

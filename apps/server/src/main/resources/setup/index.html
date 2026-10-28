@@ -56,6 +56,13 @@
   #msg.info { color: var(--muted); }
   .hidden { display: none; }
   code { background: #f5f6f8; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  /* 窄屏（手机上装 NAS 的场景）两列排不下：改成单列，行内的 flex 比例也一并解除。
+     !important 是因为那几处 flex 比例是写在元素 style 上的内联样式。 */
+  @media (max-width: 480px) {
+    .wrap { padding: 20px 12px 48px; }
+    .row { flex-direction: column; gap: 0; }
+    .row > div { flex: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -75,27 +82,27 @@
     <p class="desc">消息与频道都存在 MySQL 里（8.0 及以上）。库不存在时安装会顺手建一个。</p>
     <div class="row">
       <div class="field" style="flex:2">
-        <label>地址 *</label>
+        <label for="dbHost">地址 *</label>
         <input type="text" id="dbHost" value="127.0.0.1" autocomplete="off">
         <p class="hint">库和 PushBox 在同一台机器上时，也别填 127.0.0.1：容器里的 127.0.0.1 是容器自己，要填局域网 IP。</p>
       </div>
       <div class="field" style="flex:0 0 110px">
-        <label>端口 *</label>
+        <label for="dbPort">端口 *</label>
         <input type="number" id="dbPort" value="3306">
       </div>
     </div>
     <div class="row">
       <div class="field">
-        <label>库名 *</label>
+        <label for="dbName">库名 *</label>
         <input type="text" id="dbName" value="pushbox" autocomplete="off">
       </div>
       <div class="field">
-        <label>用户名 *</label>
+        <label for="dbUser">用户名 *</label>
         <input type="text" id="dbUser" value="pushbox" autocomplete="off">
       </div>
     </div>
     <div class="field">
-      <label>密码 *</label>
+      <label for="dbPass">密码 *</label>
       <input type="password" id="dbPass" autocomplete="new-password">
     </div>
     <div class="actions">
@@ -108,33 +115,33 @@
     <h2>2 · 图片与头像存哪里</h2>
     <p class="desc">默认存在 PushBox 自己的数据目录里，不需要额外的存储服务。</p>
     <div class="field">
-      <label>本地存储目录</label>
+      <label for="localPath">本地存储目录</label>
       <input type="text" id="localPath" value="data/media" autocomplete="off">
       <p class="hint">容器里是 <code>/app/data/media</code>，把 <code>/app/data</code> 挂到 NAS 的文件夹上就能保住图片。</p>
     </div>
     <label class="switch"><input type="checkbox" id="useS3"> 改用对象存储（RustFS / MinIO / 阿里云 OSS 等）</label>
     <div id="s3Box" class="sub hidden">
       <div class="field">
-        <label>服务地址 *</label>
+        <label for="s3Endpoint">服务地址 *</label>
         <input type="text" id="s3Endpoint" placeholder="http://192.0.2.10:9000" autocomplete="off">
       </div>
       <div class="row">
         <div class="field">
-          <label>桶名 *</label>
+          <label for="s3Bucket">桶名 *</label>
           <input type="text" id="s3Bucket" value="pushbox" autocomplete="off">
         </div>
         <div class="field">
-          <label>区域</label>
+          <label for="s3Region">区域</label>
           <input type="text" id="s3Region" value="us-east-1" autocomplete="off">
         </div>
       </div>
       <div class="row">
         <div class="field">
-          <label>Access Key *</label>
+          <label for="s3Ak">Access Key *</label>
           <input type="text" id="s3Ak" autocomplete="off">
         </div>
         <div class="field">
-          <label>Secret Key *</label>
+          <label for="s3Sk">Secret Key *</label>
           <input type="password" id="s3Sk" autocomplete="new-password">
         </div>
       </div>
@@ -143,17 +150,17 @@
     <label class="switch"><input type="checkbox" id="encrypted"> 加密存储的图片与头像</label>
     <div id="encBox" class="sub hidden">
       <div class="field">
-        <label>加密口令（推荐）</label>
+        <label for="passphrase">加密口令（推荐）</label>
         <input type="password" id="passphrase" autocomplete="new-password" placeholder="至少 12 个字符">
         <p class="hint">口令本身不存盘，服务端用它派生出加密密钥，只保存校验信息。<b>忘了它就解不开已存的图片，且无法重设。</b></p>
       </div>
       <div class="field">
-        <label>或者：主钥（高级，与口令二选一）</label>
+        <label for="masterKey">或者：主钥（高级，与口令二选一）</label>
         <input type="text" id="masterKey" placeholder="base64 的 32 字节，openssl rand -base64 32" autocomplete="off">
       </div>
     </div>
     <div class="field">
-      <label>图片抓取放行主机（可选）</label>
+      <label for="mediaAllowHosts">图片抓取放行主机（可选）</label>
       <input type="text" id="mediaAllowHosts" placeholder="img.lan,10.0.0.20:8080" autocomplete="off">
       <p class="hint">内网地址默认一律不抓（防 SSRF），所以图床在内网时必须在这里点名。写 <code>host</code> 或 <code>host:port</code>，逗号分隔，不带 <code>http://</code> 与路径。</p>
     </div>
@@ -163,17 +170,17 @@
     <h2>3 · 管理台与服务</h2>
     <p class="desc">管理台用来看频道、设备与搜索消息。留空即不启用（登录返回 403）。</p>
     <div class="field">
-      <label>管理台口令</label>
+      <label for="adminPass">管理台口令</label>
       <input type="password" id="adminPass" autocomplete="new-password" placeholder="留空 = 不启用管理台">
       <p class="hint">登录时只填这一个口令，没有用户名。签名密钥由服务端自动生成，不需要你管。</p>
     </div>
     <div class="row">
       <div class="field">
-        <label>服务端口</label>
+        <label for="port">服务端口</label>
         <input type="number" id="port" value="7404">
       </div>
       <div class="field" style="flex:2">
-        <label>运维端点放行网段（可选）</label>
+        <label for="cidrs">运维端点放行网段（可选）</label>
         <input type="text" id="cidrs" placeholder="172.16.0.0/12,10.0.0.0/8" autocomplete="off">
       </div>
     </div>
@@ -185,7 +192,7 @@
   <section>
     <div class="actions">
       <button id="save" type="button">保存并启动</button>
-      <span id="msg" class="info"></span>
+      <span id="msg" class="info" role="status" aria-live="polite"></span>
     </div>
   </section>
 </div>

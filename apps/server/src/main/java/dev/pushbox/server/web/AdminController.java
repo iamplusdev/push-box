@@ -5,6 +5,7 @@ import dev.pushbox.server.repo.PbStore;
 import dev.pushbox.server.service.ChannelService;
 import dev.pushbox.server.service.DeviceService;
 import dev.pushbox.server.service.ScheduledTaskService;
+import dev.pushbox.server.service.SearchService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -173,8 +174,26 @@ public class AdminController {
       throw ApiException.invalidParam("q 最长 100 字符");
     }
     int capped = Math.max(1, Math.min(limit, 200));
+    // ≥2 字先走 ngram FULLTEXT；短词 MATCH 恒零命中，直接 LIKE。零命中再兜一次 LIKE：
+    // ngram 索引缺失或被分词切碎都表现为零命中，而搜索给假阴性比慢一点更糟（与设备侧同一路由）。
+    String query = q.trim();
+    List<Row> rows = null;
+    if (SearchService.isNgramSearchable(query)) {
+      String matchable = SearchService.matchQuery(query);
+      // 纯标点（如 ""）剥完引号只剩空白：不送进 AGAINST，直接走 LIKE 腿
+      if (!matchable.isBlank()) {
+        rows = store.searchAdminFulltext(matchable, channelNo, msgType, since, capped);
+        if (rows.isEmpty()) {
+          rows = null;
+        }
+      }
+    }
+    if (rows == null) {
+      rows = store.searchAdminLike(SearchService.likePattern(query), channelNo, msgType, since,
+          capped);
+    }
     List<Map<String, Object>> messages = new ArrayList<>();
-    for (Row row : store.searchAdmin(q, channelNo, msgType, since, capped)) {
+    for (Row row : rows) {
       Map<String, Object> item = new LinkedHashMap<>();
       item.put("seq", row.getLong("seq"));
       item.put("msg_id", row.getString("msg_id"));

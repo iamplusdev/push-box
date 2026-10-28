@@ -10,7 +10,7 @@
           <el-input
             v-model="form.secret"
             type="password"
-            placeholder="请输入 pb.admin.secret"
+            placeholder="请输入管理台口令"
             show-password
           />
         </el-form-item>
@@ -36,7 +36,7 @@
       </el-form>
       
       <div class="tips">
-        <p>提示：密钥配置在 application-dev.yml 的 pb.admin.secret</p>
+        <p>提示：密钥是安装时在安装页填写的「管理台口令」，存在 data/config/pushbox.json 里</p>
         <p>生产环境建议留空以禁用管理台</p>
       </div>
     </el-card>
@@ -102,7 +102,8 @@ async function handleLogin() {
 }
 
 .login-card {
-  width: 400px;
+  /* 窄屏（如 390px 手机视口）上写死 400px 会把卡片两侧裁出屏 */
+  width: min(400px, 92vw);
 }
 
 /* 登录页只有这一处标题：h2 的浏览器默认是 1.5em（body 15 下就是 22.5px），

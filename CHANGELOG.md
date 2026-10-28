@@ -45,6 +45,28 @@
 
 ---
 
+## 未发布 —— 三端优化第六轮：Web 管理台与安装页（S6）
+
+> 承接第五轮（S5）。S5 收的是 Windows 端的功能口，这一轮收管理台与安装页的**窄屏口 + 搜索口**：统计卡与弹窗写死宽度在手机上溢出、操作区把按钮挤出屏幕、安装页 17 个输入框的 label 与输入框没关联、登录页提示还指着一份早已不存在的 application-dev.yml、管理台搜索在真库上走 LIKE 而不是 FULLTEXT 索引。
+
+### S6 改了什么
+
+1. **管理台窄屏适配**：Dashboard 四个统计卡 `:span="6"` 改 `:xs="24" :sm="12" :md="6"`（手机一卡一行、窄屏两列、桌面四列）；PageHeader 加 `flex-wrap: wrap` 且操作区组内也可换行、宽度不超所在行（390px 实测：频道页搜索框占整行、刷新钮落到下一行，不再被裁出屏）；Channels 搜索框 `width: 260px` 改 `width: 100%; max-width: 260px`；ScheduledTasks 两处弹窗 `width="680px"` 改 `min(680px, 92vw)`、预览弹窗 `560px` 改 `min(560px, 92vw)`（390px 实测弹窗宽 359px 不出屏）；登录卡 `width: 400px` 改 `min(400px, 92vw)`。
+2. **安装页 label 关联与窄屏**：17 个输入框的 label 与控件加 `for`/`id` 关联（读屏器能报出字段名）；提示区 `#msg` 加 `role="status" aria-live="polite"`（校验结果会被读屏器播报）；480px 以下两列表单竖排成单列。
+3. **登录页提示说真话**：提示文案从「密钥配置在 application-dev.yml 的 pb.admin.secret」改成「密钥是安装时在安装页填写的「管理台口令」，存在 data/config/pushbox.json 里」（S1 起配置就只在 RuntimeConfig 这一份 JSON 里）；输入框占位符同步改成「请输入管理台口令」。
+4. **管理台搜索走 FULLTEXT**：AdminController.searchMessages 与设备侧同款双路由——≥2 字先 `MATCH AGAINST (NATURAL LANGUAGE MODE)`、零命中或短词回退 LIKE（通配符转义）；查询里的双引号（NATURAL LANGUAGE MODE 唯一语法字符）先剥掉再进 MATCH，剥完只剩空白的纯标点查询直接走 LIKE；PbStore 拆出 searchAdminFulltext/searchAdminLike 两条腿共享 channel_no/msg_type/since/limit 过滤。管理台搜索没有 group 边界，是全库唯一「查所有空间」的读路径。
+5. **配置文件未知键打日志**：RuntimeConfig 新增未知键检测，load 时把服务端不认识的键（点路径，如 `database.pasword`）warn 出来——协议向前兼容是特性，但拼错的键悄悄失效也要让部署者看得见。
+6. **CSP 只打在 HTML 上**：SpaWebConfig 新增 CSP 过滤器（`default-src 'self'`、`script-src 'self'`、`style-src 'self' 'unsafe-inline'`、`img-src 'self' data:`、`connect-src 'self'`、`frame-ancestors 'none'` 等），只对 text/html 响应加头，JSON/JS 资源不加。
+
+### 用例
+
+- server `mvn test` 全绿（**336 run / 0 fail / 0 error**；33 skipped 是 `objectStorageReady` 的既有基线，本地 s3=false）：新增 AdminSearchStoreTest 真库五用例（跨空间命中+频道名 JOIN、channel_no 收窄、单字 LIKE、剥引号后 MATCH、limit+seq 倒序；用只在种子行出现的生造词「玄羽髓」断言，开发期存量消息不会数进来）、SearchLogicTest ⑧（matchQuery 只剥双引号）、RuntimeConfigTest ⑪（未知键点路径、normalize 后全认识、坏 JSON 不炸）、SpaWebConfigTest ⑧（CSP 只上 text/html）。
+- web-admin `vue-tsc -b && vite build` 通过。
+- 真实页面验证（browser-use 面板 + headless Chrome 390×844）：登录页新文案与新占位符渲染；仪表盘四卡一卡一行；频道页搜索框整行、刷新钮换行不被裁切；新建任务弹窗 359px 不出屏；安装页 480px 以下竖排，`scripts/install-page-smoke.sh` 对新 HTML **6/6**。
+- 大表性能对比（LIKE 与 FULLTEXT 的耗时差）需要与本机同量级的存量数据，本环境数据量不够，未做；两条腿的召回正确性由真库用例钉住。
+
+---
+
 ## 未发布 —— 三端优化第三轮：品牌色统一（S3）
 
 > 承接第二轮（S2）。S2 收的是安全口，这一轮收的是三端的**颜色口**：Android、Windows、管理台、安装页四个入口各自一套绿/蓝（#07C160 / #0F7A4F / #409eff / #07c160），而"连接中"在两端都借的是离线橙——"断了要人管"和"正在自己好"同色，扫一眼分不出该等还是该管。改法是全部收敛到品牌绿 #0F7A4F，并把"连接中"拆成独立的蓝。

@@ -125,7 +125,7 @@
     <el-dialog
       v-model="dialogVisible"
       :title="editingId ? '编辑定时任务' : '新建定时任务'"
-      width="680px"
+      width="min(680px, 92vw)"
       :close-on-click-modal="false"
       @closed="resetDraft"
     >
@@ -352,7 +352,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="previewVisible" title="消息预览" width="560px" append-to-body>
+    <el-dialog v-model="previewVisible" title="消息预览" width="min(560px, 92vw)" append-to-body>
       <div v-if="preview" class="preview">
         <div class="preview-meta">
           <el-tag size="small" type="info" effect="plain">{{ preview.timezone }}</el-tag>

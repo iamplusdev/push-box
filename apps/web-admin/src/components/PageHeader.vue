@@ -24,6 +24,8 @@ defineProps<{
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* 窄屏上标题与操作钮放不下一行：允许换行，操作区整组落到下一行而不是挤出屏幕 */
+  flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 24px;
 }
@@ -48,5 +50,9 @@ defineProps<{
   gap: 12px;
   align-items: center;
   flex-shrink: 0;
+  /* 组内也允许换行、宽度不超所在行：极窄屏上操作组整组换行后，若还比行宽
+     （如 搜索框 + 刷新钮 并排超宽），按钮再落到输入框下一行，而不是被裁出屏 */
+  flex-wrap: wrap;
+  max-width: 100%;
 }
 </style>

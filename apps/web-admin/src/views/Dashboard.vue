@@ -7,25 +7,26 @@
     </PageHeader>
 
     <el-row :gutter="16" class="stat-row">
-      <el-col :span="6">
+      <!-- 手机上一卡一行、窄屏两列、桌面四列：统计卡是纯数字，窄屏压成 1/6 宽谁都读不了 -->
+      <el-col :xs="24" :sm="12" :md="6">
         <el-card shadow="never" class="stat-card">
           <div class="stat-num">{{ stats.active_channels }}<span class="stat-sub">/ {{ stats.total_channels }}</span></div>
           <div class="stat-label">活跃频道 / 总数</div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :xs="24" :sm="12" :md="6">
         <el-card shadow="never" class="stat-card">
           <div class="stat-num">{{ stats.active_devices }}<span class="stat-sub">/ {{ stats.total_devices }}</span></div>
           <div class="stat-label">在册设备 / 总数</div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :xs="24" :sm="12" :md="6">
         <el-card shadow="never" class="stat-card">
           <div class="stat-num">{{ stats.messages_today }}</div>
           <div class="stat-label">今日消息</div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :xs="24" :sm="12" :md="6">
         <el-card shadow="never" class="stat-card">
           <div class="stat-num">{{ stats.live_messages }}</div>
           <div class="stat-label">累计消息</div>

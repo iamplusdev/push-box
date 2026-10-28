@@ -1,6 +1,7 @@
 package dev.pushbox.server.setup;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.databind.JsonNode;
 import dev.pushbox.core.protocol.Json;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -14,6 +15,9 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 一份 JSON 就是全部配置。安装页写它、服务端读它、启动后同步进 {@code app_state}。
@@ -37,6 +41,21 @@ public class RuntimeConfig {
   public static final String CONFIG_FILE_PROPERTY = "pb.config-file";
 
   private static final SecureRandom RANDOM = new SecureRandom();
+
+  private static final Logger log = LoggerFactory.getLogger(RuntimeConfig.class);
+
+  /**
+   * 服务端认识的键。拼错一个键名（比如 {@code database.pasword}）在 Jackson 那边是静默忽略：
+   * 配置照常启动、那个值悄悄落回默认。所以加载时点一次名，warn 而不是拒启——
+   * 老配置文件里带着旧键的人不该因为升级起不来（所以也不动 FAIL_ON_UNKNOWN_PROPERTIES）。
+   */
+  private static final Map<String, Set<String>> KNOWN_KEYS = Map.of(
+      "database", Set.of("host", "port", "name", "username", "password"),
+      "storage", Set.of("s3", "localPath", "endpoint", "region", "bucket", "accessKey",
+          "secretKey", "pathStyle", "encrypted", "passphrase", "masterKey"),
+      "admin", Set.of("password", "jwtKey"),
+      "security", Set.of("internalCidrs", "trustForwardedFor"),
+      "media", Set.of("allowHosts"));
 
   private int port = 7404;
   private Database database = new Database();
@@ -180,11 +199,55 @@ public class RuntimeConfig {
 
   public static RuntimeConfig load(Path path) {
     try {
-      RuntimeConfig config = Json.MAPPER.readValue(Files.readAllBytes(path), RuntimeConfig.class);
+      byte[] bytes = Files.readAllBytes(path);
+      List<String> unknown = unknownKeys(new String(bytes, StandardCharsets.UTF_8));
+      if (!unknown.isEmpty()) {
+        log.warn("配置文件 {} 里有服务端不认识的键（会被忽略）：{}", path, String.join(", ", unknown));
+      }
+      RuntimeConfig config = Json.MAPPER.readValue(bytes, RuntimeConfig.class);
       return config == null ? new RuntimeConfig() : config;
     } catch (IOException e) {
       throw new UncheckedIOException("配置文件读不出来: " + path, e);
     }
+  }
+
+  /**
+   * 返回配置文件里服务端不认识的键，写成点路径（如 {@code database.pasword}）。
+   * 解析不过的 JSON 返回空列表：那是 {@link #load} 里 readValue 的活，这里不抢报。
+   */
+  static List<String> unknownKeys(String json) {
+    JsonNode root;
+    try {
+      root = Json.MAPPER.readTree(json);
+    } catch (IOException e) {
+      return List.of();
+    }
+    if (root == null || !root.isObject()) {
+      return List.of();
+    }
+    List<String> out = new ArrayList<>();
+    var fields = root.fields();
+    while (fields.hasNext()) {
+      Map.Entry<String, JsonNode> entry = fields.next();
+      Set<String> nested = KNOWN_KEYS.get(entry.getKey());
+      if (nested == null) {
+        if (!"port".equals(entry.getKey())) {
+          out.add(entry.getKey());
+        }
+        continue;
+      }
+      JsonNode value = entry.getValue();
+      if (value != null && value.isObject()) {
+        var children = value.fields();
+        while (children.hasNext()) {
+          String child = children.next().getKey();
+          if (!nested.contains(child)) {
+            out.add(entry.getKey() + "." + child);
+          }
+        }
+      }
+    }
+    return out;
   }
 
   public static RuntimeConfig loadOrDefault(Path path) {

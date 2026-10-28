@@ -122,4 +122,16 @@ class SearchLogicTest {
     assertThat(SearchService.snippet(null, "alpha beta gamma", null, "zzz", 120))
         .isEqualTo("alpha beta gamma");
   }
+
+  @Test
+  @DisplayName("⑧ MATCH 查询的引号换成空格：不对称的短语引号会让 AGAINST 整句报语法错")
+  void matchQueryStripsQuotesOnly() {
+    assertThat(SearchService.matchQuery("CPU 告警")).isEqualTo("CPU 告警");
+    // 布尔模式的运算符在自然语言模式下只是分词边界，不动它们
+    assertThat(SearchService.matchQuery("C++ -debug")).isEqualTo("C++ -debug");
+    assertThat(SearchService.matchQuery("\"告警")).isEqualTo(" 告警");
+    assertThat(SearchService.matchQuery("a\"b\"")).isEqualTo("a b ");
+    assertThat(SearchService.matchQuery("\"\"")).isEqualTo("  ");
+    assertThat(SearchService.matchQuery("")).isEmpty();
+  }
 }

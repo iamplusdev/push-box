@@ -173,4 +173,23 @@ class RuntimeConfigTest {
     // 归一过之后再跑一次不该报告"改动了"，否则每次启动都会重写一遍配置文件。
     assertThat(config.normalize()).isFalse();
   }
+
+  @Test
+  @DisplayName("⑪ 不认识的键被点名（warn 的依据）：拼错的键名不再静默落回默认")
+  void unknownKeysAreListed() {
+    // 顶层与嵌套都查：拼错一个 database.pasword，那个口令就静默落回默认空
+    assertThat(RuntimeConfig.unknownKeys("""
+        {"port": 9000, "database": {"host": "db", "pasword": "x"},
+         "storage": {"s3": true}, "以后才有的段": {"a": 1}}"""))
+        .containsExactlyInAnyOrder("以后才有的段", "database.pasword");
+
+    // 全认识的配置（含服务端自己回写的 jwtKey）一个都不报
+    RuntimeConfig full = new RuntimeConfig();
+    full.normalize();
+    assertThat(RuntimeConfig.unknownKeys(full.toJson())).isEmpty();
+
+    // 解析不过的 JSON 不在这里报：那是 load() 里 readValue 的活
+    assertThat(RuntimeConfig.unknownKeys("{不是 json")).isEmpty();
+    assertThat(RuntimeConfig.unknownKeys("[1, 2]")).isEmpty();
+  }
 }
