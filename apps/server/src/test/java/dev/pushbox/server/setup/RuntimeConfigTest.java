@@ -101,6 +101,7 @@ class RuntimeConfigTest {
     config.getStorage().setS3(true);
     config.getStorage().setEndpoint("http://192.0.2.10:9000");
     config.getAdmin().setPassword("管理台口令");
+    config.getSecurity().setTrustForwardedFor(true);
     config.normalize();
 
     config.save(path);
@@ -113,6 +114,7 @@ class RuntimeConfigTest {
     assertThat(loaded.getStorage().isS3()).isTrue();
     assertThat(loaded.getStorage().getEndpoint()).isEqualTo("http://192.0.2.10:9000");
     assertThat(loaded.getAdmin().getJwtKey()).isEqualTo(config.getAdmin().getJwtKey());
+    assertThat(loaded.getSecurity().isTrustForwardedFor()).isTrue();
     // 默认值把 host/port/name/username 都填上了，加上刚写的口令就是"配好了"
     assertThat(loaded.isDatabaseConfigured()).isTrue();
   }

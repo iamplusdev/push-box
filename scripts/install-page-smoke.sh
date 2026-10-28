@@ -124,10 +124,11 @@ fi
 # ① 页面真的在，而且是安装页而不是别的什么 200。
 body="$(curl -s --max-time 5 "http://127.0.0.1:$PORT/")"
 if grep -q "PushBox 安装" <<<"$body" && grep -q 'id="dbHost"' <<<"$body" \
+   && grep -q 'id="trustProxy"' <<<"$body" \
    && grep -q "name=\"pb-install-port\" content=\"$PORT\"" <<<"$body"; then
     pass "① 安装页起来了，表单字段与真实端口都在（$(wc -c <<<"$body" | tr -d ' ') 字节）"
 else
-    fail "① 端口 $PORT 上有 200，但不是安装页（缺「PushBox 安装」、dbHost 或注入端口）"
+    fail "① 端口 $PORT 上有 200，但不是安装页（缺「PushBox 安装」、dbHost、trustProxy 或注入端口）"
 fi
 
 # ② 未配置时只有安装页：管理台的路由一律 302 回 `/`，而不是 404 或一片 200+HTML。

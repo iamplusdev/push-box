@@ -146,7 +146,7 @@ class InstallServerTest {
       String html = new String(in.readAllBytes(), StandardCharsets.UTF_8);
       for (String id : new String[] {"dbHost", "dbPort", "dbName", "dbUser", "dbPass", "localPath",
           "useS3", "s3Endpoint", "s3Bucket", "s3Region", "s3Ak", "s3Sk", "s3PathStyle",
-          "encrypted", "passphrase", "masterKey", "adminPass", "port", "cidrs",
+          "encrypted", "passphrase", "masterKey", "adminPass", "port", "cidrs", "trustProxy",
           "mediaAllowHosts", "setupToken"}) {
         assertThat(html).as("表单缺 %s 这一项", id).contains("id=\"" + id + "\"");
       }

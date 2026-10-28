@@ -176,6 +176,8 @@
       </div>
     </div>
     <p class="hint"><code>/healthz</code> 与 <code>/actuator/**</code> 默认只允许本机访问；要从别的机器抓监控指标就在这里写网段。</p>
+    <label class="switch"><input type="checkbox" id="trustProxy"> 服务端前面有反向代理（信任 X-Forwarded-For）</label>
+    <p class="hint">反代跑在本机上时不用勾（自动识别）。反代在另一台机器时勾上，否则登录锁定与限流按反代的地址算。直连部署绝不勾：勾了等于允许客户端伪造来源 IP。</p>
   </section>
 
   <section>
@@ -234,7 +236,8 @@
       },
       admin: { password: $('adminPass').value },
       security: {
-        internalCidrs: $('cidrs').value.split(/[\s,;]+/).filter(function (s) { return s.length > 0; })
+        internalCidrs: $('cidrs').value.split(/[\s,;]+/).filter(function (s) { return s.length > 0; }),
+        trustForwardedFor: $('trustProxy').checked
       },
       media: {
         allowHosts: $('mediaAllowHosts').value.split(/[\s,;]+/).filter(function (s) { return s.length > 0; })
@@ -260,6 +263,7 @@
     $('passphrase').value = s.passphrase || ''; $('masterKey').value = s.masterKey || '';
     $('adminPass').value = a.password || '';
     $('cidrs').value = (sec.internalCidrs || []).join(',');
+    $('trustProxy').checked = !!sec.trustForwardedFor;
     $('mediaAllowHosts').value = (med.allowHosts || []).join(',');
     toggle();
   }

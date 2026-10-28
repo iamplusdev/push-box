@@ -3,6 +3,7 @@ package dev.pushbox.server;
 import dev.pushbox.server.config.PbProperties;
 import dev.pushbox.server.setup.InstallServer;
 import dev.pushbox.server.setup.RuntimeConfig;
+import dev.pushbox.server.web.Requests;
 import java.nio.file.Path;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -23,6 +24,7 @@ public class PushboxServerApplication {
       int port = parsePort(option(args, "server.port", System.getProperty("server.port")));
       new InstallServer(configPath, port).awaitConfiguration();
     }
+    Requests.trustForwardedFor(RuntimeConfig.load(configPath).getSecurity().isTrustForwardedFor());
     SpringApplication.run(PushboxServerApplication.class, args);
   }
 

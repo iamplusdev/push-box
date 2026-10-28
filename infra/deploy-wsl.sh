@@ -123,7 +123,10 @@ setup() {
     [ -n "$passphrase" ] && encrypted=true
 
     local payload
-    payload=$(printf '{"port":7404,"database":{"host":"mysql","port":3306,"name":"pushbox","username":"pushbox","password":"%s"},"storage":{"s3":true,"localPath":"data/media","endpoint":"http://rustfs:9000","region":"us-east-1","bucket":"%s","accessKey":"%s","secretKey":"%s","pathStyle":true,"encrypted":%s,"passphrase":"%s","masterKey":""},"admin":{"password":"%s","jwtKey":""},"security":{"internalCidrs":%s},"media":{"allowHosts":%s}}' \
+    # trustForwardedFor 写死 true：这套栈里 Caddy 是另一个容器，服务端看到的来源是它的内网
+    # 地址而不是环回——不开的话登录锁定与限流会把所有请求并成 Caddy 一个桶（对应安装页第 3 节
+    # 「服务端前面有反向代理」复选框）。
+    payload=$(printf '{"port":7404,"database":{"host":"mysql","port":3306,"name":"pushbox","username":"pushbox","password":"%s"},"storage":{"s3":true,"localPath":"data/media","endpoint":"http://rustfs:9000","region":"us-east-1","bucket":"%s","accessKey":"%s","secretKey":"%s","pathStyle":true,"encrypted":%s,"passphrase":"%s","masterKey":""},"admin":{"password":"%s","jwtKey":""},"security":{"internalCidrs":%s,"trustForwardedFor":true},"media":{"allowHosts":%s}}' \
         "$(json_escape "$db_pass")" "$(json_escape "$s3_bucket")" \
         "$(json_escape "$s3_ak")" "$(json_escape "$s3_sk")" \
         "$encrypted" "$(json_escape "$passphrase")" \

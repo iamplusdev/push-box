@@ -132,11 +132,18 @@ public class RuntimeConfig {
   public static class Security {
     /** 运维端点（/healthz、/actuator/**）的额外放行网段，环回永远放行。 */
     private List<String> internalCidrs = new ArrayList<>();
+    /**
+     * true=服务端前面有反代，取 X-Forwarded-For 首段当客户端 IP；false=只认直连地址（默认）。
+     * 反代装在本机时环回来源自动可信、不用开；这一项给「服务端与反代不在同一台」的拓扑。
+     */
+    private boolean trustForwardedFor = false;
 
     public List<String> getInternalCidrs() { return internalCidrs; }
     public void setInternalCidrs(List<String> v) {
       this.internalCidrs = v == null ? new ArrayList<>() : v;
     }
+    public boolean isTrustForwardedFor() { return trustForwardedFor; }
+    public void setTrustForwardedFor(boolean v) { this.trustForwardedFor = v; }
   }
 
   public static class Media {
