@@ -107,6 +107,17 @@
 - ConversationStateSourceTest 四例通过：既有会话两把 ID 外层 key、不拿会话行当状态键、首次落位用瞬移三例，加上本地已读/撤通知留在详情协程、仅上报进 ViewModel 的新守护断言；这些是源码检查，不等价于 UI 实测。
 - `adb devices -l` 没有连接设备，未执行真机/模拟器的旋转、滚动定位、菜单操作与网络提交走查；不据编译和 JVM 测试宣称交互验收通过。频道与设置迁移仍是后续子步骤。
 
+### S7 第三阶段 b：频道页 ViewModel
+
+1. **频道请求迁入 ChannelsViewModel**：列表拉取（含 `subscribedOnly` 回显与通知渠道名回写）、创建、接入、退订、过滤开关、轮换密钥、归档、改名、清空、换发号码、治理位保存全部走 `viewModelScope`；旋转或切页不再把刚发出的请求打断在半路。频道名输入、接入号/密钥、改名文本、明文密钥卡、忙碌/错误/成功提示都进 StateFlow。
+2. **治理弹窗只产草稿**：`GovernanceDraft` 与 `governancePatch` 提为顶层纯函数，"未改字段发 null、空串/非数字视为没改"的规则从组合里挪出来可单测；弹窗点保存即关，请求由页面交给 ViewModel，进度与失败落在页面 busy/error 行（与归档/改名/清空同口径），失败后弹窗也不再吞掉错误。
+3. **接入成功提示改为布尔 `joinDone`**：文案仍由 UI 层 `stringResource` 取，ViewModel 不碰 Context；容量报表与白名单编辑器仍自持生命周期，白名单失败只借用页面错误行。
+
+### 第三阶段 b 用例
+
+- `:app:compileDebugKotlin`、`:app:assembleDebug`、`:app:compileDebugAndroidTestKotlin` 通过；`:app:testDebugUnitTest` **46 run / 0 fail / 0 error**（新增 ChannelsLogicTest 五例：名称去空白/回落/截 24 字、未改草稿不发字段、仅改动字段带值、空串与非数字视为未提交、数值 helper 与当前值比较）。
+- `adb devices -l` 没有连接设备，未执行真机走查：频道创建/接入/治理位保存的请求链路未与真实服务端联调过，此处只证明编译、逻辑分支与状态迁移。设置页迁移仍是后续子步骤。
+
 ---
 
 ## 未发布 —— 三端优化第三轮：品牌色统一（S3）
