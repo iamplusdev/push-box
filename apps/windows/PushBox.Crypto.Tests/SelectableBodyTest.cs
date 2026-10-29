@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 using PushBox.Windows.Controls;
 using PushBox.Windows.Data;
 using Xunit;
@@ -36,23 +37,68 @@ public class SelectableBodyTest
     {
         Sta.Run(() =>
         {
-            // 短的一行放得下：宽度就是标尺量出来的自然宽（贴着字收）
+            // 短的一行放得下：宽度就是标尺量出来的自然宽（贴着字收），只多出那半个像素的余量
             var shortBody = Build("收到", 600);
             Assert.True(shortBody.DesiredSize.Width < 600, $"短正文收窄失败：{shortBody.DesiredSize.Width}");
             Assert.Equal(shortBody.Document.PageWidth, shortBody.DesiredSize.Width);
+            Assert.InRange(shortBody.DesiredSize.Width, 29, 32);
 
-            // 长的那条放不下：钉满可用宽再换行。注意不是整整 600——CJK 换行落在整个字宽上，
-            // 标尺给的是 599.76，文档按同一个数换行才对得上高度
-            var ruler = MarkdownView.BuildAll(new MarkdownBlock[]
-            {
-                new MarkdownParagraph(string.Concat(Enumerable.Repeat("很长的一段正文。", 60)))
-            }, Style);
-            ruler.Measure(new Size(600, double.PositiveInfinity));
-
+            // 长的那条放不下：钉满整整 600 再换行。以前钉的是标尺**折过行之后**的宽（599.76），
+            // 文档按这个更窄的数再折一遍，尾巴就会短掉一两个字——这正是本轮要修的东西
             var longBody = Build(string.Concat(Enumerable.Repeat("很长的一段正文。", 60)), 600);
-            Assert.Equal(Math.Min(600, ruler.DesiredSize.Width), longBody.DesiredSize.Width, 0.01);
-            Assert.True(longBody.DesiredSize.Width > 599, $"长正文没有用满气泡：{longBody.DesiredSize.Width}");
+            Assert.Equal(600, longBody.DesiredSize.Width, 0.01);
             Assert.Equal(longBody.Document.PageWidth, longBody.DesiredSize.Width);
+        });
+    }
+
+    /// <summary>
+    /// 天气卡片那种"几行硬换行"的正文：最宽的那一行必须原样留在一行里。
+    /// 它的宽（175.577）和标尺报出来的宽（175.5767）差不到 0.001，文档却因此把末尾那个"阴"
+    /// 折到下一行——用户看到的就是"下一行只剩一两个字"。最宽行本身就是气泡宽度的来源，
+    /// 它自己反而被折断，这条用例就是钉住这个矛盾。
+    /// </summary>
+    [Fact]
+    public void TheWidestHardWrappedLineIsNeverBrokenAgain()
+    {
+        Sta.Run(() =>
+        {
+            const string weather = "● 金水 · 当前 15°C 阴\n☁ 天气 晴间多云 → 阴\n和风天气 · 08:30 更新";
+            var body = Build(weather, 570);
+
+            // 三行就是三行：4 行 = 最宽那一行被折了，末尾那个字单独占一行
+            Assert.Equal(3 * MarkdownStyle.BodyLine, body.DesiredSize.Height, 0.01);
+            // 气泡贴着最宽的那一行收，而不是吃满 570
+            Assert.InRange(body.DesiredSize.Width, 175.5, 177);
+            Assert.Equal(body.Document.PageWidth, body.DesiredSize.Width);
+        });
+    }
+
+    /// <summary>
+    /// 真窗口上挂着 <c>TextFormattingMode="Display"</c> 与 <c>UseLayoutRounding</c>（MainWindow.xaml 顶部）。
+    /// 标尺是游离的 TextBlock，继承不到这两个开关——它按 Ideal 量出来的宽比文档实际排出来的行窄
+    /// 将近一个像素，最宽那一行于是被折出最后一个字。这条用例把窗口那两个开关原样搬过来。
+    /// </summary>
+    [Fact]
+    public void TheRulerMeasuresWithTheWindowsDisplayFormattingMode()
+    {
+        Sta.Run(() =>
+        {
+            var body = new SelectableBody(new MarkdownBlock[]
+            {
+                new MarkdownParagraph("\U0001F4CD 临颍 · 当前 15°C 多云\n☁\uFE0F 天气 少云 → 多云\n和风天气 · 08:40 更新")
+            }, Style);
+            var host = new Border { Child = body };
+            TextOptions.SetTextFormattingMode(host, TextFormattingMode.Display);
+            host.UseLayoutRounding = true;
+            host.Measure(new Size(554, double.PositiveInfinity));
+
+            // Display 模式下每行量出来是 22.93 而不是标称的 23，所以留出一行的零点几做容差；
+            // 4 行（≈91.7）离得远，这条仍然能抓住"最宽那行被折出一个字"
+            Assert.InRange(body.DesiredSize.Height,
+                3.0 * MarkdownStyle.BodyLine - 1, 3.0 * MarkdownStyle.BodyLine + 1);
+            // 宿主的 UseLayoutRounding 会把交出去的尺寸吸到整设备像素（125% 缩放下 0.8 逻辑像素一格），
+            // 所以这里只要求文档的排版宽和实际占位宽是同一个数
+            Assert.Equal(body.Document.PageWidth, body.DesiredSize.Width, 1.0);
         });
     }
 

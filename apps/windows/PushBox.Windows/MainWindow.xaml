@@ -287,9 +287,12 @@
 
                 <Grid Grid.Row="1">
                     <!-- 虚拟化：滚动条必须长在 ItemsControl 自己的模板里。外面再套一个 ScrollViewer 的话，
-                         面板会被按无限高测量，虚拟化整个失效——几千条历史就会在每次切会话时全量排版一遍 -->
-                    <ItemsControl x:Name="Timeline" MaxWidth="900"
+                         面板会被按无限高测量，虚拟化整个失效——几千条历史就会在每次切会话时全量排版一遍。
+                         这一层铺满整个对话区：滚动条因此贴在最右边，而消息列的上限交给模板里的
+                         ItemsPresenter 去钉（见 ApplyPaneWidth）——给这一层设 MaxWidth 会连滚动条一起缩进来。 -->
+                    <ItemsControl x:Name="Timeline"
                                   controls:ScrollReveal.Attach="True"
+                                  controls:TimelineRow.Config="{Binding RowConfig, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                   AutomationProperties.Name="消息"
                                   VirtualizingPanel.IsVirtualizing="True"
                                   VirtualizingPanel.VirtualizationMode="Recycling"
@@ -303,7 +306,10 @@
                                               Padding="8,12,12,12"
                                               VerticalScrollBarVisibility="Auto"
                                               HorizontalScrollBarVisibility="Disabled">
-                                    <ItemsPresenter MaxWidth="{TemplateBinding MaxWidth}"
+                                    <!-- 消息列：靠左、宽度由 ApplyPaneWidth 钉成 BubbleMaxWidth（固定的那一档，
+                                         不按内容收——否则宽气泡被回收时整列会跟着缩，日期头跳来跳去）。
+                                         滚动条不在这里，它由外面的 ScrollViewer 铺满整个对话区后贴在最右边 -->
+                                    <ItemsPresenter x:Name="TimelinePresenter"
                                                     HorizontalAlignment="Left" />
                                 </ScrollViewer>
                             </ControlTemplate>
@@ -314,11 +320,11 @@
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
                         <!-- 行是"数据"而不是"建好的控件"：屏外的条目因此连气泡都没有，只有面板生成出来的
-                             那几行才走 TimelineRow 建一棵树。配置从窗口上取（换主题才换一份） -->
+                             那几行才走 TimelineRow 建一棵树。配置挂在时间线上、按继承传下来（换主题才换一份），
+                             不在这里绑——行根节点上绑 Window 要先等接到树上才落地，面板第一次量时行高还是 0 -->
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <controls:TimelineRow Item="{Binding}"
-                                    Config="{Binding RowConfig, RelativeSource={RelativeSource AncestorType={x:Type Window}}}" />
+                                <controls:TimelineRow Item="{Binding}" />
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                         <ItemsControl.ItemContainerStyle>

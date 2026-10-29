@@ -330,6 +330,8 @@ jobs:
       # 时间线虚拟化、视觉残留、时间与输入、主题三档与日志入口、键盘与无障碍各带自己的断言。
       # 2026-10-28 五条缺陷那一轮 648 → 676：拖选配色、头像留白、切会话两端（Android 一把、PC 两半）、
       # 更新下载的进度/重试/代理、设置项往返与安装器中文向导各自的判据。
+      # 2026-10-29 PC 对话区四条（左对齐/滚动条/滚轮/换行与切会话）676 → 683：
+      # 换行贴字收窄、拖选换 FlowDocument、滚轮跟手、切会话气泡复用各带自己的断言。
       - name: 断言 C# 用例数没有被静默裁剪
         if: always()
         working-directory: apps/windows
@@ -337,7 +339,7 @@ jobs:
         env:
           DOTNET_OUTCOME: ${{ steps.dotnet.outcome }}
         run: |
-          $CS_BASELINE = 676
+          $CS_BASELINE = 683
           $trx = Get-ChildItem -Path TestResults -Recurse -Filter crypto.trx -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $trx) {
             Write-Output "::error::没有 crypto.trx（dotnet test 这步 outcome=$env:DOTNET_OUTCOME）：还原或编译就断了，不是用例红——去看上面那步"

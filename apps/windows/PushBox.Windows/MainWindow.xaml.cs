@@ -52,6 +52,10 @@ public partial class MainWindow : Window
     /// <summary>时间线那一份行数据（<see cref="SyncTimeline"/> 往后补的就是它）。</summary>
     private ObservableCollection<TimelineItem>? _rows;
 
+    /// <summary>这一份行数据是给哪条会话排的。换会话要整份换掉，不能靠头尾比对去猜——
+    /// 两条会话的日期头是同一个值，头部能比中一个 <see cref="DateDivider"/>，之后就走进逐条删的老路。</summary>
+    private (string ChannelNo, string SenderId)? _syncedTo;
+
     /// <summary>行模板那一份配置。换主题才会换（<see cref="ConfigFor"/>）。</summary>
     private TimelineConfig? _rowConfig;
 
@@ -606,6 +610,10 @@ public partial class MainWindow : Window
         // 直接订阅哪个实例都行，ScrollChanged 会从模板里那个 ScrollViewer 冒上来
         Timeline.AddHandler(ScrollViewer.ScrollChangedEvent,
             new ScrollChangedEventHandler(OnTimelineScrollChanged));
+        // 滚轮在隧道阶段就接住：气泡正文是 FlowDocumentScrollViewer，它内部那层 ScrollViewer
+        // 即使滚动条关着也会把滚轮吃掉（指针停在字上就滚不动，挪到空白处才滚得动）。
+        // 在这一层统一处理，落在时间线上的滚轮才跟手
+        Timeline.PreviewMouseWheel += OnTimelinePreviewMouseWheel;
         SizeChanged += (_, _) => ApplyPaneWidth();
         PreviewKeyDown += OnPreviewKeyDown;
 
@@ -718,15 +726,48 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 把时间线那一份行数据同步成 <paramref name="next"/>：头尾相同的都留着，只换中间那段。
+    /// 把时间线那一份行数据同步成 <paramref name="next"/>：同一条会话里头尾相同的都留着，只换中间那段。
     /// 来新消息于是只是尾部追加，往上补一页只是头部插入，两种都不动整条集合——
     /// 整份换掉的代价不只是重建所有行，连"正在读的是哪一条"也会一起丢掉。
+    /// 换了会话就另说：那一份集合整个换掉（见下面的注释）。
     /// </summary>
     private void SyncTimeline(IReadOnlyList<TimelineItem> next)
     {
-        if (_rows is not { } rows)
+        var selected = _model.Selected;
+        var key = selected is null ? ((string, string)?)null : (selected.ChannelNo, selected.SenderId);
+
+        // 换会话时整份换掉：逐条 RemoveAt / Insert 会让面板为每一对通知回收一次容器、
+        // 重建一次行——切一次会话就是上百次。整份换掉只有一次 Reset，面板丢一次容器再按视口生成一次。
+        //
+        // 整段必须留在这一拍里做完：中途只要把控制权交回消息循环，中间的帧就会被画出来
+        // （先看到新会话的顶部，再跳到底部）。同步做，用户看到的只有"上一屏 → 新一屏的底部"。
+        //
+        // 换之前把偏移停在上一屏的底，不是归零：新会话本来就要落到底，从 0 开始量出来的
+        // 是顶部那一屏，落底还得再量一遍——两屏白建。50 条的一批实测，起点归零是 274/350 ms，
+        // 接着上一屏的底是 210/240 ms。上一屏本身不满一屏时这个偏移是 0，落点仍然是底部。
+        if (_rows is not { } rows || key != _syncedTo)
         {
-            Timeline.ItemsSource = _rows = new ObservableCollection<TimelineItem>(next);
+            _syncedTo = key;
+            _timelineSettled = false;
+            var swapped = _rows = new ObservableCollection<TimelineItem>(next);
+            var scroller = TimelineScroll;
+            var start = scroller?.ScrollableHeight ?? 0;
+            Timeline.ItemsSource = swapped;
+            // 偏移在换集合之前取、换完立刻写回去：晚一步面板就会拿旧偏移去新列表里
+            // 找"哪一条落在那个高度"，没有行高表只能从第一条开始一条条建出来量，51 行全建一遍。
+            scroller?.ScrollToVerticalOffset(start);
+            // 落底要走几个来回：面板的 extent 是按已量过的行估出来的，每落一次就把最后几行真建出来、
+            // 把估算修正一次，"量 → 落"得走到偏移不再变为止。
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                Timeline.UpdateLayout();
+                scroller?.ScrollToEnd();
+            }
+
+            _stuckToBottom = true;
+            _newBelow = 0;
+            PaintNewBelow();
+            _timelineSettled = true;
             return;
         }
 
@@ -841,6 +882,8 @@ public partial class MainWindow : Window
 
     private ScrollViewer? _scroller;
 
+    private ItemsPresenter? _presenter;
+
     /// <summary>
     /// 时间线那根滚动条。虚拟化要求 ScrollViewer 就是 <see cref="ItemsControl"/> 的宿主，
     /// 于是它被搬进了控件模板，只能等模板套上再按名字取；还没布局过时给 null，几处调用都只是"没得滚"。
@@ -854,6 +897,44 @@ public partial class MainWindow : Window
             return _scroller = Timeline.Template?.FindName("TimelineScroll", Timeline) as ScrollViewer;
         }
     }
+
+    /// <summary>
+    /// 消息列那一层（模板里的 <see cref="ItemsPresenter"/>）。滚动条要贴对话区右边，消息列又要靠左、
+    /// 宽度钉在 <see cref="MainModel.BubbleMaxWidth"/> 那一档，这两件事只能分开：ScrollViewer 铺满，
+    /// 列宽由 <see cref="ApplyPaneWidth"/> 写到这一层。
+    /// </summary>
+    private ItemsPresenter? TimelinePresenter
+    {
+        get
+        {
+            if (_presenter is not null) return _presenter;
+            Timeline.ApplyTemplate();
+            return _presenter = Timeline.Template?.FindName("TimelinePresenter", Timeline) as ItemsPresenter;
+        }
+    }
+
+    /// <summary>
+    /// 滚轮统一在这一层滚，不让它继续往气泡里钻。气泡正文的 <c>FlowDocumentScrollViewer</c> 内部
+    /// 还有一层 ScrollViewer：滚动条虽然关了，滚轮事件仍然先被它吃掉，指针停在正文上就"不跟手"。
+    /// 一次滚多少跟系统设置走（Windows 默认 3 行），一行按正文的两倍行高算——按名义行高滚，
+    /// 一格只挪半条气泡，看起来就像没动。
+    /// </summary>
+    private void OnTimelinePreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        var scroller = TimelineScroll;
+        if (scroller is null || e.Delta == 0) return;
+
+        var lines = SystemParameters.WheelScrollLines;
+        // -1 是系统里的"一次滚一屏"；0 表示系统关了滚轮，聊天窗口不该因此变成滚不动
+        var step = lines < 0
+            ? Math.Max(1, scroller.ViewportHeight - WheelLineHeight)
+            : Math.Max(1, lines) * WheelLineHeight;
+        var target = scroller.VerticalOffset - e.Delta / 120.0 * step;
+        scroller.ScrollToVerticalOffset(Math.Clamp(target, 0, scroller.ScrollableHeight));
+        e.Handled = true;
+    }
+
+    private const double WheelLineHeight = 40;
 
     private void OnTimelineScrollChanged(object sender, ScrollChangedEventArgs e)
     {
@@ -1020,7 +1101,12 @@ public partial class MainWindow : Window
         columns[1].MaxWidth = layout.ListMaxWidth;
         columns[2].Width = WidthOf(layout.Splitter);
         columns[3].Width = WidthOf(layout.Conversation);
-        Timeline.MaxWidth = MainModel.BubbleMaxWidth(layout.RightPaneWidth, layout.Narrow);
+        // 列宽钉在消息列那一层而不是整个时间线：整条控件铺满对话区，滚动条才贴右边。
+        // 钉成固定的 Width 而不是 MaxWidth：条目的宽度只跟"这一屏生成了哪几行"有关，
+        // 让消息列按内容收的话，宽气泡滚出视口就会被回收，整列随之收窄——日期头跟着跳。
+        // 气泡自己仍是靠左收在字上（BubbleView 里那颗 Border 是 Left 对齐），列宽不会把它拉长。
+        if (TimelinePresenter is { } presenter)
+            presenter.Width = MainModel.BubbleMaxWidth(layout.RightPaneWidth, layout.Narrow);
     }
 
     private static GridLength WidthOf(MainModel.ColumnPlan plan) =>

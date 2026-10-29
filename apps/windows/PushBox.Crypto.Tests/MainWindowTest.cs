@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Specialized;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -11,6 +12,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using PushBox.Windows.Controls;
 using PushBox.Windows.Data;
 using PushBox.Windows.Media;
 using PushBox.Windows.Net;
@@ -494,6 +496,311 @@ public sealed class MainWindowTest : IDisposable
     }
 
     /// <summary>
+    /// 对话区的两条边：消息列贴着左边（头像就在 8px 内边距之后），滚动条贴着对话区右缘。
+    /// 原来整条时间线被 <c>MaxWidth</c> 掐住再居中，滚动条落在对话区中间，左边还空出一大截。
+    /// 列宽钉成固定的那一档（<see cref="MainModel.BubbleMaxWidth"/>）而不是按内容收：
+    /// 宽气泡被虚拟化回收时整列跟着缩，日期头就会在滚动中左右跳。
+    /// </summary>
+    [Fact]
+    public void TheMessageColumnSitsLeftAndTheScrollBarHugsTheRightEdge()
+    {
+        // 12 条刚好超出一屏：滚动条显出来，日期头在底部时又不在视口里（滚回顶上才量得到）。
+        // 条数不超过一页，滚到顶也不会触发"补一页"，测量不会被那一趟重新摆位搅乱
+        for (var seq = 1; seq <= 12; seq++) _db.ApplyMessage(Msg(seq, "m" + seq, Grafana));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new MainWindow(_db, _identities,
+                    new ReadReporter(_db, _identities, Offline()),
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader())
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = -10000,
+                    Top = -10000,
+                    Width = 1400,
+                    Height = 500,
+                    ShowActivated = false
+                };
+                window.Show();
+                Sta.PumpUntil(() => window.IsLoaded);
+                window.OpenConversation(Channel, Grafana);
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0
+                                    && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(100);
+
+                var timeline = (ItemsControl)window.FindName("Timeline")!;
+                var scroller = Scroller(window);
+                var presenter = Find<ItemsPresenter>(timeline)
+                    ?? throw new InvalidOperationException("时间线模板里没有消息列");
+                var bar = VerticalBar(scroller);
+                Assert.Equal(Visibility.Visible, bar.Visibility);
+
+                // 时间线铺满对话区，滚动条就在这条控件的右缘上
+                Assert.Equal(timeline.ActualWidth, scroller.ActualWidth, 1);
+                var barRight = bar.TranslatePoint(new Point(bar.ActualWidth, 0), scroller).X;
+                Assert.Equal(scroller.ActualWidth, barRight, 1);
+
+                // 消息列靠左：ScrollViewer 的左内边距(8)之后就是它，右面留白给滚动条那一侧
+                var presenterLeft = presenter.TranslatePoint(new Point(0, 0), scroller).X;
+                Assert.Equal(8, presenterLeft, 1);
+                // 列宽就是模型按"窗口宽度"算出来的那一档（ApplyPaneWidth 抄的就是它）。
+                // 实际宽度会按布局取整到 1 物理像素（125% 缩放下就是 0.8 DIP 一格），所以留 1 DIP
+                var layout = MainModel.PaneLayoutFor(window.ActualWidth, true, MainModel.ListDefaultWidth);
+                var expected = MainModel.BubbleMaxWidth(layout.RightPaneWidth, layout.Narrow);
+                Assert.Equal(expected, presenter.Width, 1);
+                Assert.True(Math.Abs(expected - presenter.ActualWidth) <= 1,
+                    $"消息列宽 {presenter.ActualWidth}（钉的是 {expected}）");
+                Assert.True(presenter.ActualWidth < scroller.ActualWidth - 100,
+                    $"消息列 {presenter.ActualWidth} 几乎铺满了 {scroller.ActualWidth}：右边没有留白，滚动条也不在边上");
+
+                // 行都收在这一列里，头像的左边就是列的左缘
+                var row = FirstRealizedMessage(window) ?? throw new InvalidOperationException("一条消息都没生成出来");
+                Assert.Equal(presenterLeft, row.TranslatePoint(new Point(0, 0), scroller).X, 1);
+                var avatar = Find<AvatarBox>(row) ?? throw new InvalidOperationException("消息行里没有头像");
+                Assert.Equal(presenterLeft, avatar.TranslatePoint(new Point(0, 0), scroller).X, 1);
+
+                // 日期头居中在这条列上（列宽固定，翻多久都不会左右跳）
+                scroller.ScrollToTop();
+                Sta.PumpUntil(() => timeline.ItemContainerGenerator.ContainerFromIndex(0) is FrameworkElement);
+                Sta.PumpFor(100);
+                var divider = (FrameworkElement)timeline.ItemContainerGenerator.ContainerFromIndex(0)!;
+                Assert.IsType<DateDivider>(timeline.Items[0]);
+                var label = Find<TextBlock>(divider) ?? throw new InvalidOperationException("日期头没有字");
+                var center = label.TranslatePoint(new Point(label.ActualWidth / 2, 0), scroller).X;
+                Assert.Equal(presenterLeft + presenter.ActualWidth / 2, center, 2);
+
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "消息列与滚动条的位置没有按时量完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    /// <summary>
+    /// 鼠标停在气泡正文上滚，时间线也要动。正文是 <c>FlowDocumentScrollViewer</c>，它内部那层
+    /// ScrollViewer 即使滚动条关着也会把滚轮吃掉——测试里合成的是隧道事件，判据是窗口在隧道阶段
+    /// 就把它接住（<c>Handled</c>）并且偏移真的动了。
+    /// </summary>
+    [Fact]
+    public void AWheelOverTheBubbleBodyScrollsTheTimeline()
+    {
+        for (var seq = 1; seq <= 60; seq++) _db.ApplyMessage(Msg(seq, "m" + seq, Grafana));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new MainWindow(_db, _identities,
+                    new ReadReporter(_db, _identities, Offline()),
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader())
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = -10000,
+                    Top = -10000,
+                    Width = 1200,
+                    Height = 700,
+                    ShowActivated = false
+                };
+                window.Show();
+                Sta.PumpUntil(() => window.IsLoaded);
+                window.OpenConversation(Channel, Grafana);
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0
+                                    && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(100);
+
+                var scroller = Scroller(window);
+                var body = Find<SelectableBody>((DependencyObject)window.FindName("Timeline")!)
+                    ?? throw new InvalidOperationException("屏上没有气泡正文");
+                var before = scroller.VerticalOffset;
+                Assert.True(before > 0, "时间线没有滚到底，滚轮用例没有可滚的空间");
+
+                var up = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, 120)
+                    { RoutedEvent = UIElement.PreviewMouseWheelEvent };
+                body.RaiseEvent(up);
+                Sta.PumpFor(100);
+
+                Assert.True(up.Handled, "气泡正文把滚轮吃掉了：窗口这一层没接到");
+                Assert.True(scroller.VerticalOffset < before,
+                    $"滚轮没有把时间线往上滚：{before} → {scroller.VerticalOffset}");
+
+                // 一格就是一格：位移量跟系统"每次滚动行数"走，也不许被处理两遍（那才叫不跟手）
+                var lines = SystemParameters.WheelScrollLines;
+                var step = lines < 0 ? Math.Max(1, scroller.ViewportHeight - 40) : Math.Max(1, lines) * 40;
+                Assert.InRange(before - scroller.VerticalOffset, step - 2, step + 2);
+
+                var back = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, -120)
+                    { RoutedEvent = UIElement.PreviewMouseWheelEvent };
+                body.RaiseEvent(back);
+                Sta.PumpFor(100);
+                Assert.True(window.TimelineFromBottomProbe <= 1,
+                    $"往下滚回不到底：离底还有 {window.TimelineFromBottomProbe}");
+
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "滚轮用例没有按时跑完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    /// <summary>
+    /// 换会话只建视口那几行。行高必须在面板第一次量的时候就建得出来：那一刻要是行是空的、高 0，
+    /// "量够一屏了"永远不成立，面板会把整整一屏 50 条全建一遍——一次切换 1 秒以上。
+    /// 判据两条：切过去当场就落在最新一条（整段同步做完，中间没有帧能被画出来），
+    /// 以及这一趟里同时存在的行不超过一屏的量（旧样子是 51 行）。
+    /// </summary>
+    [Fact]
+    public void SwitchingSendersBuildsOnlyWhatTheViewportShows()
+    {
+        for (var seq = 1; seq <= 50; seq++) _db.ApplyMessage(Msg(seq, "a" + seq, Grafana));
+        for (var seq = 101; seq <= 150; seq++) _db.ApplyMessage(Msg(seq, "b" + seq, "ops"));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new MainWindow(_db, _identities,
+                    new ReadReporter(_db, _identities, Offline()),
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader())
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = -10000,
+                    Top = -10000,
+                    ShowActivated = false
+                };
+                window.Show();
+                Sta.PumpUntil(() => window.IsLoaded);
+                window.OpenConversation(Channel, Grafana);
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0
+                                    && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(100);
+
+                var most = 0;
+                void OnLayout(object? _, EventArgs __) => most = Math.Max(most, window.TimelineBuiltProbe);
+                window.LayoutUpdated += OnLayout;
+                window.OpenConversation(Channel, "ops");
+                window.LayoutUpdated -= OnLayout;
+
+                Assert.True(window.TimelineFromBottomProbe <= 1,
+                    $"切过去没有当场落在最新一条：离底还有 {window.TimelineFromBottomProbe}");
+                Assert.InRange(most, 1, 20);
+
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "换会话的行数用例没有按时跑完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    /// <summary>
+    /// 换一个发送人不该逐条拆行。头尾对不上时旧代码会走 <c>RemoveAt(0)</c> 一整遍，
+    /// 面板为每一对通知回收/重建一次容器，一次切换就是上百次——那正是"切发送人卡顿"的来源。
+    /// 现在的判据：旧集合一条通知都没有，集合实例换了一个（面板只收到一次 Reset）。
+    /// </summary>
+    [Fact]
+    public void SwitchingSendersSwapsTheTimelineInOnePiece()
+    {
+        for (var seq = 1; seq <= 50; seq++) _db.ApplyMessage(Msg(seq, "a" + seq, Grafana));
+        for (var seq = 101; seq <= 150; seq++) _db.ApplyMessage(Msg(seq, "b" + seq, "ops"));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new MainWindow(_db, _identities,
+                    new ReadReporter(_db, _identities, Offline()),
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader())
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = -10000,
+                    Top = -10000,
+                    ShowActivated = false
+                };
+                window.Show();
+                Sta.PumpUntil(() => window.IsLoaded);
+                window.OpenConversation(Channel, Grafana);
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0
+                                    && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(100);
+
+                var before = window.TimelineSourceProbe;
+                Assert.NotNull(before);
+                var actions = new List<NotifyCollectionChangedAction>();
+                ((INotifyCollectionChanged)before!).CollectionChanged += (_, e) => actions.Add(e.Action);
+
+                window.OpenConversation(Channel, "ops");
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0
+                                    && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(100);
+
+                Assert.Empty(actions);
+                Assert.NotSame(before, window.TimelineSourceProbe);
+                var last = ((ItemsControl)window.FindName("Timeline")!).Items[^1];
+                Assert.Equal("b150", Assert.IsType<MessageItem>(last).MsgId);
+                Assert.True(window.TimelineFromBottomProbe <= 1,
+                    $"切过去没有落在最新一条：离底还有 {window.TimelineFromBottomProbe}");
+
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "切换发送人没有按时跑完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    /// <summary>
     /// 行的右键菜单要能只用键盘开出来。菜单住在行模板里的 Grid 上，而那个 Grid 不是焦点元素——
     /// WPF 的 Shift+F10 只找"焦点元素自己的 ContextMenu"，所以这条键盘路径得窗口自己接。
     /// 顺带断落点：键盘开的那次贴在行下面，关掉之后要还给鼠标（否则这一行下次右键也跑到行下面去）。
@@ -634,6 +941,76 @@ public sealed class MainWindowTest : IDisposable
 
         thread.Start();
         Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "走一遍通知落点没有按时完成");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    // ---- 切会话：气泡复用 ----------------------------------------------------------------
+    /// <summary>
+    /// 切走的会话把建好的气泡留在 <see cref="BubbleCache"/> 里，切回来直接接上，不重建一遍。
+    /// 判据落在元素实例本身：同一条消息两次看到的是同一棵树。只断计数器的话，
+    /// "取到了但没接上"这种错法照样计数正确，屏幕上也照样卡。
+    /// </summary>
+    [Fact]
+    public void BubblesSurviveASwitchAwayAndBack()
+    {
+        for (var seq = 1; seq <= 20; seq++) _db.ApplyMessage(Msg(seq, "a" + seq, Grafana));
+        for (var seq = 101; seq <= 120; seq++) _db.ApplyMessage(Msg(seq, "b" + seq, "ops"));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new MainWindow(_db, _identities,
+                    new ReadReporter(_db, _identities, Offline()),
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader())
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = -10000,
+                    Top = -10000,
+                    ShowActivated = false
+                };
+                window.Show();
+                Sta.PumpUntil(() => window.IsLoaded);
+                window.OpenConversation(Channel, Grafana);
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0
+                                    && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(100);
+
+                var list = (ListBox)window.FindName("ConversationList")!;
+                var mine = list.SelectedIndex;
+                var other = mine == 0 ? 1 : 0;
+
+                var (id, before) = LastRealizedBubble(window)
+                                    ?? throw new InvalidOperationException("一条气泡都没建出来");
+
+                list.SelectedIndex = other;
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0 && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(100);
+
+                list.SelectedIndex = mine;
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0 && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(100);
+
+                var cache = window.RowConfig?.Cache ?? throw new InvalidOperationException("行配置没挂上");
+                Assert.True(cache.Hits > 0, "切回来一条气泡都没复用上");
+                Assert.Same(before, BubbleOf(window, id));
+
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "来回切一次没有按时跑完");
         Assert.True(failure is null, failure?.ToString());
     }
 
@@ -830,6 +1207,23 @@ public sealed class MainWindowTest : IDisposable
         Find<ScrollViewer>((DependencyObject)window.FindName("Timeline")!)
         ?? throw new InvalidOperationException("时间线模板里没有滚动条");
 
+    /// <summary>竖着的那一根。ScrollViewer 模板按名字放它，问不到再退到"朝向为竖"的第一根。</summary>
+    private static ScrollBar VerticalBar(ScrollViewer scroller)
+    {
+        if (scroller.Template?.FindName("PART_VerticalScrollBar", scroller) is ScrollBar named) return named;
+        var bars = new List<ScrollBar>();
+        Collect(scroller, bars);
+        return bars.FirstOrDefault(bar => bar.Orientation == Orientation.Vertical)
+               ?? throw new InvalidOperationException("滚动宿主里没有竖滚动条");
+    }
+
+    private static void Collect(DependencyObject root, List<ScrollBar> bars)
+    {
+        if (root is ScrollBar bar) bars.Add(bar);
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            Collect(VisualTreeHelper.GetChild(root, i), bars);
+    }
+
     private static T? Find<T>(DependencyObject root) where T : DependencyObject
     {
         if (root is T hit) return hit;
@@ -853,6 +1247,22 @@ public sealed class MainWindowTest : IDisposable
         return null;
     }
 
+    /// <summary>第一条生成出来的消息行（跳过日期头——它没有头像）。</summary>
+    private static FrameworkElement? FirstRealizedMessage(MainWindow window)
+    {
+        var timeline = (ItemsControl)window.FindName("Timeline")!;
+        for (var i = 0; i < timeline.Items.Count; i++)
+        {
+            if (timeline.Items[i] is MessageItem
+                && timeline.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement row)
+            {
+                return row;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>屏上第一条消息是哪一条——补页前后它不变，才算视角没被推走。</summary>
     private static string? FirstRealizedId(MainWindow window)
     {
@@ -864,6 +1274,44 @@ public sealed class MainWindowTest : IDisposable
         }
 
         return null;
+    }
+
+    /// <summary>最靠下的那条"已经有气泡"的消息（切会话后仍落在底屏，适合拿它比实例）。</summary>
+    private static (string Id, FrameworkElement Bubble)? LastRealizedBubble(MainWindow window)
+    {
+        var timeline = (ItemsControl)window.FindName("Timeline")!;
+        (string, FrameworkElement)? last = null;
+        for (var i = 0; i < timeline.Items.Count; i++)
+        {
+            if (BubbleAt(timeline, i) is { } current) last = current;
+        }
+
+        return last;
+    }
+
+    /// <summary>某一条消息此刻挂在行上的那棵气泡。行没生成出来就是 null。</summary>
+    private static FrameworkElement? BubbleOf(MainWindow window, string msgId)
+    {
+        var timeline = (ItemsControl)window.FindName("Timeline")!;
+        for (var i = 0; i < timeline.Items.Count; i++)
+        {
+            if (BubbleAt(timeline, i) is { } current && current.Id == msgId) return current.Bubble;
+        }
+
+        return null;
+    }
+
+    /// <summary>第 <paramref name="index"/> 行的消息 id 与它那棵气泡。行容器里套的是 <see cref="TimelineRow"/>。</summary>
+    private static (string Id, FrameworkElement Bubble)? BubbleAt(ItemsControl timeline, int index)
+    {
+        if (timeline.ItemContainerGenerator.ContainerFromIndex(index) is not FrameworkElement container
+            || container.DataContext is not MessageItem message
+            || Find<TimelineRow>(container)?.Child is not FrameworkElement bubble)
+        {
+            return null;
+        }
+
+        return (message.MsgId, bubble);
     }
 
     /// <summary>某一条消息的容器相对视口顶纵坐标；它没被生成出来就是 null。</summary>

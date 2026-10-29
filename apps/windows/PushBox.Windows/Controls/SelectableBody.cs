@@ -16,12 +16,21 @@ namespace PushBox.Windows.Controls;
 /// <see cref="FlowDocumentScrollViewer"/> 没有这层干预：PageWidth 钉成多少，测量和换行就按多少。
 ///
 /// 收窄靠一棵<b>只量不画</b>的标尺：<see cref="MarkdownView.BuildAll"/> 出来的那棵 TextBlock 树
-/// 就是正文今天的样子，用它拿到自然宽 N，再把文档的 PageWidth 钉成 min(N, 可用宽)。
+/// 就是正文今天的样子，用它拿到自然宽 N，再把文档的 PageWidth 钉成"放得下就用 N，放不下就用可用宽"。
 /// 于是"树 A 量出的宽"与"树 B 画出的宽"是同一个数，短消息照样贴着字收，长消息照样用满气泡。
 /// 两棵树用同一份 <see cref="MarkdownView.BuildDocument"/> 规则，高度差由 SelectableBodyTest 逐档钉住。
 /// </summary>
 public sealed class SelectableBody : Decorator
 {
+    /// <summary>
+    /// 贴字收时多给的一点。标尺的宽和文档排版用的行宽**不是同一次计算**：TextBlock 报出来的是
+    /// 取整过的 DesiredSize，文档用的是逐字排出来的行宽，两边能差零点几个像素——正好够把最宽
+    /// 那一行的最后一个词挤到下一行（2026-10-29 的天气卡片："📍 临颍 · 当前 15°C 多云" 整行
+    /// 一个像素都不多，文档于是把"云"折了下去）。一个像素在屏幕上看不出来，但它是这一整类
+    /// "下一行只剩一两个字"的来源。
+    /// </summary>
+    private const double HugSlack = 1;
+
     private readonly FrameworkElement _ruler;
     private readonly FlowDocument _document;
     private readonly FlowDocumentScrollViewer _viewer;
@@ -85,12 +94,27 @@ public sealed class SelectableBody : Decorator
 
     protected override Size MeasureOverride(Size availableSize)
     {
-        // 标尺只量宽：高度由文档那头说了算，这里给无限高让它别被父母约束带偏
-        _ruler.Measure(new Size(availableSize.Width, double.PositiveInfinity));
+        // 标尺是游离在可视树外的，继承不到窗口上的 TextFormattingMode / UseLayoutRounding：
+        // 文档那边是 Display（每个字形取整到整像素），标尺这边却还是默认的 Ideal，同一行能差出一个字。
+        // 这个差不是"差不多"，而是文档按窄一点的那棵树钉宽，最宽那一行于是多折出一个字——
+        // 也就是"下一行只剩一两个字"。每次测量前把窗口上那两个排版开关原样转给标尺。
+        var mode = TextOptions.GetTextFormattingMode(this);
+        if (TextOptions.GetTextFormattingMode(_ruler) != mode) TextOptions.SetTextFormattingMode(_ruler, mode);
+        _ruler.UseLayoutRounding = UseLayoutRounding;
+
+        // 标尺量的是"完全不折行时这棵树有多宽"：给无限宽。以前按可用宽量，拿到的是**已经折过行**
+        // 的那一行；文档再按这个数折行就是同一段文字量两遍，第二遍只要差一点就多折出一行。
+        _ruler.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         var natural = _ruler.DesiredSize.Width;
         if (!double.IsFinite(natural) || natural < 0) natural = 0;
 
-        var width = double.IsInfinity(availableSize.Width) ? natural : Math.Min(natural, availableSize.Width);
+        double width;
+        if (double.IsInfinity(availableSize.Width)) width = natural + HugSlack;
+        // 一行放不下：钉满可用宽，折行全交给文档。钉成标尺折出来的那个数只会更窄，
+        // 文档按更窄的宽再折一次，尾巴就更短
+        else if (natural > availableSize.Width) width = availableSize.Width;
+        // 放得下：贴着字收，多给的那半个像素见 HugSlack
+        else width = Math.Min(natural + HugSlack, availableSize.Width);
         width = Math.Max(width, 1);
 
         // 只在真的变了才写：PageWidth 一写就让文档失效，见面就写会在测量里兜圈
