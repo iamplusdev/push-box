@@ -17,7 +17,13 @@ import kotlinx.coroutines.flow.Flow
  * body 是本机明文副本 —— 服务端本来就明文归档，本地不再承担保密职责（§3.3）。
  */
 @Entity(tableName = "messages", primaryKeys = ["msg_id"],
-    indices = [Index("seq"), Index(value = ["channel_no", "sender_id"])])
+    indices = [
+        Index("seq"),
+        Index(value = ["channel_no", "sender_id"]),
+        // 时间线分页的排序键。只有 (channel_no, sender_id) 时，窗口下界筛选之后还要把整段历史
+        // 读出来再排序；把 created_at/seq 放进索引，第一屏与每次向上补页都只碰要显示的那几十行。
+        Index(name = "index_messages_timeline", value = ["channel_no", "sender_id", "created_at", "seq"]),
+    ])
 data class MessageRow(
     @ColumnInfo(name = "msg_id") val msgId: String,
     val seq: Long,
@@ -102,6 +108,12 @@ data class SyncRow(
 /** §7.4 清已读图片缓存用的投影行：只取 msg_id + media_count 两列，不还原整条消息。 */
 data class ReadMediaRow(val msgId: String, val mediaCount: Int)
 
+/**
+ * 时间线一页的排序键。分页边界不能只看 created_at：同一毫秒里的几条靠 seq 才分得开，
+ * 只比时间会在补页时把同一天同一秒的行重复或漏掉。
+ */
+data class MessageAnchor(val createdAt: Long, val seq: Long)
+
 @Dao
 interface PushBoxDao {
 
@@ -126,6 +138,39 @@ interface PushBoxDao {
         "OR title LIKE '%'||:q||'%')) ORDER BY created_at ASC, seq ASC")
     fun messagesFlow(channelNo: String, senderId: String,
         q: String?): Flow<List<MessageRow>>
+
+    /**
+     * 首屏锚点：最新一页里最旧那条的排序键。会话条数不足一页时它就是整段历史的最旧一条，
+     * 于是 [messagesSince] 照旧返回全部；空会话返回 null。
+     */
+    @Query("SELECT created_at AS createdAt, seq FROM messages " +
+        "WHERE channel_no = :channelNo AND sender_id = :senderId " +
+        "ORDER BY created_at DESC, seq DESC LIMIT 1 OFFSET :offset")
+    suspend fun timelineAnchor(channelNo: String, senderId: String, offset: Int): MessageAnchor?
+
+    /**
+     * 时间线窗口：只取锚点及之后的行。首屏把下界钉在"最近一页的最旧一条"，
+     * 向上补页时把下界往下挪，窗口随之变大——返回顺序仍是老的在上、新的在下。
+     * [sinceAt]/[sinceSeq] 都为 null 表示不设下界（调用方只在空会话那一种情况下这么传）。
+     */
+    @Query("SELECT * FROM messages WHERE channel_no = :channelNo AND sender_id = :senderId " +
+        "AND (:sinceAt IS NULL OR created_at > :sinceAt " +
+        "OR (created_at = :sinceAt AND seq >= :sinceSeq)) " +
+        "ORDER BY created_at ASC, seq ASC")
+    fun messagesSince(channelNo: String, senderId: String,
+        sinceAt: Long?, sinceSeq: Long?): Flow<List<MessageRow>>
+
+    /** 向上补页：严格早于当前窗口下界的一页，按新的在下排（取完由调用方反着放）。 */
+    @Query("SELECT * FROM messages WHERE channel_no = :channelNo AND sender_id = :senderId " +
+        "AND (created_at < :at OR (created_at = :at AND seq < :seq)) " +
+        "ORDER BY created_at DESC, seq DESC LIMIT :limit")
+    suspend fun messagesOlderThan(channelNo: String, senderId: String, at: Long, seq: Long,
+        limit: Int): List<MessageRow>
+
+    /** 还能不能再向上补一页：补页按钮的显示判据，不把整段历史读出来。 */
+    @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE channel_no = :channelNo " +
+        "AND sender_id = :senderId AND (created_at < :at OR (created_at = :at AND seq < :seq)))")
+    suspend fun hasMessagesOlderThan(channelNo: String, senderId: String, at: Long, seq: Long): Boolean
 
     @Query("SELECT last_applied_seq FROM sync_state WHERE id = 1")
     suspend fun lastAppliedSeq(): Long?
@@ -358,7 +403,7 @@ interface PushBoxDao {
     }
 }
 
-@Database(entities = [MessageRow::class, ConversationRow::class, SyncRow::class], version = 6,
+@Database(entities = [MessageRow::class, ConversationRow::class, SyncRow::class], version = 7,
     exportSchema = false)
 abstract class PushBoxDatabase : androidx.room.RoomDatabase() {
     abstract fun dao(): PushBoxDao

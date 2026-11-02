@@ -154,10 +154,17 @@ class Notifier(private val context: Context) {
         manager.notify(summaryId, summary)
     }
 
-    /** 加载大图用于 BigPictureStyle：只取内存与磁盘两级缓存，不碰网络（见 ImageCache.loadCachedSync）。 */
+    /**
+     * 加载大图用于 BigPictureStyle：只取内存与磁盘两级缓存，不碰网络（见 ImageCache.loadCachedSync）。
+     *
+     * 取缩略图而不是原图：BigPicture 只是让人一眼认出"这条带的是什么图"，通知栏最宽也就一千来像素，
+     * 512 长边的缩略图在那上面看不出差别；而原图要先从磁盘读满 10MB 再整张解码，这几百毫秒
+     * 压在通知线程上，还会把一个几千万字节的 Bitmap 塞进递交给 SystemUI 的 binder 事务里。
+     * 会话从没被打开过时两档缓存都不存在，这里返回 null、通知退回文字摘要——装饰图不值得等。
+     */
     private fun loadBigPictureBitmap(msgId: String): android.graphics.Bitmap? =
         runCatching {
-            cn.iamplus.pushbox.ui.ImageCache.loadCachedSync(msgId, 0, thumb = false)
+            cn.iamplus.pushbox.ui.ImageCache.loadCachedSync(msgId, 0, thumb = true)
         }.getOrNull()
 
     /**

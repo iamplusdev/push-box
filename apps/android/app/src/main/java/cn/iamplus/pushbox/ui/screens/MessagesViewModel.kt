@@ -14,11 +14,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import cn.iamplus.pushbox.data.MessageAnchor
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
@@ -32,6 +34,9 @@ internal data class ConversationMessages(
     val query: String? = null,
     val rows: List<MessageRow>? = null,
 )
+
+/** 首屏与每次向上补页的条数。50 条在手机上一屏约 8–10 条，够滚五六屏，也不会为一次点开读整段历史。 */
+internal const val TimelinePageSize = 50
 
 @OptIn(ExperimentalCoroutinesApi::class)
 internal fun conversationMessages(
@@ -55,8 +60,85 @@ internal class MessagesViewModel(private val app: App) : ViewModel() {
     private val _clearError = MutableStateFlow<String?>(null)
     val clearError = _clearError.asStateFlow()
 
+    /**
+     * 当前时间线窗口：下界是已经加载的最旧一条，向上补页时只把这条往下挪。
+     * 查询本身是 Room 的 Flow，所以窗口里任何一行的增删改都会照常刷新，
+     * 而窗口外的历史不会被读出来——打开一条几千条的会话不再等于把几千行搬进内存。
+     */
+    private data class TimelineWindow(
+        val channelNo: String,
+        val senderId: String,
+        val since: MessageAnchor?,
+    ) {
+        fun isFor(channelNo: String, senderId: String) =
+            this.channelNo == channelNo && this.senderId == senderId
+    }
+
+    private val window = MutableStateFlow<TimelineWindow?>(null)
+    private val _hasOlder = MutableStateFlow(false)
+    val hasOlder = _hasOlder.asStateFlow()
+    private val _loadingEarlier = MutableStateFlow(false)
+    val loadingEarlier = _loadingEarlier.asStateFlow()
+
+    /**
+     * 打开会话时先算出首屏下界，再让时间线订阅窗口。
+     * 这一步跑在 IO：锚点查询走 (channel_no, sender_id, created_at, seq) 索引，
+     * 只读一页而不碰更早的历史。空会话锚点为 null，窗口不设下界。
+     */
+    fun openTimeline(channelNo: String, senderId: String) {
+        if (window.value?.isFor(channelNo, senderId) == true) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val anchor = app.dao.timelineAnchor(channelNo, senderId, TimelinePageSize - 1)
+            val older = anchor != null &&
+                app.dao.hasMessagesOlderThan(channelNo, senderId, anchor.createdAt, anchor.seq)
+            if (window.value?.isFor(channelNo, senderId) == true) return@launch
+            _hasOlder.value = older
+            _loadingEarlier.value = false
+            window.value = TimelineWindow(channelNo, senderId, anchor)
+        }
+    }
+
+    /** 向上补一页：先把更早的一页读出来，成功后才把窗口下界往下挪，失败时列表保持原样。 */
+    fun loadEarlier() {
+        val current = window.value ?: return
+        val since = current.since ?: return
+        if (!_hasOlder.value || _loadingEarlier.value) return
+        _loadingEarlier.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val page = app.dao.messagesOlderThan(current.channelNo, current.senderId,
+                    since.createdAt, since.seq, TimelinePageSize)
+                if (page.isEmpty()) {
+                    _hasOlder.value = false
+                    return@launch
+                }
+                // 查询按 DESC 取最近的一页，最后一条才是这一页里最旧的
+                val oldest = page.last()
+                val anchor = MessageAnchor(oldest.createdAt, oldest.seq)
+                val older = app.dao.hasMessagesOlderThan(current.channelNo, current.senderId,
+                    anchor.createdAt, anchor.seq)
+                if (window.value == current) {
+                    _hasOlder.value = older
+                    window.value = current.copy(since = anchor)
+                }
+            } finally {
+                _loadingEarlier.value = false
+            }
+        }
+    }
+
     fun messages(channelNo: String, senderId: String, queries: Flow<String>) =
-        conversationMessages(queries) { app.dao.messagesFlow(channelNo, senderId, it) }
+        conversationMessages(queries) { q ->
+            // 搜索要的是整段历史里的命中项，不受时间线窗口约束
+            if (q != null) {
+                app.dao.messagesFlow(channelNo, senderId, q)
+            } else {
+                window.flatMapLatest { w ->
+                    if (w?.isFor(channelNo, senderId) != true) emptyFlow()
+                    else app.dao.messagesSince(channelNo, senderId, w.since?.createdAt, w.since?.seq)
+                }
+            }
+        }
 
     fun setAvatar(row: ConversationRow, uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {

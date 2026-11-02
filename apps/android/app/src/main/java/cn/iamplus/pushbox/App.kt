@@ -268,7 +268,8 @@ class App : android.app.Application() {
         instance = this
         identity = IdentityStore(this)
         db = Room.databaseBuilder(this, PushBoxDatabase::class.java, "pushbox.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
+                MIGRATION_6_7)
             .fallbackToDestructiveMigration()
             .build()
         notifier = Notifier(this)
@@ -390,6 +391,15 @@ class App : android.app.Application() {
         private val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN media_slots TEXT")
+            }
+        }
+
+        // v6→v7：时间线分页的排序索引。只建索引，不动任何行；名字与 @Entity 里声明的完全一致，
+        // 否则 Room 打开库时会按 identity hash 判"表结构对不上"
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_timeline " +
+                    "ON messages(channel_no, sender_id, created_at, seq)")
             }
         }
 

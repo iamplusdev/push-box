@@ -431,6 +431,8 @@ internal fun ConversationScreen(app: App, conversation: ConversationRow, focusMs
     }
     val vm: MessagesViewModel = viewModel(factory = MessagesViewModel.factory(app))
     val fetching by vm.fetching.collectAsState()
+    val hasOlder by vm.hasOlder.collectAsState()
+    val loadingEarlier by vm.loadingEarlier.collectAsState()
     // 外层 key 隔离会话，冷流只在详情可见时订阅，不为每个打开过的会话保留 ViewModel。
     val result by remember(vm) {
         vm.messages(conversation.channelNo, conversation.senderId, snapshotFlow { rawQuery })
@@ -450,6 +452,10 @@ internal fun ConversationScreen(app: App, conversation: ConversationRow, focusMs
     // 后续再变也没新的要标；挂行本身等于每次变更都重发一遍已读上报。
     LaunchedEffect(conversation.channelNo, conversation.senderId) {
         vm.markRead(conversation)
+    }
+    // 先算出首屏下界，时间线才订阅窗口；这一步只读最近一页，不碰更早的历史
+    LaunchedEffect(conversation.channelNo, conversation.senderId) {
+        vm.openTimeline(conversation.channelNo, conversation.senderId)
     }
 
     val listState = rememberLazyListState()
@@ -503,6 +509,9 @@ internal fun ConversationScreen(app: App, conversation: ConversationRow, focusMs
     var unseen by remember { mutableIntStateOf(0) }
     var lastCount by remember { mutableIntStateOf(0) }
     var placed by remember { mutableStateOf(false) }
+    // 上一条列表的首条。首条变了且旧的首条还在列表里 = 这次变化是"向上补了历史"，
+    // 不是新消息——否则每点一次"查看更早"都会冒出"N 条新消息"的胶囊。
+    var lastFirstId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(nearBottom) { if (nearBottom) unseen = 0 }
     LaunchedEffect(rows.size, awaitingFocus, pendingFocus) {
         // 正在定位（外部命中或退出筛选）时不抢滚动，也不把这批长度变化算成"新消息"：
@@ -512,6 +521,13 @@ internal fun ConversationScreen(app: App, conversation: ConversationRow, focusMs
             return@LaunchedEffect
         }
         if (rows.isEmpty()) return@LaunchedEffect
+        val firstId = rows.first().msgId
+        if (placed && lastFirstId != null && firstId != lastFirstId) {
+            lastFirstId = firstId
+            lastCount = rows.size
+            return@LaunchedEffect
+        }
+        lastFirstId = firstId
         val grew = rows.size - lastCount
         lastCount = rows.size
         when {
@@ -625,6 +641,23 @@ internal fun ConversationScreen(app: App, conversation: ConversationRow, focusMs
                         contentPadding = PaddingValues(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                        // 首屏只是最近一页：更早的历史按需再读，打开长会话不再把整段搬进内存。
+                        // 搜索时不显示——搜索本来就落在全量历史上，没有"更早"这一说。
+                        if (query == null && hasOlder) {
+                            item(key = "load-earlier") {
+                                Box(Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    contentAlignment = Alignment.Center) {
+                                    TextButton(onClick = { vm.loadEarlier() },
+                                        enabled = !loadingEarlier) {
+                                        Text(stringResource(if (loadingEarlier) {
+                                            R.string.conv_loading_earlier
+                                        } else {
+                                            R.string.conv_load_earlier
+                                        }))
+                                    }
+                                }
+                            }
+                        }
                         itemsIndexed(rows, key = { _, row -> row.msgId }) { index, row ->
                             // §7.3 按日期分节：与上一条不同日则插一个分节头（今天/昨天/M月d日）
                             if (index == 0 || dayKey(rows[index - 1].createdAt) != dayKey(row.createdAt)) {
