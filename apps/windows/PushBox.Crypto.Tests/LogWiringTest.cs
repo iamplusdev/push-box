@@ -240,6 +240,9 @@ public sealed class LogWiringTest : IDisposable
             return written.Contains("补拉被服务端拒") && written.Contains("秒后重连");
         }, "补拉被拒与重连的留痕没一起出现");
         engine.Stop();
+        // Stop 只是发取消：循环可能还差一步就写出"秒后重连"。这一页的日志是进程全局的一本，
+        // 那条晚到的留痕会落进下一条用例 Start 的目录里，把它的 Assert.Single 变成 2 条（CI 上就是这么翻车的）
+        await engine.Running;
 
         var all = Read();
         Assert.Contains("补拉被服务端拒 invalid_param (400)", all);
@@ -273,6 +276,7 @@ public sealed class LogWiringTest : IDisposable
 
         await Until(() => WiringLines().Any(l => l.Contains("身份文件读不出")), "身份文件读不出没留下痕迹");
         engine.Stop();
+        await engine.Running;   // 同上：这一句每轮都写，循环没退干净就会把第二条写进下一条用例的日志里
 
         Assert.Contains("身份文件读不出，沿用手上那份 FileNotFoundException", Read());
     }
