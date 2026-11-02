@@ -569,8 +569,12 @@ public sealed class MainWindowTest : IDisposable
                 var divider = (FrameworkElement)timeline.ItemContainerGenerator.ContainerFromIndex(0)!;
                 Assert.IsType<DateDivider>(timeline.Items[0]);
                 var label = Find<TextBlock>(divider) ?? throw new InvalidOperationException("日期头没有字");
+                // 容差 1 DIP：日期头按列的布局宽居中，而 ActualWidth 已被取整到 1 物理像素
+                // （125% 缩放下 0.8 DIP 一格），两者差半格不是"头跑到别处去了"
                 var center = label.TranslatePoint(new Point(label.ActualWidth / 2, 0), scroller).X;
-                Assert.Equal(presenterLeft + presenter.ActualWidth / 2, center, 2);
+                var columnCenter = presenterLeft + presenter.ActualWidth / 2;
+                Assert.True(Math.Abs(columnCenter - center) <= 1,
+                    $"日期头中心在 {center}，消息列中心在 {columnCenter}");
 
                 window.Close();
             }

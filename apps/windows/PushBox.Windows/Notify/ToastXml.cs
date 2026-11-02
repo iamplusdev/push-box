@@ -21,6 +21,15 @@ public static class ToastXml
     /// <summary>头像在 toast 里的那个位置：应用角标位，圆裁。</summary>
     public const string AppLogoOverride = "appLogoOverride";
 
+    /// <summary>
+    /// action 的 <c>placement</c> 在 schema 里**只有这一个合法值**（见 element-action 的语法：
+    /// <c>placement? = "contextMenu"</c>）。第一颗按钮不写这个属性就是正文旁边那颗；
+    /// 第二颗写 contextMenu 才收进右键/悬停菜单。以前这里写的是 "inline" 与 "ambient"——
+    /// 两个都不在 schema 里，产出的是一份**校验不过**的 toast：Windows 会照常把它显示出来，
+    /// 于是"通知弹得出、点下去没反应"这种半死状态能一路骗到用户面前。
+    /// </summary>
+    public const string ContextMenuPlacement = "contextMenu";
+
     public static XmlDocument Build(ToastPlan plan)
     {
         var doc = new XmlDocument();
@@ -63,8 +72,8 @@ public static class ToastXml
                 action.SetAttribute("content", button.Label);
                 action.SetAttribute("activationType", ActivationProtocol);
                 action.SetAttribute("arguments", button.Uri);
-                // 第一颗排进正文旁边那行，第二颗收进悬停才显示的位置：Windows 上超过两颗按钮会挤掉文本
-                action.SetAttribute("placement", ReferenceEquals(button, plan.Buttons[0]) ? "inline" : "ambient");
+                // 第一颗排进正文旁边那行，第二颗收进右键/悬停菜单：Windows 上超过两颗按钮会挤掉文本
+                if (!ReferenceEquals(button, plan.Buttons[0])) action.SetAttribute("placement", ContextMenuPlacement);
                 actions.AppendChild(action);
             }
 

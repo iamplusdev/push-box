@@ -100,8 +100,10 @@ public sealed class ToastXmlTest
         Assert.Equal(new[] { ToastProtocol.OpenUri("83271504", "grafana"),
             ToastProtocol.ReadUri("83271504", "grafana") }, actions.Select(a => (string?)a.Attribute("arguments")));
         Assert.All(actions, a => Assert.Equal("protocol", (string?)a.Attribute("activationType")));
-        // 第三颗按钮会开始挤掉正文，所以设计里只有两颗：第一颗 inline，第二颗收进悬停位
-        Assert.Equal(new[] { "inline", "ambient" }, actions.Select(a => (string?)a.Attribute("placement")));
+        // 第三颗按钮会开始挤掉正文，所以设计里只有两颗：第一颗留在正文旁边（不写 placement），
+        // 第二颗用 schema 唯一允许的 contextMenu 收进右键菜单
+        Assert.Equal(new[] { null, ToastXml.ContextMenuPlacement },
+            actions.Select(a => (string?)a.Attribute("placement")));
     }
 
     [Fact]
