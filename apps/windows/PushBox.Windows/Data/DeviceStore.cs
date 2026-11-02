@@ -232,6 +232,13 @@ public sealed class DeviceStore : IDisposable
             Mode = SqliteOpenMode.ReadWriteCreate,
         }.ToString());
         _db.Open();
+        // WAL + synchronous=NORMAL 是同一件事的两半：回滚日志模式下每次提交都要把日志与主文件各 fsync 一次，
+        // 收一条消息就是两三次落盘；WAL 里 NORMAL 只保证"进程崩溃不丢"，掉电丢最近几条可以从服务端按
+        // since_seq 补回来。库在 %LOCALAPPDATA%，不是网络盘，WAL 的共享内存映射不成立的那类问题不适用。
+        // cache_size 是负数＝KiB：8MiB 让会话列表那几条带子查询的查询不用反复读页。
+        Execute("PRAGMA journal_mode = WAL;");
+        Execute("PRAGMA synchronous = NORMAL;");
+        Execute("PRAGMA cache_size = -8000;");
         Execute("PRAGMA busy_timeout = 5000;");
         foreach (var statement in Schema) Execute(statement);
         // CREATE TABLE IF NOT EXISTS 只照顾新库：已经跑过一版的机器上那张表早就存在，

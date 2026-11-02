@@ -34,6 +34,10 @@ public sealed class MediaCache
     private readonly object _gate = new();
     private readonly Dictionary<string, byte[]> _memory = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> _used = new(StringComparer.Ordinal);
+    /** 每个键一把写锁：同一个键的写盘与作废互斥，不同键之间可以并行落盘。 */
+    private readonly Dictionary<string, object> _writers = new(StringComparer.Ordinal);
+    /** 正在写盘的目标路径（受 _gate 保护）。磁盘清理会跳过它们，避免把刚写完的文件当成淘汰对象。 */
+    private readonly HashSet<string> _inFlight = new(StringComparer.Ordinal);
     private readonly long _memoryCapacity;
     private readonly long _diskCapacity;
     private long _memoryBytes;
@@ -95,37 +99,79 @@ public sealed class MediaCache
     {
         // 失败先记着、出了锁再留痕：日志自己也要抢锁，把 Write 放在 _gate 里等于让一次落盘失败拖住整条缓存
         Exception? diskFailure = null;
+        string path;
+        object writer;
+
         lock (_gate)
         {
             Remember(key, bytes);
             if (!persist) return;
+            path = PathOf(key);
+            writer = WriterFor(path);
+            _inFlight.Add(path);
+        }
 
-            var path = PathOf(key);
-            try
+        // 写盘（最大 10MB）不再攥着 _gate：同一键排在写锁后面，不同键各写各的；
+        // 等 I/O 的时候别的线程仍然能命中内存、能读别的图。
+        long previous = 0L;
+        var wrote = false;
+        try
+        {
+            lock (writer)
             {
                 Directory.CreateDirectory(DirectoryPath);
-                // 老长度必须在覆盖之前取：写完之后再去问，问到的已经是新那份了
-                var previous = File.Exists(path) ? FileLengthOf(path) : 0L;
+                // 老长度必须在覆盖之前、且只在持有这个键的写锁时取：
+                // 同一个键的 Put/Evict 都排在这把锁后面，这个值到 Move 之前不会被别人改
+                previous = File.Exists(path) ? FileLengthOf(path) : 0L;
                 // 先写临时再替换：中途被杀不会留下半个 jpg，那半个 jpg 下一次是解不开的图
                 var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                File.WriteAllBytes(temp, bytes);
-                File.Move(temp, path, true);
+                try
+                {
+                    File.WriteAllBytes(temp, bytes);
+                    File.Move(temp, path, true);
+                    wrote = true;
+                }
+                catch
+                {
+                    TryDelete(temp);
+                    throw;
+                }
+            }
+        }
+        catch (IOException e)
+        {
+            // 磁盘写不进去（满了、目录被删了）不该让这张图看不见：内存那份已经在，进程内还能用
+            diskFailure = e;
+        }
+        catch (UnauthorizedAccessException e)
+        {
+            diskFailure = e;
+        }
+
+        lock (_gate)
+        {
+            _inFlight.Remove(path);
+            if (wrote)
+            {
                 _diskBytes += bytes.LongLength - previous;
                 TrimDisk();
-            }
-            catch (IOException e)
-            {
-                // 磁盘写不进去（满了、目录被删了）不该让这张图看不见：内存那份已经在，进程内还能用
-                diskFailure = e;
-            }
-            catch (UnauthorizedAccessException e)
-            {
-                diskFailure = e;
             }
         }
 
         // 这一行的用处是"为什么这台机器的图每次都要重新取"：没有它，缓存失效和从没建过缓存长得一模一样
         if (diskFailure != null) AppLog.MediaCacheWriteFailed(diskFailure.GetType().Name);
+    }
+
+    /** 同一个键复用一把写锁；键数就是缓存里出现过的图数，留着的只是空对象。 */
+    private object WriterFor(string path)
+    {
+        if (!_writers.TryGetValue(path, out var writer))
+        {
+            writer = new object();
+            _writers[path] = writer;
+        }
+
+        return writer;
     }
 
     /// <summary>
@@ -135,11 +181,23 @@ public sealed class MediaCache
     /// </summary>
     public void Evict(string key)
     {
+        string path;
+        object writer;
         lock (_gate)
         {
             DropMemory(key);
-            var path = PathOf(key);
-            if (File.Exists(path)) DeleteFile(path);
+            path = PathOf(key);
+            writer = WriterFor(path);
+        }
+
+        // 和 Put 抢同一把写锁：作废要么排在写之前（随后写入的新字节留下），
+        // 要么排在写之后（把刚写完的删掉），不会出现"删到一半又被写回来"的中间态
+        lock (writer)
+        {
+            lock (_gate)
+            {
+                if (File.Exists(path)) DeleteFile(path);
+            }
         }
     }
 
@@ -226,8 +284,10 @@ public sealed class MediaCache
     {
         if (_diskBytes <= _diskCapacity || !Directory.Exists(DirectoryPath)) return;
 
-        // 按最后写入时间从旧到新删。命中时会把文件时间推后，所以"最近看过的图"不会先被清掉
+        // 按最后写入时间从旧到新删。命中时会把文件时间推后，所以"最近看过的图"不会先被清掉。
+        // 跳过在途目标与临时文件：前者马上就要被搬到位，后者还没计入 _diskBytes，删了只会让那次写失败
         foreach (var path in Directory.EnumerateFiles(DirectoryPath)
+                     .Where(p => !_inFlight.Contains(p) && !p.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
                      .Select(p => (Path: p, Time: File.GetLastWriteTimeUtc(p)))
                      .OrderBy(item => item.Time))
         {
@@ -236,6 +296,7 @@ public sealed class MediaCache
         }
     }
 
+    /** 调用方必须持有 _gate：_diskBytes 是锁内维护的那份账。 */
     private void DeleteFile(string path)
     {
         try
@@ -243,6 +304,20 @@ public sealed class MediaCache
             var length = FileLengthOf(path);
             File.Delete(path);
             _diskBytes -= length;
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
         }
         catch (IOException)
         {

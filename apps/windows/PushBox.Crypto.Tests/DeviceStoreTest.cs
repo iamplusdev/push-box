@@ -53,6 +53,22 @@ public sealed class DeviceStoreTest : IDisposable
     }
 
     [Fact]
+    public void TheLocalDatabaseRunsInWalMode()
+    {
+        // 收一条消息就是一次小事务：回滚日志模式下每次提交要把日志与主文件各 fsync 一次。
+        // WAL + synchronous=NORMAL 把它压成一次顺序写；掉电丢的最近几条，重连带 since_seq 就能补回来。
+        // journal_mode 是写在库文件头里的，所以换一条连接读到的也必须是 wal——这就证明它落盘生效了。
+        using var store = new DeviceStore(DbPath);
+        store.ApplyMessage(Msg(1, "wal-1"));
+
+        using var probe = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={DbPath}");
+        probe.Open();
+        using var cmd = probe.CreateCommand();
+        cmd.CommandText = "PRAGMA journal_mode;";
+        Assert.Equal("wal", (string?)cmd.ExecuteScalar());
+    }
+
+    [Fact]
     public void AMissingDirectoryIsCreatedBeforeTheFileIsOpened()
     {
         var nested = Path.Combine(_dir, "deep", "nested", "pushbox.db");
@@ -340,9 +356,11 @@ public sealed class DeviceStoreTest : IDisposable
     {
         using var store = new DeviceStore(DbPath);
         store.ApplyMessage(Msg(1, "m1", body: "只有本机看得到正文"));
+        // 开了 WAL 之后新写入先落在 -wal 里，要等检查点才搬回主文件——所以"本机明文"这两本都得读。
         // SQLite 以 RW 共享方式持有文件句柄，所以这里必须按 ReadWrite 共享去读，
         // File.ReadAllBytes（默认只共享读）会被自己的连接挡下来
-        Assert.Contains("只有本机看得到正文", Encoding.UTF8.GetString(ReadWholeFile(DbPath)));
+        var onDisk = new[] { DbPath, DbPath + "-wal" }.Where(File.Exists).SelectMany(ReadWholeFile).ToArray();
+        Assert.Contains("只有本机看得到正文", Encoding.UTF8.GetString(onDisk));
 
         // §3.3 的保密口径：明文库只装消息，设备凭据一律归 identity.json（W4 的 DPAPI）
         foreach (var table in new[] { "messages", "conversations", "sync_state" })

@@ -117,9 +117,16 @@ Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 ; {group} 在 per-user 安装下就是当前用户的开始菜单程序目录（%APPDATA%\Microsoft\Windows\Start Menu\...）。
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
+;
+; AppUserModelID 必须和 ToastRegistration.Aumid 是同一个字符串（PushBox.Windows）：未打包应用的通知
+; 身份只来自 HKCU 里那条 AppUserModelId 键，而快捷方式上带 AUMID 才能让"从开始菜单/桌面启动"的这个进程
+; 被归到同一个通知身份下；不带的话，快捷方式本身属于另一个（空的）身份，通知设置与任务栏会把它和
+; 点通知唤起的那一路当成两个东西。顺便也是"右键固定到任务栏"固定下来的图标的身份来源。
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; \
+    AppUserModelID: "PushBox.Windows"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; \
+    Tasks: desktopicon; AppUserModelID: "PushBox.Windows"
 
 [Run]
 ; 装完顺手起一次：首启两屏（register / join）在那儿等着，HKCU 的 AUMID 与 pushbox: 协议也是在这一步写进去的。
