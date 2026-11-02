@@ -59,6 +59,12 @@ public class PushRegistry {
   }
 
   private final Map<String, Session> byDevice = new ConcurrentHashMap<>();
+  /**
+   * 按 Space 分桶的会话表，与 {@link #byDevice} 同时维护。
+   * 每来一条消息都只该看这个组里的几台设备；从全局表里按 groupId 过滤意味着
+   * 多 Space 部署下每条消息都要扫一遍所有人的连接，而扫描成本随"这台服务器上还有谁在线"增长。
+   */
+  private final Map<String, Map<String, Session>> byGroup = new ConcurrentHashMap<>();
   private final ServerKeys keys;
   private final PbProperties props;
   private final PbStore store;
@@ -73,14 +79,26 @@ public class PushRegistry {
       byte[] helloNonce, byte[] deviceEncPub) {
     Session session = new Session(deviceId, groupId, raw, channel, helloNonce, deviceEncPub);
     Session previous = byDevice.put(deviceId, session);
+    byGroup.compute(groupId, (k, group) -> {
+      Map<String, Session> bucket = group != null ? group : new ConcurrentHashMap<>();
+      bucket.put(deviceId, session);
+      return bucket;
+    });
     if (previous != null && previous != session) {
-      closeQuietly(previous, "同一设备的新连接接管");
+      // 这里走 close 而不是 closeQuietly：旧会话可能还在另一个 Space 的分桶里，
+      // 只关连接不摘映射，那条死连接会被以后每一条消息再"下发"一次
+      close(previous, "同一设备的新连接接管");
     }
     return session;
   }
 
   public void close(Session session, String reason) {
     byDevice.remove(session.deviceId, session);
+    // 只摘掉"这一条"：同一设备的新连接可能已经占住这个 deviceId 的槽位
+    byGroup.computeIfPresent(session.groupId, (k, group) -> {
+      group.remove(session.deviceId, session);
+      return group.isEmpty() ? null : group;
+    });
     try {
       session.outbound.close(CloseStatus.NORMAL.withReason(reason));
     } catch (IOException | IllegalStateException e) {
@@ -116,12 +134,13 @@ public class PushRegistry {
   }
 
   private int dispatch(String groupId, String channelNo, Object frame) {
+    Map<String, Session> group = byGroup.get(groupId);
+    if (group == null || group.isEmpty()) {
+      return 0;
+    }
     Set<String> allowed = allowedDevices(groupId, channelNo);
     int sent = 0;
-    for (Session session : byDevice.values()) {
-      if (!session.groupId.equals(groupId)) {
-        continue;
-      }
+    for (Session session : group.values()) {
       if (allowed != null && !allowed.contains(session.deviceId)) {
         continue;
       }
@@ -197,11 +216,4 @@ public class PushRegistry {
     }
   }
 
-  private void closeQuietly(Session session, String reason) {
-    try {
-      session.outbound.close(CloseStatus.POLICY_VIOLATION.withReason(reason));
-    } catch (Exception ignored) {
-      // 旧连接已经死了也没关系，映射已经换掉了
-    }
-  }
 }

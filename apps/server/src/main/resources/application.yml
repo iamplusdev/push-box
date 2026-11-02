@@ -12,8 +12,14 @@ spring:
     # 数据库可能在几百毫秒 RTT 之外（本机联调走 Tailscale），连接必须常驻保温：
     # 新建一条 MySQL 连接本身就要好几个来回，冷连接池会把单条消息的端到端延迟拖到秒级。
     hikari:
-      maximum-pool-size: 10
-      minimum-idle: 10
+      # 池子按"小而热"配：常驻 3 条覆盖同步写入的常态并发（消息落库、已读上报、配置读取），
+      # 峰值再按需扩到 6。原来 10/10 的写法让每条连接**永远**在两端各占一份缓冲与服务端线程，
+      # 空闲的 NAS 上一整天用不到第 4 条，却要为一池冷着的水付内存。
+      # 代价要认：超过 3 条的并发第一次要新建连接（RTT 几百毫秒），所以保留 keepalive 而不是把池开成 0。
+      maximum-pool-size: 6
+      minimum-idle: 3
+      # 突发之后多出来的连接 1 分钟没人用就还给库，池面回到 minimum-idle
+      idle-timeout: 60000
       # 60s 就是"等库就绪"的全部机制：库和 PushBox 同时起（compose、NAS 一键部署）时，
       # MySQL 首轮初始化要建系统表，20s 探活等不到它。以前这件事由入口脚本的
       # 等待循环 + 一个环境变量负责，现在 Hikari 第一次取连接时自己等。
@@ -32,6 +38,11 @@ server:
   # 入站 body 只可能是 JSON 与若干 URL（没有 multipart 上传口），留足余量即可
   tomcat:
     max-swallow-size: 8MB
+    threads:
+      # 每条请求都很短（一条消息一次写库、一次读），大部分长连接还挂在 WebSocket 上不占线程，
+      # 所以 50 条上限远够用；默认的 200 上限意味着每条线程一份栈 + 一对读写缓冲白留在那。
+      max: 50
+      min-spare: 5
     accesslog:
       # §13：正文不能出现在"任何"日志里，访问日志也是日志。默认 pattern 的 %r 含完整查询串，
       # 于是 /search?q=关键词 会把用户搜的内容落到另一个文件——所以默认关闭。
@@ -65,10 +76,17 @@ pb:
   # 退避就是巡检间隔本身，所以同一张图两次尝试之间至少隔 retry-interval。
   # queue-capacity 是抓取线程池的**等待位**（一个任务＝一条消息的全部图片）：排不进去就当场把该消息
   # 的 pending 槽位记成 queue_full 并照常下发，绝不无界堆积、也绝不把消息卡在"永远没有第一帧"。
-  media: { retry-max: 3, retry-initial-delay: 2m, retry-interval: 5m, queue-capacity: 256 }
+  # concurrency 从 4 降到 2：一张 1200 万像素的大图解码就是几十 MB 的 ARGB 缓冲，改小堆上限之后
+  # 四路同时解码会直接顶到 -Xmx；两路对家庭规模的抓取量没有可见差别，却把峰值内存砍掉一半。
+  media: { retry-max: 3, retry-initial-delay: 2m, retry-interval: 5m, queue-capacity: 256, concurrency: 2 }
   channels: { channel-no-length: 8, default-max-level: error, default-max-images: 4, secret-bytes: 16 }
   devices: { max-per-group: 5 }
-  retention: { max-message-bytes: 32768 }
+  # D3 的默认口径仍是"消息永不自动清理"，所以 message-days 默认 0 = 关闭；填了天数才会按 created_at
+  # 硬删超过窗口的消息（同一批先把图片标待删，对象照旧过宽限期由 MediaPurgeService 真删）。
+  # 代价要认：超出窗口的历史从服务端消失，离线超过窗口的客户端补拉时只拿到剩下的部分（seq 允许有洞），
+  # 本机已有副本不受影响。sweep-* 只被 @Scheduled 占位读取，不在安装页的 JSON 配置里。
+  retention: { max-message-bytes: 32768, message-days: 0,
+               sweep-initial-delay: 10m, sweep-interval: 6h }
   # 抓图频率不在这里：那是 pb.media.fetch-rate-per-channel-per-min，管的不是"提交几条"而是"替它取几张"。
   ratelimit: { per-channel-per-min: 60, burst: 20, per-ip-per-min: 120, per-device-per-min: 300 }
   # §14 日计数器回收（DailyCounterSweep）：只按天累计、从不回收的表跑一年就是每频道 365 行死字节。

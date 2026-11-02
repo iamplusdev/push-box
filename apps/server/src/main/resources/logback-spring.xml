@@ -24,6 +24,21 @@
         </encoder>
     </appender>
 
+    <!--
+      两个目标 appender 都包一层异步：同步 appender 的 addAppenderEvent 里就把格式化 + 写文件做完了，
+      而容器日志落在 NAS 的挂载盘上时，一次 info 就是几毫秒的 write。摄入请求线程、WebSocket 下发线程
+      都在打日志，磁盘一慢，消息的 1s 验收线先被日志吃掉。
+      queueSize 1024 是"突发几百行不阻塞、常驻内存约几十 KB"的量级；discardingThreshold=0 关掉
+      logback 默认的"队列八成满就丢 INFO 以下"——这条服务里 INFO 就是排查现场，不能悄悄丢。
+      neverBlock 保持 false：真把队列打满时宁可让那一行等一会儿，也不在日志里留一个洞。
+    -->
+    <appender name="ASYNC_CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>1024</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>false</neverBlock>
+        <appender-ref ref="CONSOLE"/>
+    </appender>
+
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${PB_LOG_HOME}/pushbox-server.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
@@ -40,11 +55,18 @@
         </encoder>
     </appender>
 
+    <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>1024</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>false</neverBlock>
+        <appender-ref ref="FILE"/>
+    </appender>
+
     <!-- INFO 而不是 WARN：加密模式生效与否、限流参数、sweep 节奏这些判据全是 INFO 行，
          只剩 WARN 等于出事时没有现场。隐私靠 converter 兜，与级别无关。
          要临时看细节用 -Dlogging.level.dev.pushbox=DEBUG，不在这里给 dev 单开一档。 -->
     <root level="INFO">
-        <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="FILE"/>
+        <appender-ref ref="ASYNC_CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE"/>
     </root>
 </configuration>

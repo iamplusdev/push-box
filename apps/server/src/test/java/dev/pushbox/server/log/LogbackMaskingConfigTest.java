@@ -2,6 +2,7 @@ package dev.pushbox.server.log;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.AsyncAppender;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.encoder.PatternLayoutEncoder;
@@ -55,8 +56,11 @@ class LogbackMaskingConfigTest {
     return context().getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
   }
 
+  /** root 上挂的是异步包装，真正的 ConsoleAppender 在它里面。 */
   private static String consolePattern() {
-    Appender<ILoggingEvent> console = root().getAppender("CONSOLE");
+    Appender<ILoggingEvent> wrapper = root().getAppender("ASYNC_CONSOLE");
+    assertThat(wrapper).isInstanceOf(AsyncAppender.class);
+    Appender<ILoggingEvent> console = onlyTargetOf((AsyncAppender) wrapper);
     assertThat(console).isInstanceOf(ConsoleAppender.class);
     return ((PatternLayoutEncoder) ((ConsoleAppender<ILoggingEvent>) console).getEncoder())
         .getPattern();
@@ -72,10 +76,15 @@ class LogbackMaskingConfigTest {
     assertThat(pattern).doesNotMatch(".*(?<!\\w)%ex(?!\\w).*");
     var appenders = root().iteratorForAppenders();
     while (appenders.hasNext()) {
-      OutputStreamAppender<ILoggingEvent> appender =
-          (OutputStreamAppender<ILoggingEvent>) appenders.next();
-      assertThat(((PatternLayoutEncoder) appender.getEncoder()).getPattern())
-          .as(appender.getName()).isEqualTo(pattern);
+      Appender<ILoggingEvent> appender = appenders.next();
+      // 同步 appender 包在 AsyncAppender 里：脱敏 pattern 要对着里面那层验，不是包装层
+      if (appender instanceof AsyncAppender async) {
+        appender = onlyTargetOf(async);
+      }
+      assertThat(appender).as(appender.getName()).isInstanceOf(OutputStreamAppender.class);
+      OutputStreamAppender<ILoggingEvent> sink = (OutputStreamAppender<ILoggingEvent>) appender;
+      assertThat(((PatternLayoutEncoder) sink.getEncoder()).getPattern())
+          .as(sink.getName()).isEqualTo(pattern);
     }
   }
 
@@ -135,6 +144,15 @@ class LogbackMaskingConfigTest {
         .doesNotContain("%q").doesNotContain("%r");
     // 有人把 logging.pattern.console 加回来，就等于绕过 %pbmsg 换回裸 %msg
     assertThat(env.getProperty("logging.pattern.console")).isNull();
+  }
+
+  /** AsyncAppender 只该包一个目标（一层包装），取出那唯一一个；多包了几个说明配置写串了。 */
+  private static Appender<ILoggingEvent> onlyTargetOf(AsyncAppender async) {
+    var targets = async.iteratorForAppenders();
+    assertThat(targets.hasNext()).as(async.getName()).isTrue();
+    Appender<ILoggingEvent> only = targets.next();
+    assertThat(targets.hasNext()).as(async.getName() + " 包了不止一个 appender").isFalse();
+    return only;
   }
 
   /** 用 shipped pattern 起一个内存 appender 挂到 root，跑一次真实日志调用并取回格式化结果。 */

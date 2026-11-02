@@ -922,6 +922,58 @@ public class PbStore {
         "DELETE FROM daily_counters WHERE day < DATE_SUB(CURDATE(), INTERVAL ? DAY)", keepDays);
   }
 
+  // ---------- 留存清理（默认关闭，见 MessageRetentionSweep） ----------
+
+  /**
+   * 取一批到期消息的 msg_id，按 created_at 从旧到新（idx_msg_created 就是为它建的）。
+   * 只回 id 不回整行：紧接着要做的是按 id 标媒体、删消息，把旧正文再搬一遍没有意义。
+   */
+  public List<String> expiredMessageIds(long before, int limit) {
+    List<Row> rows = Db.selectListBySql(
+        "SELECT msg_id FROM messages WHERE created_at < ? ORDER BY created_at LIMIT ?", before,
+        limit);
+    List<String> ids = new ArrayList<>(rows.size());
+    for (Row row : rows) {
+      ids.add(row.getString("msg_id"));
+    }
+    return ids;
+  }
+
+  /**
+   * 留存清理先给这一批消息的图片标待删，顺序与单条删除一致（D12）：对象要等 MediaPurgeService
+   * 过宽限期才真删，中途出事也只是重复标一次。
+   */
+  public int markMediaDeletedMessages(List<String> msgIds, long now) {
+    if (msgIds.isEmpty()) {
+      return 0;
+    }
+    Object[] args = new Object[msgIds.size() + 1];
+    args[0] = now;
+    for (int i = 0; i < msgIds.size(); i++) {
+      args[i + 1] = msgIds.get(i);
+    }
+    return Db.updateBySql("""
+        UPDATE media_objects SET status='deleted', deleted_at=?
+        WHERE msg_id IN (%s) AND deleted_at IS NULL""".formatted(placeholders(msgIds.size())), args);
+  }
+
+  /**
+   * 硬删整行。单条/会话删除都是 tombstone，只有留存清理会真删：行没了，全文索引跟着消失，
+   * 客户端补拉也再也拿不到这批消息——这正是"保留窗口"的含义。
+   */
+  public int deleteMessagesByIds(List<String> msgIds) {
+    if (msgIds.isEmpty()) {
+      return 0;
+    }
+    return Db.updateBySql(
+        "DELETE FROM messages WHERE msg_id IN (%s)".formatted(placeholders(msgIds.size())),
+        msgIds.toArray());
+  }
+
+  private static String placeholders(int count) {
+    return String.join(",", java.util.Collections.nCopies(count, "?"));
+  }
+
   // ---------- scheduled push tasks ----------
 
   public void insertScheduledTask(Row task) {

@@ -65,7 +65,21 @@ if ! ( : > "$DATA_DIR/.write-probe" ) 2>/dev/null; then
 fi
 rm -f "$DATA_DIR/.write-probe"
 
-exec java -XX:MaxRAMPercentage=75 -jar /app/app.jar
+# JVM 参数按"小常驻服务"调。原来的 -XX:MaxRAMPercentage=75 是这里最大的坑：容器没写内存上限时，
+# 百分比是按**宿主**内存算的（8G 的 NAS 就给到 6G 的堆上限，16G 给到 12G），JVM 于是想长多高长多高，
+# docker stats 里的 RSS 会从 200MB 一路爬到 350MB+，而那份堆里绝大多数格子只是"允许用"，不是"正在用"。
+# 换成一串显式上限之后，每条参数都是"管住上限"，不是"预占"：
+#   -Xms64m -Xmx384m          堆只按需长到 384m。上限取 384m 是因为抓图线程池最多 4 路并发解码，
+#                             一张大图的 ARGB 缓冲就是几十 MB，堆压到 192m 那种数字会拿 OOM 换 RSS；
+#                             空闲的推送服务实际活对象只有几十 MB，长不到上限
+#   -XX:+UseSerialGC          小堆上没有吞吐可省，G1 只会多出线程、region 元数据和记账；
+#                             串行 GC 一条线程，堆小的时候停顿仍是毫秒级
+#   -XX:ActiveProcessorCount=2  编译器线程、ForkJoin 并行度、GC 线程都不再跟着宿主核数走，
+#                             32 核的 NAS 不会因此起 32 条 C2 编译线程
+#   -Xss512k                  线程栈减半。Tomcat 池 + 库池 + 定时任务的常驻线程几十条，默认 1MB 是白留地址
+#   后三个是护栏：MaxMetaspaceSize 兜住类加载意外，ReservedCodeCacheSize 兜住 JIT 代码缓存，
+#   MaxDirectMemorySize 兜住 Tomcat 的堆外缓冲——三者都只在真用满时才有意义，不写就等于无界
+exec java -Xms64m -Xmx384m -XX:+UseSerialGC -XX:ActiveProcessorCount=2 -Xss512k -XX:MaxMetaspaceSize=192m -XX:ReservedCodeCacheSize=96m -XX:MaxDirectMemorySize=64m -jar /app/app.jar
 EOF
 
 RUN chmod +x /app/entrypoint.sh
