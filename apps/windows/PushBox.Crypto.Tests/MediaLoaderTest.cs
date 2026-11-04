@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Threading;
 using System.Threading.Tasks;
 using PushBox.Windows.Data;
 using PushBox.Windows.Media;
@@ -22,6 +23,7 @@ public sealed class MediaLoaderTest : IDisposable
 {
     private const string BaseUrl = "http://127.0.0.1:8081";
     private const string AvatarToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    private const string OtherToken = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     /// <summary>节流的时间起点由用例给，断言才不受跑用例的那台机器时钟影响。</summary>
     private static readonly DateTimeOffset Stamp = new(2026, 10, 26, 9, 0, 0, TimeSpan.Zero);
@@ -250,6 +252,73 @@ public sealed class MediaLoaderTest : IDisposable
         Assert.Empty(invalidated);
     }
 
+    [Fact]
+    public async Task AScreenfulOfTheSameMissingFaceIsAskedOnce()
+    {
+        // 实测：打开一条 200 条历史的会话，屏上生成 12 行、全是同一个人，却敲了 22 次取图，
+        // 而这 22 次都排在同一个派发周期里、谁都没回话。404 不在正缓存里，所以以前就是 22 个真请求
+        var handler = new Gated(() =>
+            Support.Reply(HttpStatusCode.NotFound, Support.ErrorBody("not_found", "avatar")));
+        var loader = new MediaLoader(new DeviceClient(new HttpClient(handler)), new MediaCache(_dir));
+        var avatar = "/api/v1/avatars/" + AvatarToken;
+
+        var cells = Enumerable.Range(0, 12).Select(_ => loader.AvatarAsync(Device(), avatar)).ToArray();
+        handler.Release();
+        var shown = await Task.WhenAll(cells);
+
+        Assert.Equal(1, handler.Count);
+        Assert.All(shown, asset => Assert.Equal(MediaState.Missing, asset.State));
+    }
+
+    [Fact]
+    public async Task CellsThatLandTogetherShareTheBytesRatherThanEachDownloadingThem()
+    {
+        var handler = new Gated(() => Reply(Png(32), "image/png"));
+        var loader = new MediaLoader(new DeviceClient(new HttpClient(handler)), new MediaCache(_dir));
+        var avatar = "/api/v1/avatars/" + AvatarToken;
+
+        var cells = Enumerable.Range(0, 12).Select(_ => loader.AvatarAsync(Device(), avatar)).ToArray();
+        handler.Release();
+        var shown = await Task.WhenAll(cells);
+
+        Assert.Equal(1, handler.Count);
+        Assert.All(shown, asset =>
+        {
+            Assert.Equal(MediaState.Ready, asset.State);
+            Assert.Equal(Png(32), asset.Bytes);
+        });
+    }
+
+    [Fact]
+    public async Task TwoSendersOnTheSameScreenDoNotShareOneFace()
+    {
+        // 合流按 token 走，不然左栏第二个那个人会显示第一个人的脸
+        var handler = new Gated(() => Reply(Png(32), "image/png"));
+        var loader = new MediaLoader(new DeviceClient(new HttpClient(handler)), new MediaCache(_dir));
+
+        var one = loader.AvatarAsync(Device(), "/api/v1/avatars/" + AvatarToken);
+        var two = loader.AvatarAsync(Device(), "/api/v1/avatars/" + OtherToken);
+        handler.Release();
+        await Task.WhenAll(one, two);
+
+        Assert.Equal(2, handler.Count);
+    }
+
+    [Fact]
+    public async Task ARefusedAvatarIsNotRememberedForTheNextCellThatAsks()
+    {
+        // 名册只管"同时在飞的"：滚出屏幕再滚回来、点那次重试，都还得能真的再问一次
+        var handler = new FakeHandler(_ => Support.Reply(HttpStatusCode.NotFound,
+            Support.ErrorBody("not_found", "avatar")));
+        var loader = Loader(handler);
+        var avatar = "/api/v1/avatars/" + AvatarToken;
+
+        Assert.Equal(MediaState.Missing, (await loader.AvatarAsync(Device(), avatar)).State);
+        Assert.Equal(MediaState.Missing, (await loader.AvatarAsync(Device(), avatar)).State);
+
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
     // ---- 清理 ----------------------------------------------------------------------------------
 
     [Fact]
@@ -337,6 +406,32 @@ public sealed class MediaLoaderTest : IDisposable
 
     /// <summary>一条正常的图片回答：200 + PNG 魔数，MIME 与字节都对得上。</summary>
     private static FakeHandler Images() => new(_ => Reply(Png(32), "image/png"));
+
+    /// <summary>
+    /// 回答由用例放行，这样"同一时刻的二十几格"才真的能重叠在一起——合流测的就是重叠。
+    /// 每个请求各造一份回答（<see cref="HttpResponseMessage.Content"/> 读一次就Disposed），
+    /// 计数用 Interlocked：这一格靠的正是几个线程同时进来，用 <see cref="FakeHandler"/> 那个 List 会打架。
+    /// </summary>
+    private sealed class Gated : HttpMessageHandler
+    {
+        private readonly Func<HttpResponseMessage> _reply;
+        private readonly TaskCompletionSource<bool> _hold =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _count;
+
+        public Gated(Func<HttpResponseMessage> reply) => _reply = reply;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public void Release() => _hold.SetResult(true);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _count);
+            await _hold.Task.ConfigureAwait(false);
+            return _reply();
+        }
+    }
 
     private static HttpResponseMessage Reply(byte[] bytes, string contentType)
     {

@@ -82,6 +82,15 @@ public sealed class MediaLoader
     private readonly Dictionary<string, long> _avatarSignals = new(StringComparer.Ordinal);
     private readonly object _signalGate = new();
 
+    /// <summary>
+    /// 正在飞的头像：<c>token → 那一次取图</c>。头像一格一次重画就敲一次取图，而一屏十二格是同一个人
+    /// （实测打开一条会话敲了 22 次，全打在同一个 token 上）：那二十几次挤在建树的几轮派发里，
+    /// 每一轮开头谁都还没等到回话，合流之前它们就是 22 个真请求（合流后实测 6 个）。
+    /// 只合"同时"的那几次，不缓存失败结果：点重试仍然会真的再发一次。
+    /// </summary>
+    private readonly Dictionary<string, Task<MediaAsset>> _avatarFlight = new(StringComparer.Ordinal);
+    private readonly object _flightGate = new();
+
     /// <summary>某个 token 的头像被作废了：画着它的控件要重新取一次字节。可能在帧线程上触发。</summary>
     public event Action<string>? AvatarInvalidated;
 
@@ -110,6 +119,9 @@ public sealed class MediaLoader
     /// <summary>§4.5 头像：<c>sender_avatar</c> 可以是"这一帧没头像"（转存是异步的，首帧常为 null），
     /// 那是正常情况而不是错误，所以这里不发请求，直接回 <see cref="MediaState.NoSource"/>，
     /// 由 UI 落回 sender_id 首字占位头像。
+    ///
+    /// 同一个 token 在这一屏被敲十几次（一行在建树那几轮里会重绑，实测打开一条会话敲 22 次）：
+    /// 这些调用都排在同一个派发周期里，所以按 token 合流成一次回源，见 <see cref="_avatarFlight"/>。
     /// </summary>
     public Task<MediaAsset> AvatarAsync(DeviceIdentity identity, string? senderAvatar,
         CancellationToken ct = default)
@@ -117,9 +129,41 @@ public sealed class MediaLoader
         var token = DeviceClient.AvatarTokenOf(senderAvatar);
         if (token == null) return Task.FromResult(new MediaAsset(MediaState.NoSource));
 
-        // 头像对象是覆盖写的（§4.5），只进内存：落盘等于把换掉的头像永久留在本机
-        return LoadAsync(AvatarKey(token), false,
-            inner => _client.AvatarAsync(identity, token, inner), ct);
+        var key = AvatarKey(token);
+        TaskCompletionSource<MediaAsset> gate;
+        lock (_flightGate)
+        {
+            if (_avatarFlight.TryGetValue(key, out var flying)) return flying;
+            // 先挂上名册再开飞：取字节那一步可能在别的线程上立刻完成，晚一步就没人摘得掉这一格
+            gate = new TaskCompletionSource<MediaAsset>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _avatarFlight[key] = gate.Task;
+        }
+
+        _ = Land(gate, key, identity, token, ct);
+        return gate.Task;
+    }
+
+    /// <summary>这一枪落地：把结果交给所有等同一张脸的格子，再把这一格从名册上摘掉。
+    /// 名册只管"同时在飞的"，不留失败结果——所以点重试、以及下一次打开会话都还会真的回源一次。
+    /// <c>persist: false</c> 是第 27 条那条：头像对象按 (频道, 发送者) 覆盖写，落盘等于把换掉的头像永久留在本机。</summary>
+    private async Task Land(TaskCompletionSource<MediaAsset> gate, string key, DeviceIdentity identity,
+        string token, CancellationToken ct)
+    {
+        try
+        {
+            var asset = await LoadAsync(key, false,
+                inner => _client.AvatarAsync(identity, token, inner), ct).ConfigureAwait(false);
+            gate.TrySetResult(asset);
+        }
+        catch (Exception e)
+        {
+            // 取消（图位滚出屏幕）也得给等它的格子一个说法，否则那一格永远转圈
+            gate.TrySetException(e);
+        }
+        finally
+        {
+            lock (_flightGate) _avatarFlight.Remove(key);
+        }
     }
 
     /// <summary>
