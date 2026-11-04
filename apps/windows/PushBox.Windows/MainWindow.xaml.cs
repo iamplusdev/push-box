@@ -8,6 +8,7 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -59,6 +60,29 @@ public partial class MainWindow : Window
 
     /// <summary>行模板那一份配置。换主题才会换（<see cref="ConfigFor"/>）。</summary>
     private TimelineConfig? _rowConfig;
+
+    /// <summary>一次空闲拍最多铺几棵。一棵"建树 + 量"约 8 ms，四棵是 30 ms 上下：
+    /// <see cref="DispatcherPriority.SystemIdle"/> 只在输入队列空的时候敲门，可一旦敲开就拦不住中途进来的输入，
+    /// 所以每一拍都要短。</summary>
+    private const int PrewarmBatch = 4;
+
+    /// <summary>下一条要预热的会话线（左栏最靠前的那几条，正在看的那条不在里面）。</summary>
+    private readonly List<(string ChannelNo, string SenderId)> _prewarmQueue = new();
+
+    /// <summary>铺过的会话。预热出来的树是<b>量过</b>的：点进去那一拍面板只要生成容器，
+    /// 建树和排版那两趟已经在空闲里走过了（实测一屏 13 条：冷开 120–200 ms，铺过之后 40 ms 上下）。</summary>
+    private readonly HashSet<(string ChannelNo, string SenderId)> _prewarmed = new();
+
+    /// <summary>记着 <see cref="_prewarmed"/> 是为哪一份配置铺的：换主题就是另一个缓存，旧的那张账要作废。</summary>
+    private TimelineConfig? _prewarmConfig;
+
+    private DispatcherOperation? _prewarmOp;
+
+    /// <summary>当前正在铺的那一条会话：行、已经铺到第几条（从尾部往前）、累计高度。</summary>
+    private IReadOnlyList<TimelineItem>? _prewarmItems;
+
+    private int _prewarmFrom;
+    private double _prewarmHeight;
 
     /// <summary>会话列表那一栏的行（<see cref="SyncConversations"/> 原地改的就是它）。
     /// 实例不换、通知不发，那一行就不会重新生成容器。</summary>
@@ -243,6 +267,12 @@ public partial class MainWindow : Window
     /// 它要是跟着条目总数走，说明"建控件"又回到了换数据的那一趟里。
     /// </summary>
     public int TimelineBuiltProbe => CountRows(Timeline);
+
+    /// <summary>
+    /// 预热队里还剩几条没铺完。用例拿它断"这一趟真能走完"：铺满一屏就算这一条完了，
+    /// 而"还没铺完就不停地重新排同一拍"那一种卡法，在这个数上立刻现形（它再也下不到 0）。
+    /// </summary>
+    public int PrewarmPendingProbe => _prewarmQueue.Count;
 
     private static int CountRows(DependencyObject root)
     {
@@ -712,6 +742,9 @@ public partial class MainWindow : Window
         RenderTimeline(style);
         PaintNewBelow();
         ApplyPaneWidth();
+        // 排到这一轮的最后：列宽刚钉好，预热那一趟量的才是真那趟要用的宽度。它只在系统空闲时敲门，
+        // 排在前面的任何输入/渲染都不等它
+        QueuePrewarm(conversations);
     }
 
     /// <summary>§9.3 的"新消息"胶囊：数的是"用户没贴在底部时落进来的那几条"，一回到栈底就清零。</summary>
@@ -908,8 +941,159 @@ public partial class MainWindow : Window
                     CopyLink: CopyText,
                     Delete: id => _ = DeleteMessageFromUiAsync(id)));
 
-    private void PaintTimelineEmpty(MainModel.EmptyState empty)
+    // ---- 空闲预热 ---------------------------------------------------------------------------------
+
+    /// <summary>
+    /// 把左栏最靠前的几条会话排进预热的队。每一轮重画都重排一次（顺序会变、也会有新会话进来），
+    /// 排在最前面的就是用户最可能下一个点的；正在看的那条不排，缓存里已经有它了。
+    /// 上限是 <see cref="BubbleCache.RememberedConversations"/> 减一：加上正在看的这条正好装满，
+    /// 再多铺就会把<b>当下这一条</b>的那一桶挤掉，预热反而变成让人更卡的原因。
+    /// </summary>
+    private void QueuePrewarm(IReadOnlyList<ConversationItem> conversations)
     {
+        if (RowConfig is not { } config) return;
+        if (!ReferenceEquals(_prewarmConfig, config))
+        {
+            _prewarmConfig = config;
+            _prewarmed.Clear();
+        }
+
+        var next = new List<(string ChannelNo, string SenderId)>();
+        foreach (var item in conversations)
+        {
+            if (next.Count >= BubbleCache.RememberedConversations - 1) break;
+            var key = (item.ChannelNo, item.SenderId);
+            if (_prewarmed.Contains(key)) continue;
+            if (_model.Selected is { } sel && sel.ChannelNo == key.Item1 && sel.SenderId == key.Item2) continue;
+            next.Add(key);
+        }
+
+        if (next.SequenceEqual(_prewarmQueue))
+        {
+            SchedulePrewarm();
+            return;
+        }
+
+        _prewarmQueue.Clear();
+        _prewarmQueue.AddRange(next);
+        ResetPrewarmPlan();
+        SchedulePrewarm();
+    }
+
+    private void ResetPrewarmPlan()
+    {
+        _prewarmItems = null;
+        _prewarmFrom = 0;
+        _prewarmHeight = 0;
+    }
+
+    private void SchedulePrewarm()
+    {
+        if (_prewarmOp is not null || _prewarmQueue.Count == 0 || !IsLoaded) return;
+        _prewarmOp = Dispatcher.BeginInvoke(DispatcherPriority.SystemIdle, new Action(PrewarmTick));
+    }
+
+    /// <summary>
+    /// 一拍铺几条就收工，下一拍再来。列宽还没钉过（窗口从没摆布过）时这一拍什么都不做、也不再排——
+    /// 钉列宽是 <see cref="ApplyPaneWidth"/> 的事，它跑过之后紧跟的就是下一次重画，那一轮会把这一趟重新排上。
+    /// </summary>
+    private void PrewarmTick()
+    {
+        _prewarmOp = null;
+        if (!IsLoaded || _prewarmQueue.Count == 0) return;
+        if (RowConfig is not { } config) return;
+        var width = TimelinePresenter?.Width ?? 0;
+        if (!double.IsFinite(width) || width <= 0) return;
+
+        var head = _prewarmQueue[0];
+        if (_model.Selected is { } sel && sel.ChannelNo == head.ChannelNo && sel.SenderId == head.SenderId)
+        {
+            // 用户已经点进来了：这一条的树正挂在屏上，再铺一遍没有意义，换下一条
+            _prewarmQueue.RemoveAt(0);
+            ResetPrewarmPlan();
+            SchedulePrewarm();
+            return;
+        }
+
+        // 这一条的第一屏还没开始铺：从最新的那几条起（点进来落的是底），累计高度从 0 量起
+        if (_prewarmItems is null)
+        {
+            _prewarmItems = _model.PeekTimeline(head.ChannelNo, head.SenderId);
+            _prewarmFrom = _prewarmItems.Count - 1;
+            _prewarmHeight = 0;
+        }
+
+        var items = _prewarmItems;
+        var viewport = TimelineScroll?.ViewportHeight ?? 0;
+        var batch = 0;
+        var enough = false;
+        // 从尾部（最新的那几条）往前铺：点进来落的是底，屏外那半屏铺了也看不见
+        for (; _prewarmFrom >= 0; _prewarmFrom--)
+        {
+            // 铺满一屏就算这一条完了：再往前铺的那几棵落在屏外，点进来时面板本来就不会量到它们，
+            // 而缓存的额度要留给下一条会话
+            if (viewport > 0 && _prewarmHeight >= viewport)
+            {
+                enough = true;
+                break;
+            }
+
+            if (batch >= PrewarmBatch) break;
+            var item = items[_prewarmFrom];
+            if (item is MessageItem message && config.Cache.Contains(message)) continue;
+            Prepare(config, width, item);
+            batch++;
+        }
+
+        // 只剩"这一拍的时间用完了"这一种收工方式才要续排。另一种（铺满一屏 / 铺到列表头）必须把这一条
+        // 从队里摘掉：留着它，下一拍进来还是同一句"高度够了"就地收工，整条队从此再也走不动。
+        if (!enough && _prewarmFrom >= 0)
+        {
+            SchedulePrewarm();
+            return;
+        }
+
+        _prewarmed.Add(head);
+        _prewarmQueue.RemoveAt(0);
+        ResetPrewarmPlan();
+        SchedulePrewarm();
+    }
+
+    /// <summary>
+    /// 建一棵、量一遍，然后把气泡摘下来放进缓存。<b>量的那一趟是这件事的全部意义</b>：
+    /// 面板接上它时给的约束宽度与这里同一个（都是 <see cref="TimelinePresenter"/> 钉死的那一档），
+    /// WPF 于是不再量第二遍，点进去那一拍只剩"生成容器"。
+    ///
+    /// 行是临时的，只用来把"整行宽"折成"气泡宽"（减掉气泡自己的外边距）——这条折算将来面板也会做一次。
+    /// 存进缓存前必须先把它从这一行上摘干净：一个元素不许挂两个父节点（与切走时那一路同一条规矩）。
+    /// </summary>
+    private void Prepare(TimelineConfig config, double width, TimelineItem item)
+    {
+        var row = new TimelineRow { Config = config, Item = item };
+        // 游离在可视树外的行继承不到窗口上的那几样度量开关（FontFamily、TextFormattingMode、UseLayoutRounding），
+        // 而它们直接改字宽：不原样转过来，预热就是按另一套度量量的，接到树上那一刻还得重量一遍，白做。
+        // SelectableBody 里把这三样转给标尺的那一段是同一个道理，只不过那儿转的是标尺。
+        foreach (var dp in MetricProperties)
+            row.SetValue(dp, Timeline.GetValue(dp));
+
+        row.Measure(new Size(width, double.PositiveInfinity));
+        _prewarmHeight += row.DesiredSize.Height;
+        if (row.Child is not FrameworkElement bubble) return;
+        row.Child = null;
+        if (item is MessageItem message) config.Cache.Put(message, bubble);
+    }
+
+    /// <summary>影响字宽的那几样继承属性。预热那一趟和真那趟必须量在同一套度量上，否则真那趟还要重量一遍。</summary>
+    private static readonly DependencyProperty[] MetricProperties =
+    {
+        TextElement.FontFamilyProperty, TextElement.FontSizeProperty, TextElement.FontWeightProperty,
+        TextElement.FontStyleProperty, TextElement.FontStretchProperty,
+        TextOptions.TextFormattingModeProperty, TextOptions.TextRenderingModeProperty,
+        FrameworkElement.UseLayoutRoundingProperty, FrameworkElement.SnapsToDevicePixelsProperty,
+        FlowDirectionProperty
+    };
+
+    private void PaintTimelineEmpty(MainModel.EmptyState empty)    {
         TimelineEmptyTitle.Text = empty.Title;
         TimelineRetryButton.Visibility =
             empty.Action == MainModel.EmptyAction.Retry ? Visibility.Visible : Visibility.Collapsed;

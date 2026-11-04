@@ -998,6 +998,207 @@ public sealed class MainWindowTest : IDisposable
     /// 判据落在元素实例本身：同一条消息两次看到的是同一棵树。只断计数器的话，
     /// "取到了但没接上"这种错法照样计数正确，屏幕上也照样卡。
     /// </summary>
+    // ---- 切会话：空闲预热 ----------------------------------------------------------------
+    /// <summary>
+    /// 预热这一趟必须<b>走得完</b>。铺满一屏就算这一条会话完了；那一拍要是把"铺满了"和"这一拍的
+    /// 时间用完了"当成同一件事，下一拍进门第一件事还是"高度够了"就地收工，队里第一条永远排不掉，
+    /// 后面几条一个都铺不上——用户点进去照样卡，而这条卡法在计时里完全看不出来（它不花时间）。
+    /// 所以拿三条会话各一百条历史断队列真的降到 0，并且降到的时候缓存里确实有一屏又一屏。
+    /// </summary>
+    [Fact]
+    public void IdlePrewarmFinishesEveryConversationInTheQueue()
+    {
+        var senders = new[] { Grafana, "ops", "www" };
+        for (var i = 0; i < senders.Length; i++)
+            for (var k = 0; k < 100; k++)
+                _db.ApplyMessage(Msg(1000L * (i + 1) + k, $"m{i}_{k}", senders[i]));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = OpenWindow();
+                window.OpenConversation(Channel, Grafana);
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0 && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpUntil(() => window.PrewarmPendingProbe == 0, 15000);
+
+                var cache = window.RowConfig?.Cache ?? throw new InvalidOperationException("行配置没挂上");
+                Assert.True(cache.Count >= 20, $"队是走空了，可只铺了 {cache.Count} 棵（两条会话各一屏要 20 棵上下）");
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "空闲预热没把队走完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    /// <summary>
+    /// 系统空闲时把左栏最前面那几条会话的第一屏<b>建好并量好</b>放进缓存，于是"第一次点某人"
+    /// 走的就是切回来那条快路：面板只生成容器，不再建树、不再排正文。
+    /// 判据故意不给"快了多少毫秒"那种数字（换台机器就飘），而是咬住机制本身：
+    /// 预热铺过之后再点进去，<b>一棵新树都不许建</b>——Misses 一次都不涨。
+    /// 涨了就是预热没铺满一屏，或者铺的东西接不上，屏幕上照样卡。
+    /// </summary>
+    [Fact]
+    public void IdlePrewarmMakesTheFirstOpenOfAnotherConversationBuildNothing()
+    {
+        for (var seq = 1; seq <= 20; seq++) _db.ApplyMessage(Msg(seq, "a" + seq, Grafana));
+        for (var seq = 101; seq <= 120; seq++) _db.ApplyMessage(Msg(seq, "b" + seq, "ops"));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = OpenWindow();
+                window.OpenConversation(Channel, Grafana);
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0 && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(100);
+
+                var cache = window.RowConfig?.Cache ?? throw new InvalidOperationException("行配置没挂上");
+                Sta.PumpUntil(() => cache.Count > 0, 8000);
+                // 铺到"再点也不会建新树"为止：预热是一拍几条，慢慢来的
+                var lastCount = -1;
+                while (cache.Count != lastCount)
+                {
+                    lastCount = cache.Count;
+                    Sta.PumpFor(200);
+                }
+
+                var misses = cache.Misses;
+                var hits = cache.Hits;
+                window.OpenConversation(Channel, "ops");
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0 && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(100);
+
+                Assert.True(cache.Hits > hits, $"点进去一条都没接上预热好的树（命中 {cache.Hits - hits} 次）");
+                Assert.Equal(0, cache.Misses - misses);
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "空闲预热没跑完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    /// <summary>
+    /// 预热那一趟量的必须和真那一趟是<b>同一套度量</b>。游离在可视树外的行继承不到窗口上的
+    /// FontFamily / TextFormattingMode / UseLayoutRounding，而这三样直接改字宽：漏转一样，
+    /// 预热建出来的正文就按另一套度量排，接上屏幕那一刻版面要么重量一遍（预热白做）要么排错。
+    /// 所以拿"冷开那一屏"当基准逐行比高度——两个窗口同一份库，一个铺过、一个没铺。
+    /// </summary>
+    [Fact]
+    public void APrewarmedScreenLaysOutExactlyLikeAColdOne()
+    {
+        for (var seq = 1; seq <= 20; seq++) _db.ApplyMessage(Msg(seq, "a" + seq, Grafana));
+        for (var seq = 101; seq <= 120; seq++) _db.ApplyMessage(Msg(seq, "b" + seq, "ops"));
+
+        Exception? failure = null;
+        var cold = new List<double>();
+        var warm = new List<double>();
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                // 冷的那一份：窗口一开就直接点过去，空闲那一拍还没来得及铺
+                var first = OpenWindow();
+                first.OpenConversation(Channel, "ops");
+                Sta.PumpUntil(() => first.TimelineRealizedProbe > 0 && first.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(100);
+                cold = RealizedBubbleHeights(first);
+
+                // 暖的那一份：先停在另一条会话上，等空闲把 ops 铺完再点过去
+                var second = OpenWindow();
+                second.OpenConversation(Channel, Grafana);
+                Sta.PumpUntil(() => second.TimelineRealizedProbe > 0 && second.TimelineFromBottomProbe <= 1);
+                var cache = second.RowConfig?.Cache ?? throw new InvalidOperationException("行配置没挂上");
+                Sta.PumpUntil(() => cache.Count > 0, 8000);
+                var lastCount = -1;
+                while (cache.Count != lastCount)
+                {
+                    lastCount = cache.Count;
+                    Sta.PumpFor(200);
+                }
+
+                second.OpenConversation(Channel, "ops");
+                Sta.PumpUntil(() => second.TimelineRealizedProbe > 0 && second.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(100);
+                warm = RealizedBubbleHeights(second);
+                // 先确认这一份真的是"接上了预热的树"，否则两条完全一样的冷开也能比过，用例就白写了
+                Assert.True(second.RowConfig!.Cache.Hits > 0, "那一屏根本没接上预热好的树，比高度没有意义");
+
+                Assert.NotEmpty(cold);
+                Assert.Equal(cold, warm);
+                first.Close();
+                second.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "两种开法没比完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    /// <summary>屏上每一棵气泡的高度（自上而下）。差一个像素就是量错了度量。</summary>
+    private static List<double> RealizedBubbleHeights(MainWindow window)
+    {
+        var timeline = (ItemsControl)window.FindName("Timeline")!;
+        var heights = new List<double>();
+        for (var i = 0; i < timeline.Items.Count; i++)
+            if (BubbleAt(timeline, i) is { } current) heights.Add(Math.Round(current.Bubble.ActualHeight, 1));
+
+        return heights;
+    }
+
+    /// <summary>开一扇摆在屏幕外的窗口并等它加载好。两扇要同宽同高，比出来的版面才是同一件事。</summary>
+    private MainWindow OpenWindow()
+    {
+        var window = new MainWindow(_db, _identities,
+            new ReadReporter(_db, _identities, Offline()),
+            new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader())
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -10000,
+            Top = -10000,
+            Width = 980,
+            Height = 720,
+            ShowActivated = false
+        };
+        window.Show();
+        Sta.PumpUntil(() => window.IsLoaded);
+        return window;
+    }
+
     [Fact]
     public void BubblesSurviveASwitchAwayAndBack()
     {

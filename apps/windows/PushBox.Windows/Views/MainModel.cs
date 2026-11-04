@@ -241,6 +241,18 @@ public sealed class MainModel
     public IReadOnlyList<TimelineItem> Timeline() =>
         BuildTimeline(_window);
 
+    /// <summary>
+    /// 只读地看一眼<b>别的</b>会话的第一屏：不动游标、不清红点、不广播，也不碰 <see cref="_window"/>。
+    /// 给空闲预热用的（<see cref="MainWindow"/> 那一段），点进去走的还是 <see cref="Open"/>。
+    /// 映射共用 <see cref="BuildTimeline"/>：预热建出的那棵树要能按同一个键接上，键差一个字段就白做。
+    /// </summary>
+    public IReadOnlyList<TimelineItem> PeekTimeline(string channelNo, string senderId)
+    {
+        // 会话没了（他端清空、本机删掉）就别再往下铺：主键点查一次只要零点几毫秒
+        if (_db.FindConversation(channelNo, senderId) is not { } row) return Array.Empty<TimelineItem>();
+        return BuildTimeline(_db.MessagesPage(channelNo, senderId, long.MaxValue, PageLimit).ToList(), AsItem(row));
+    }
+
     // ---- 空态的三态（加载中 / 空 / 没取回来）-------------------------------------------------------
 
     /// <summary>空态的三张脸。窗口刚建出来是"还在取"：这台机器可能只是还没把历史取回来，
@@ -715,7 +727,15 @@ public sealed class MainModel
     /// <summary>
     /// 时间线 = 消息 + 日期分节头。分节触发只看"与上一条是否同一天"，与 Android 一致。
     /// </summary>
-    public IReadOnlyList<TimelineItem> BuildTimeline(IReadOnlyList<MessageRow> rows)
+    public IReadOnlyList<TimelineItem> BuildTimeline(IReadOnlyList<MessageRow> rows) =>
+        BuildTimeline(rows, _selected);
+
+    /// <summary>
+    /// 同一份映射，但"这一屏属于哪条会话线"由参数给。<see cref="PeekTimeline"/> 铺的是<b>别的</b>会话，
+    /// 读的是 <see cref="_selected"/> 的话，每条消息挂上的发送者名与头像 token 就是当前那一条的——
+    /// 那条 record 于是和真点开时的键对不上，预热建的树接不上，屏幕上照样卡。
+    /// </summary>
+    private IReadOnlyList<TimelineItem> BuildTimeline(IReadOnlyList<MessageRow> rows, ConversationItem? context)
     {
         var items = new List<TimelineItem>(rows.Count * 2);
         string? previousDay = null;
@@ -734,8 +754,8 @@ public sealed class MainModel
             
             // body ?: summary ?: title 三选一：Android 也是三选一，同一条消息两端才会显示同一段文字
             // §9.2 对齐 Android MessageBubble：带上发送者名称与头像 token（从当前会话取）
-            var senderName = _selected?.DisplayName;
-            var avatarToken = _selected is not null ? DeviceClient.AvatarTokenFor(_selected.SenderId) : null;
+            var senderName = context?.DisplayName;
+            var avatarToken = context is not null ? DeviceClient.AvatarTokenFor(context.SenderId) : null;
             items.Add(new MessageItem(m.MsgId, m.Seq, m.ChannelNo, m.SenderId,
                 m.Body ?? m.Summary ?? m.Title ?? string.Empty, m.Level,
                 TimeFormat.TypeLabel(m.MsgType), m.CreatedAt, m.MediaCount, m.MediaStatus, m.LinkUrl,

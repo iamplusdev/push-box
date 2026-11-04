@@ -48,6 +48,12 @@ public sealed class BubbleCache
     /// <summary>要建新树几次。第一次打开一条会话时这一整屏都走这里。</summary>
     public int Misses { get; private set; }
 
+    /// <summary>这一条会话此刻有没有留着一棵。<b>不动顺序、不算命中</b>：预热要用它跳过已经建好的那条，
+    /// 而 <see cref="Take"/> 会把树取走、<see cref="Touch"/> 会把这一桶挪到最近，两者都不是"只看一眼"。</summary>
+    public bool Contains(MessageItem item) =>
+        _buckets.TryGetValue((item.ChannelNo, item.SenderId), out var bucket)
+        && bucket.Kept.ContainsKey(item);
+
     public FrameworkElement? Take(MessageItem item)
     {
         var bucket = Touch((item.ChannelNo, item.SenderId));
