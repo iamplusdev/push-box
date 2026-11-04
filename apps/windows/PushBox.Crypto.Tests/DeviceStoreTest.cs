@@ -99,6 +99,42 @@ public sealed class DeviceStoreTest : IDisposable
         Assert.Single(store.MessagesPage("83271504", "grafana"));
     }
 
+    /// <summary>
+    /// 打开一条会话线只要它自己那一行。整张会话表带着未读与 level 两个相关子查询，为一次存在性
+    /// 检查扫它是白扫；点查必须和 <see cref="DeviceStore.Conversations"/> 算出同一份列，否则左栏
+    /// 的红点和右栏的落点会各说一套。
+    /// </summary>
+    [Fact]
+    public void APointLookupReadsOneConversationLineAndNothingElse()
+    {
+        using var store = new DeviceStore(DbPath);
+        store.ApplyMessage(Msg(1, "m1"));
+        store.ApplyMessage(Msg(2, "m2"));
+        store.ApplyMessage(Msg(3, "m3", sender: "jenkins", name: "Jenkins"));
+        store.ApplyMessage(Msg(4, "m4"));
+        store.MarkConversationRead("83271504", "grafana");
+        store.ApplyMessage(Msg(5, "m5"));
+
+        var row = store.FindConversation("83271504", "grafana");
+
+        Assert.NotNull(row);
+        Assert.Equal(5L, row!.LastSeq);
+        // 已读游标落在 m4，m5 才是那一个红点：算出来的列在两条取数路径上得是同一个数
+        Assert.Equal(1, row.UnreadCount);
+        Assert.Equal("info", row.LastLevel);
+        Assert.Equal("Grafana", row.DisplayName);
+        Assert.Equal(row.LastSeq, store.Conversations().Single(c => c.SenderId == "grafana").LastSeq);
+        Assert.Equal(row.UnreadCount, store.Conversations().Single(c => c.SenderId == "grafana").UnreadCount);
+
+        // 键是 (channel_no, sender_id) 两半：只对上半不等于对上
+        Assert.Null(store.FindConversation("83271504", "nobody"));
+        Assert.Null(store.FindConversation("99999999", "grafana"));
+
+        // 会话线清空时那一行跟着消失，点查不能留一个指向空会话的幽灵行
+        store.ApplyTombstone(Tombstone("{\"t\":\"tombstone\",\"id\":\"m3\",\"deleted_at\":1765500009000}"));
+        Assert.Null(store.FindConversation("83271504", "jenkins"));
+    }
+
     [Fact]
     public void PagesComeBackInSeqOrderAndTheNextPageNeitherRepeatsNorSkips()
     {

@@ -373,6 +373,28 @@ public sealed class MainModelTest : IDisposable
         Assert.Null(model.SearchError);
     }
 
+    /// <summary>
+    /// 没搜过就没有东西可退：点通知进会话那条路每次都要先走这一句，白广播一次等于把上一屏白画一遍。
+    /// 判据只在"确实没什么可退"时闭嘴，真搜过的那一趟照旧重画。
+    /// </summary>
+    [Fact]
+    public void ExitingSearchThatNeverStartedDoesNotAskForAPaint()
+    {
+        Seed(1, "m1", body: "阈值");
+        var model = Model();
+        var raised = 0;
+        model.Changed += () => raised++;
+
+        model.ExitSearch();
+
+        Assert.Equal(0, raised);
+
+        model.SearchLocal("阈值");
+        model.ExitSearch();
+
+        Assert.Equal(2, raised);
+    }
+
     // ---- 顶栏与栏宽 ---------------------------------------------------------------------------------
 
     [Fact]

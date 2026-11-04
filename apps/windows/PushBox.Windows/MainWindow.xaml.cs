@@ -13,6 +13,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using PushBox.Windows.Controls;
 using PushBox.Windows.Data;
+using PushBox.Windows.Logging;
 using PushBox.Windows.Media;
 using PushBox.Windows.Sync;
 using PushBox.Windows.Themes;
@@ -59,9 +60,29 @@ public partial class MainWindow : Window
     /// <summary>行模板那一份配置。换主题才会换（<see cref="ConfigFor"/>）。</summary>
     private TimelineConfig? _rowConfig;
 
+    /// <summary>会话列表那一栏的行（<see cref="SyncConversations"/> 原地改的就是它）。
+    /// 实例不换、通知不发，那一行就不会重新生成容器。</summary>
+    private ObservableCollection<ConversationItem>? _convRows;
+
     /// <summary>会话列表那一栏的宽度。默认 260，用户拖过手柄之后记住拖到的值——
     /// <see cref="ApplyPaneWidth"/> 每次窗口尺寸变化都会重摆列宽，不回记就会把用户拖的宽度抹掉。</summary>
     private double _listWidth = MainModel.ListDefaultWidth;
+
+    /// <summary>托盘那一行的未读角标：上一轮重画算出来的那一份，和左栏画的是同一个数。
+    /// 角标本该跟着屏幕走，而且省下同一轮里的第二趟会话表查询（-1 = 一次都还没画过，现取）。</summary>
+    private int _trayUnread = -1;
+
+    /// <summary>这一轮重画里会话列表那一趟查询的花费（<see cref="Refresh"/> 记账，
+    /// <see cref="OpenAndSnap"/> 在点击那一拍开头清零）。四个数只在同一次派发周期里配对使用，
+    /// 非点击的重画把它们算成什么不要紧——下一次点击会先清零。</summary>
+    private long _switchListMs;
+
+    /// <summary>建行的花费：行数据、行配置、换上去的那一份集合（<see cref="RenderTimeline"/> 记账）。</summary>
+    private long _switchBuildMs;
+
+    /// <summary>量底那几趟 <c>UpdateLayout</c> 的花费（<see cref="SyncTimeline"/> 记账）。
+    /// 它和建行必须分开看：一个是"每条消息要花多少功夫才成为一行"，另一个是"面板为找到底量了几遍"。</summary>
+    private long _switchMeasureMs;
 
     public MainWindow(DeviceStore db, IdentityStore identities, ReadReporter reporter,
         SearchService search, DeleteReporter deletions, MediaLoader media, SyncEngine? engine = null,
@@ -546,7 +567,9 @@ public partial class MainWindow : Window
     /// 托盘气泡有的是宽度，而它常常是用户唯一还看着的地方（主窗已经收到托盘里去了）。</summary>
     public string TrayState => _engine is null ? string.Empty : MainModel.StateDetail(_engine.State);
 
-    public int TrayUnread => _model.TotalUnread();
+    /// <summary>未读总数取的是 <see cref="Refresh"/> 那一趟查询算出来的数：调用点在 TrayRefresh 里，
+    /// 也就是说这一句永远发生在同一轮的列表查询之后，取现成的比再扫一遍会话表既准又省。</summary>
+    public int TrayUnread => _trayUnread >= 0 ? _trayUnread : _model.TotalUnread();
 
     /// <summary>关窗退到托盘：只是藏起来，引擎、库、订阅都留在原处（§8.1）。</summary>
     public void HideToTray() => Hide();
@@ -569,10 +592,10 @@ public partial class MainWindow : Window
     /// </summary>
     public void OpenConversation(string channelNo, string senderId)
     {
+        // 这里不再自己 Refresh 一次：Open 结尾的 Raise 在同一次派发周期里就把整屏画过了
+        // （HandleTarget 一定在 dispatcher 上，见 App.xaml.cs:99），再画一遍等于把这一拍的时间翻倍
         _model.ExitSearch();
-        _model.Open(channelNo, senderId);
-        Refresh();
-        SnapToBottom();
+        OpenAndSnap(channelNo, senderId);
     }
 
     /// <summary>画刷是 <c>Application.Resources</c> 那两份 token 字典的快照，所以换主题时要作废重建。</summary>
@@ -673,6 +696,11 @@ public partial class MainWindow : Window
     {
         // 排过队的那次走到这里就算数；画到一半又有新帧落库，会再置位并排下一次
         Interlocked.Exchange(ref _refreshQueued, 0);
+        // 会话表这一趟查询喂两处（左栏与托盘角标）：以前各问一次，等于每轮重画多扫一遍会话表
+        var listed = Stopwatch.StartNew();
+        var conversations = _model.Conversations();
+        _switchListMs += listed.ElapsedMilliseconds;
+        _trayUnread = conversations.Sum(c => c.UnreadCount);
         // 托盘那一行先报：它读的是纯模型的账（未读数、连接状态），和这一屏画没画出来没有关系。
         // 放在 IsLoaded 之后会漏掉两种常态——"启动就最小化到托盘"根本没渲染过内容，
         // 而关闭后再打开会话（HideToTray 的那条路）窗口也没机会自己重画
@@ -680,7 +708,7 @@ public partial class MainWindow : Window
         if (!IsLoaded) return;
         var style = PaintStyle();
 
-        RenderConversations();
+        RenderConversations(conversations);
         RenderTimeline(style);
         PaintNewBelow();
         ApplyPaneWidth();
@@ -693,21 +721,68 @@ public partial class MainWindow : Window
         NewBelowText.Text = _newBelow > 0 ? MainModel.NewBelowLabel(_newBelow) : string.Empty;
     }
 
-    private void RenderConversations()
+    private void RenderConversations(IReadOnlyList<ConversationItem> conversations)
     {
-        var conversations = _model.Conversations();
         var selected = _model.Selected;
         _applyingSelection = true;
-        ConversationList.ItemsSource = conversations;
+        // 选中项要在"这一栏现在真正拿着的那一份行"里找，拿新取的 conversations 去比会选空
+        var live = SyncConversations(conversations);
         ConversationList.SelectedItem = selected is null
             ? null
-            : Find(conversations, selected.ChannelNo, selected.SenderId);
+            : Find(live, selected.ChannelNo, selected.SenderId);
         _applyingSelection = false;
         // 空列表在 PC 上不会像手机那样一眼看出"是没消息还是没加载出来"，所以这句话得自己说；
         // 说哪一句由模型的三态定（正在取 / 确实没有 / 没取回来），窗口不自己拼
         var empty = conversations.Count == 0;
         ConversationEmpty.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
         if (empty) PaintConversationEmpty(_model.ConversationEmptyState);
+    }
+
+    /// <summary>
+    /// 把会话列表对齐到 <paramref name="conversations"/>：整栏换 <c>ItemsSource</c> 是"一次 Reset + 每一行
+    /// 重新生成容器"，而切会话这一拍里左栏的内容其实一条都没变——实测一行 1.1ms，八行 9ms，
+    /// 三四十行就是三十几毫秒，而且每点一次都付一遍。
+    /// 这里换三件事：值没变的行沿用<b>同一个实例</b>（一个通知都不发，容器不动）、值变了的行按下标
+    /// Replace（容器留着只重绑）、只有真的多出来或少掉的那几行才 Add / Remove。
+    /// </summary>
+    private ObservableCollection<ConversationItem> SyncConversations(IReadOnlyList<ConversationItem> conversations)
+    {
+        if (_convRows is not { } rows)
+        {
+            rows = _convRows = new ObservableCollection<ConversationItem>();
+            ConversationList.ItemsSource = rows;
+        }
+
+        // 上一份还在的实例先按主键索引：ConversationItem 是 record，值相等就是"这一行没变"
+        var previous = new Dictionary<(string, string), ConversationItem>(rows.Count);
+        foreach (var r in rows) previous[(r.ChannelNo, r.SenderId)] = r;
+
+        // 没变的沿用老实例、变了或新出现的用新的——后面比的是引用，换了实例就会被认出来
+        var next = new ConversationItem[conversations.Count];
+        for (var i = 0; i < conversations.Count; i++)
+        {
+            var c = conversations[i];
+            next[i] = previous.TryGetValue((c.ChannelNo, c.SenderId), out var old) && old.Equals(c) ? old : c;
+        }
+
+        var wanted = new HashSet<(string, string)>(next.Length);
+        foreach (var n in next) wanted.Add((n.ChannelNo, n.SenderId));
+        // 会话被清空或删掉了：从后往前摘，下标不会错位
+        for (var i = rows.Count - 1; i >= 0; i--)
+            if (!wanted.Contains((rows[i].ChannelNo, rows[i].SenderId))) rows.RemoveAt(i);
+
+        // 剩下的按目标位置摆平：置顶、新消息上来的那些会挪位，挪位在这一栏只有几行，
+        // 逐格 Replace 比"整栏重排"少一次 Reset
+        for (var i = 0; i < next.Length; i++)
+        {
+            if (i < rows.Count)
+            {
+                if (!ReferenceEquals(rows[i], next[i])) rows[i] = next[i];
+            }
+            else rows.Add(next[i]);
+        }
+        while (rows.Count > next.Length) rows.RemoveAt(rows.Count - 1);
+        return rows;
     }
 
     /// <summary>列表空态的三样：标题、说明、底下那颗按钮（有去向时才出现）。</summary>
@@ -758,11 +833,14 @@ public partial class MainWindow : Window
             scroller?.ScrollToVerticalOffset(start);
             // 落底要走几个来回：面板的 extent 是按已量过的行估出来的，每落一次就把最后几行真建出来、
             // 把估算修正一次，"量 → 落"得走到偏移不再变为止。
+            var measure = Stopwatch.StartNew();
             for (var attempt = 0; attempt < 3; attempt++)
             {
                 Timeline.UpdateLayout();
                 scroller?.ScrollToEnd();
             }
+
+            _switchMeasureMs += measure.ElapsedMilliseconds;
 
             _stuckToBottom = true;
             _newBelow = 0;
@@ -786,10 +864,15 @@ public partial class MainWindow : Window
 
     private void RenderTimeline(MarkdownStyle style)
     {
+        // 这一段是"切会话卡不卡"里唯一还没被拆开看的部分，所以再分两半：建行与换集合记在
+        // _switchBuildMs，量底那三趟记在 _switchMeasureMs（后者由 SyncTimeline 自己入账）
+        var laid = Stopwatch.StartNew();
+        var measuredBefore = _switchMeasureMs;
         var items = _model.Timeline();
         // 配置先摆好再换数据：换上去的那一趟就按它建行，晚一步的话新行拿到的还是旧主题那份画刷
         RowConfig = ConfigFor(style);
         SyncTimeline(items);
+        _switchBuildMs += laid.ElapsedMilliseconds - (_switchMeasureMs - measuredBefore);
 
         var opened = _model.Selected is not null;
         NoConversationBar.Visibility = opened ? Visibility.Collapsed : Visibility.Visible;
@@ -837,9 +920,28 @@ public partial class MainWindow : Window
     private void OnConversationSelected(object sender, SelectionChangedEventArgs e)
     {
         if (_applyingSelection || ConversationList.SelectedItem is not ConversationItem item) return;
-        _model.Open(item.ChannelNo, item.SenderId);
-        // 换会话就是新的一屏，从底部看起：上一屏攒的"新消息"数带走没意义
+        OpenAndSnap(item.ChannelNo, item.SenderId);
+    }
+
+    /// <summary>
+    /// 打开一条会话、从底部看起，顺带把这一拍的分段耗时记进留痕（§ perf 第 1 步：微信那四条机制
+    /// 动的是四段不同的账——取数、列表、建行、量底，先量出卡在哪一段才知道下一步该动哪一层）。
+    /// 记时收在<b>这一拍返回之前</b>：留痕是进程全局的那一本，把一行写到下一个派发周期去，
+    /// 就可能写进下一条用例刚开好的那个目录里（LogWiringTest 断的正是"目录里只该有我这行的那一句"）。
+    /// </summary>
+    private void OpenAndSnap(string channelNo, string senderId)
+    {
+        var clock = Stopwatch.StartNew();
+        _switchListMs = _switchBuildMs = _switchMeasureMs = 0;
+        _model.Open(channelNo, senderId);
+        // Open 结尾的 Raise 在同一次派发周期里就把整屏画完了，所以此刻四段都记过账了：
+        // 到这里为止的墙钟扣掉它们，剩下的那截就是取数（会话点查、一页消息、本地已读）
+        var painted = clock.ElapsedMilliseconds;
+        // 换一屏就是新的一屏，上一屏攒的"新消息"数带走没意义
         SnapToBottom();
+        AppLog.ConversationSwitched(_rows?.Count ?? 0,
+            Math.Max(0, painted - _switchListMs - _switchBuildMs - _switchMeasureMs),
+            _switchListMs, _switchBuildMs, _switchMeasureMs, clock.ElapsedMilliseconds);
     }
 
     // ---- 引擎状态 ---------------------------------------------------------------------------------

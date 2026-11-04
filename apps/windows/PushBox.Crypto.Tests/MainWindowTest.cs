@@ -948,6 +948,50 @@ public sealed class MainWindowTest : IDisposable
         Assert.True(failure is null, failure?.ToString());
     }
 
+    /// <summary>
+    /// 一次点击只画一遍：这一版之前那条路上有三次重画（ExitSearch 白广播一次、Open 自己一次、
+    /// 点通知那条路再手动 Refresh 一次），每一遍都把上一屏重建成新一屏之前再做一遍。
+    /// 托盘那个回调是重画次数的探针，因为它挂在 Refresh 的末尾、一次重画只响一次。
+    /// </summary>
+    [Fact]
+    public void OneClickPaintsTheScreenOnce()
+    {
+        _db.ApplyMessage(Msg(1, "m1", Grafana));
+        _db.ApplyMessage(Msg(2, "m2", "deploy"));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new MainWindow(_db, _identities,
+                    new ReadReporter(_db, _identities, Offline()),
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader());
+                var paints = 0;
+                window.TrayRefresh += () => paints++;
+
+                window.OpenConversation(Channel, Grafana);
+
+                Assert.Equal(1, paints);
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "一次点击的重画次数没量完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
     // ---- 切会话：气泡复用 ----------------------------------------------------------------
     /// <summary>
     /// 切走的会话把建好的气泡留在 <see cref="BubbleCache"/> 里，切回来直接接上，不重建一遍。
@@ -1015,6 +1059,85 @@ public sealed class MainWindowTest : IDisposable
         thread.IsBackground = true;
         thread.Start();
         Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "来回切一次没有按时跑完");
+        Assert.True(failure is null, failure?.ToString());
+    }
+
+    // ---- 切会话：会话列表那一栏不整栏换源 ----------------------------------------------------------------
+    /// <summary>
+    /// 整栏换 <c>ItemsSource</c> 是"一次 Reset + 每一行重生成容器"，于是切一次会话要为
+    /// <b>根本没变的那几行</b>再付一趟布局（实测一行 1.1ms，会话越多越贵）。这一栏改成原地同步：
+    /// 值没变的行沿用同一个实例、一个通知都不发，只有真变了的那一格换实例。
+    /// 判据落在集合实例与行实例本身——只数通知的话，"换了源但恰好没重画"这种错法也能过。
+    /// </summary>
+    [Fact]
+    public void TheConversationPaneKeepsItsUntouchedRowsAcrossASwitch()
+    {
+        for (var seq = 1; seq <= 12; seq++)
+            _db.ApplyMessage(Msg(seq, "m" + seq, seq <= 4 ? "a" : seq <= 8 ? "b" : "c"));
+
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new MainWindow(_db, _identities,
+                    new ReadReporter(_db, _identities, Offline()),
+                    new SearchService(_db, _identities, Offline()), Deletions(), new MediaLoader())
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = -10000,
+                    Top = -10000,
+                    ShowActivated = false
+                };
+                window.Show();
+                Sta.PumpUntil(() => window.IsLoaded);
+                window.OpenConversation(Channel, "a");
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0 && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(80);
+
+                var list = (ListBox)window.FindName("ConversationList")!;
+                var source = list.ItemsSource;
+                var before = list.Items.Cast<ConversationItem>().ToDictionary(i => i.SenderId);
+                Assert.Equal(3, before.Count);
+                Assert.Equal(0, before["a"].UnreadCount);
+
+                window.OpenConversation(Channel, "b");
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0 && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(80);
+
+                var after = list.Items.Cast<ConversationItem>().ToDictionary(i => i.SenderId);
+                Assert.Same(source, list.ItemsSource);
+                Assert.NotSame(before["b"], after["b"]);
+                Assert.Same(before["a"], after["a"]);
+                Assert.Same(before["c"], after["c"]);
+                Assert.Equal(0, after["b"].UnreadCount);
+                Assert.Equal("b", ((ConversationItem?)list.SelectedItem)?.SenderId);
+
+                // 第三条也开一遍：新出现的那一格之外，先前那两格照样一动不动
+                window.OpenConversation(Channel, "c");
+                Sta.PumpUntil(() => window.TimelineRealizedProbe > 0 && window.TimelineFromBottomProbe <= 1);
+                Sta.PumpFor(80);
+                var third = list.Items.Cast<ConversationItem>().ToDictionary(i => i.SenderId);
+                Assert.NotSame(after["c"], third["c"]);
+                Assert.Same(after["a"], third["a"]);
+                Assert.Same(after["b"], third["b"]);
+                Assert.Equal("c", ((ConversationItem?)list.SelectedItem)?.SenderId);
+
+                window.Close();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "切会话的列表同步没有按时跑完");
         Assert.True(failure is null, failure?.ToString());
     }
 

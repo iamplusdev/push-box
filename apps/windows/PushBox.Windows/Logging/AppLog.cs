@@ -198,6 +198,18 @@ public static class AppLog
     public static void SettingsSaveFailed(string exceptionType) =>
         Write(LogEventLevel.Warning, "设置写不进盘 {Type}", exceptionType);
 
+    /// <summary>
+    /// 切一次会话的分段耗时：取数（会话点查 + 一页消息 + 本地已读）、列表（左栏那一趟查询）、
+    /// 建行（行数据 + 换集合）、量底（面板为了落到底把行重测的那几趟），最后一个是从点击到这一拍
+    /// 画完的墙钟——四段之外的杂活（画刷快照、栏宽、空态）只有它看得见。
+    /// "卡"字只有一个，能分开修的却是这四段，所以先量再动。
+    /// </summary>
+    public static void ConversationSwitched(int rows, long fetchMs, long listMs, long buildMs,
+        long measureMs, long totalMs) =>
+        Write(LogEventLevel.Information,
+            "切会话 {Rows} 行 取数={Fetch}ms 列表={List}ms 建行={Build}ms 量底={Measure}ms 全程={Total}ms",
+            rows, fetchMs, listMs, buildMs, measureMs, totalMs);
+
     public static void AutoStartWriteFailed(string exceptionType) =>
         Write(LogEventLevel.Warning, "开机自启写不进注册表 {Type}", exceptionType);
 

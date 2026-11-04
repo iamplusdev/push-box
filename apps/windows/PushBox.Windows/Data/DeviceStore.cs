@@ -182,7 +182,8 @@ public sealed class DeviceStore : IDisposable
 
     // §9.1 的"会话行小圆点"要的是这条会话**最后一条**消息的 level：不落列（跟 unread_count 同一条理由——
     // tombstone 删掉最后一条时圆点得自己跟着变），现取一次的相关子查询就是那个语义。
-    private const string ConversationsWithUnreadSql =
+    // 投影到这里为止，尾巴按要整张列表还是要点查一条分别拼（与 MessageColumns 同一手法：同一段 SQL 不会走偏成两份）。
+    private const string ConversationProjectionSql =
         """
         SELECT channel_no, sender_id, name, custom_name, avatar_path, pinned, muted,
                last_read_seq, last_seq, last_msg_at, last_summary_cached,
@@ -194,8 +195,16 @@ public sealed class DeviceStore : IDisposable
                   WHERE m.channel_no = conversations.channel_no
                     AND m.sender_id = conversations.sender_id
                   ORDER BY m.seq DESC LIMIT 1) AS last_level
-        FROM conversations ORDER BY pinned DESC, last_msg_at DESC;
+        FROM conversations
         """;
+
+    private const string ConversationsWithUnreadSql =
+        ConversationProjectionSql + " ORDER BY pinned DESC, last_msg_at DESC;";
+
+    /// <summary>点查一条会话线（主键是 channel_no + sender_id）：为"这一条在不在、读到哪了"把整张表
+    /// 连同两个相关子查询捞一遍，是打开会话那一拍里最没道理的一笔。</summary>
+    private const string FindConversationSql =
+        ConversationProjectionSql + " WHERE channel_no = :channel_no AND sender_id = :sender_id;";
 
     private const string PageMessagesSql =
         "SELECT " + MessageColumns + " FROM messages" +
@@ -775,22 +784,33 @@ public sealed class DeviceStore : IDisposable
             using var cmd = Command(_db, null, ConversationsWithUnreadSql);
             using var reader = cmd.ExecuteReader();
             var rows = new List<ConversationRow>();
-            while (reader.Read())
-            {
-                rows.Add(new ConversationRow(
-                    reader.GetString(0), reader.GetString(1), reader.GetString(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3),
-                    reader.IsDBNull(4) ? null : reader.GetString(4),
-                    reader.GetInt64(5) != 0, reader.GetInt64(6) != 0,
-                    reader.GetInt64(7), reader.GetInt64(8), reader.GetInt64(9),
-                    reader.IsDBNull(10) ? null : reader.GetString(10),
-                    (int)reader.GetInt64(11),
-                    reader.IsDBNull(12) ? null : reader.GetString(12)));
-            }
-
+            while (reader.Read()) rows.Add(ReadConversation(reader));
             return rows;
         }
     }
+
+    /// <summary>会话线不在库里（从没发过消息、或已被 tombstone 清掉）时给 null。</summary>
+    public ConversationRow? FindConversation(string channelNo, string senderId)
+    {
+        lock (_gate)
+        {
+            using var cmd = Command(_db, null, FindConversationSql);
+            cmd.Parameters.AddWithValue(":channel_no", channelNo);
+            cmd.Parameters.AddWithValue(":sender_id", senderId);
+            using var reader = cmd.ExecuteReader();
+            return reader.Read() ? ReadConversation(reader) : null;
+        }
+    }
+
+    private static ConversationRow ReadConversation(SqliteDataReader reader) =>
+        new(reader.GetString(0), reader.GetString(1), reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.GetInt64(5) != 0, reader.GetInt64(6) != 0,
+            reader.GetInt64(7), reader.GetInt64(8), reader.GetInt64(9),
+            reader.IsDBNull(10) ? null : reader.GetString(10),
+            (int)reader.GetInt64(11),
+            reader.IsDBNull(12) ? null : reader.GetString(12));
 
     /// <summary>
     /// 向上翻页：取 seq &lt;= fromSeq 的最新 limit 条，返回时已按 seq 正序（屏从上往下读、

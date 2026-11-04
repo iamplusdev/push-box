@@ -228,6 +228,9 @@ public sealed class MainModel
     /// <summary>§7.4 的"仅本会话"开关：给了作用域就只查当前这条会话线（对话页那个框）。</summary>
     public bool SearchInsideConversation { get; set; }
 
+    /// <summary>左栏那一整张会话表（带未读与 level 两个相关子查询）：一轮重画只问一趟，
+    /// 托盘那个角标用的是同一份。只要某<b>一条</b>会话线——打开、置顶、改名——都走
+    /// <see cref="DeviceStore.FindConversation"/> 的主键点查，别为它扫整张表。</summary>
     public IReadOnlyList<ConversationItem> Conversations() =>
         _db.Conversations().Select(AsItem).ToList();
 
@@ -379,8 +382,8 @@ public sealed class MainModel
     /// </summary>
     public void Open(string channelNo, string senderId)
     {
-        var row = _db.Conversations().FirstOrDefault(c => c.ChannelNo == channelNo && c.SenderId == senderId);
-        if (row is null) return;
+        // 存在性用主键点查：整张会话表（带未读与 level 两个相关子查询）不是这一句要的东西
+        if (_db.FindConversation(channelNo, senderId) is null) return;
 
         _windowBelow = long.MaxValue;
         _olderThanSeq = long.MaxValue;
@@ -435,7 +438,7 @@ public sealed class MainModel
     /// <summary>会话可能在这中间被清空（tombstone 到只剩 0 条），那就退回"没有选中"而不是拿旧值撑着一个空窗口。</summary>
     private ConversationItem? ReadSelected(string channelNo, string senderId)
     {
-        var row = _db.Conversations().FirstOrDefault(c => c.ChannelNo == channelNo && c.SenderId == senderId);
+        var row = _db.FindConversation(channelNo, senderId);
         return row is null ? null : AsItem(row);
     }
 
@@ -466,7 +469,7 @@ public sealed class MainModel
 
     private void Flip(string channelNo, string senderId, bool pinned, bool muted)
     {
-        var row = _db.Conversations().FirstOrDefault(c => c.ChannelNo == channelNo && c.SenderId == senderId);
+        var row = _db.FindConversation(channelNo, senderId);
         if (row is null) return;
         _db.UpdateConversation(channelNo, senderId, pinned ? !row.Pinned : null,
             muted ? !row.Muted : null, null, null);
@@ -649,6 +652,9 @@ public sealed class MainModel
 
     public void ExitSearch()
     {
+        // 压根没查过就没什么可退的：点通知进会话那条路每次都要先走这一句，
+        // 白广播一次就等于把上一屏白画一遍
+        if (SearchTerm.Length == 0 && !IsSearching && SearchError is null && _results.Count == 0) return;
         SearchTerm = string.Empty;
         IsSearching = false;
         SearchError = null;
