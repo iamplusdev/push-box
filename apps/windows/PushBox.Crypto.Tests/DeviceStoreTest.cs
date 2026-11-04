@@ -252,6 +252,34 @@ public sealed class DeviceStoreTest : IDisposable
         Assert.Equal(7L, store.GroupCursor());
     }
 
+    /// <summary>
+    /// 单图那一格要在字节到之前就是最终高度，所以原图宽高得跟着消息一起落库：首帧带来就存；
+    /// 首帧还没抓到图（w/h 是 NULL）就由后到的 media_ready 补；补上之后不能被一帧不带宽高的
+    /// 重复回填抹掉——比例只认第一次拿到的那一份，否则那一格会在滚动途中忽高忽低。
+    /// </summary>
+    [Fact]
+    public void SlotDimensionsRideWithTheMessageAndSurviveAFrameThatCarriesNone()
+    {
+        using var store = new DeviceStore(DbPath);
+        store.ApplyMessage(Msg(9, "m9", mediaStatus: "ready", media: new() { Slot(0, "ready", 1600, 900) }));
+        store.ApplyMessage(Msg(10, "m10", mediaStatus: "pending", media: new() { Slot(0, "pending") }));
+
+        var rows = store.MessagesPage("83271504", "grafana");
+        Assert.Equal(1600, rows.Single(m => m.MsgId == "m9").MediaW);
+        Assert.Equal(900, rows.Single(m => m.MsgId == "m9").MediaH);
+        Assert.Null(rows.Single(m => m.MsgId == "m10").MediaW);
+
+        store.ApplyMediaStatus("m10", "ready", 1, 800, 600);
+        var filled = Assert.Single(store.MessagesPage("83271504", "grafana").Where(m => m.MsgId == "m10"));
+        Assert.Equal(800, filled.MediaW);
+        Assert.Equal(600, filled.MediaH);
+
+        store.ApplyMediaStatus("m10", "ready", 1);
+        var again = Assert.Single(store.MessagesPage("83271504", "grafana").Where(m => m.MsgId == "m10"));
+        Assert.Equal(800, again.MediaW);
+        Assert.Equal(600, again.MediaH);
+    }
+
     [Fact]
     public void TombstoneOfOneMessageRecomputesTheConversationAggregate()
     {
@@ -610,7 +638,8 @@ public sealed class DeviceStoreTest : IDisposable
     /// </summary>
     private static MessageFrame Msg(long seq, string id, string channel = "83271504",
         string sender = "grafana", string? body = null, string? title = null, string? summary = null,
-        string name = "Grafana", long? createdAt = null, string? mediaStatus = null)
+        string name = "Grafana", long? createdAt = null, string? mediaStatus = null,
+        List<Dictionary<string, object>>? media = null)
     {
         var fields = new Dictionary<string, object>
         {
@@ -629,7 +658,17 @@ public sealed class DeviceStoreTest : IDisposable
         if (summary != null) fields["summary"] = summary;
         // media_status 只在 §5.2 历史项里出现，实时帧靠 media_ready 回填
         if (mediaStatus != null) fields["media_status"] = mediaStatus;
+        if (media != null) fields["media"] = media;
         return (MessageFrame)FrameParser.Parse(JsonSerializer.Serialize(fields))!;
+    }
+
+    /// <summary>§4.5 的 media[] 一节。w/h 只有服务端抓到字节之后才带，而单图那一格的占位高等的正是它。</summary>
+    private static Dictionary<string, object> Slot(int idx, string status, int? w = null, int? h = null)
+    {
+        var slot = new Dictionary<string, object> { ["idx"] = idx, ["status"] = status };
+        if (w != null) slot["w"] = w.Value;
+        if (h != null) slot["h"] = h.Value;
+        return slot;
     }
 
     public void Dispose()

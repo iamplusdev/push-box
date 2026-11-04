@@ -1219,12 +1219,14 @@ public partial class MainWindow : Window
     /// <summary>这一条消息的图位：没图就不占位，有图才挂 <see cref="MediaStrip"/>。
     /// 这里只<b>摆好格子</b>，取字节要等那一格被装载（<see cref="MediaStrip"/> 的 <c>MediaSlot</c>）——
     /// 切会话重建整条时间线，一次刷新里发几百个请求正是卡顿的一半来源。
-    /// 缩略图与大图是两次请求：§4.5 的 <c>size=thumb</c> 是服务端降过级的产物，点开时不能拿它放大充数。</summary>
+    /// 缩略图与大图是两次请求：§4.5 的 <c>size=thumb</c> 是服务端降过级的产物，点开时不能拿它放大充数。
+    /// 库里那条消息的原图宽高一起递过去：单图那一格因此在字节之前就是最终高度，字节回来不再把整行撑一遍。</summary>
     private UIElement? MediaOf(MessageItem item, MarkdownStyle style) => item.MediaCount <= 0
         ? null
         : MediaStrip.Build(item.MediaCount,
             idx => _media.ImageAsync(Identity(), item.MsgId, idx, true), style,
-            idx => _media.ImageAsync(Identity(), item.MsgId, idx, false));
+            idx => _media.ImageAsync(Identity(), item.MsgId, idx, false),
+            item.MediaW, item.MediaH);
 
     /// <summary>只放行 http/https：正文是第三方推进来的，不能让它递一个 <c>file:</c> 或 <c>\\share</c> 过来。</summary>
     private void OpenLink(string url)

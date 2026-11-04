@@ -570,7 +570,8 @@ public sealed class SyncEngine : IPushObserver
     private void ApplyMediaReady(MediaReadyFrame frame)
     {
         if (frame.Id.Length == 0) return;
-        if (_db.ApplyMediaStatus(frame.Id, frame.Status, frame.SlotSpan)) return;
+        var (singleW, singleH) = MediaSlot.SingleImageSize(frame.Media);
+        if (_db.ApplyMediaStatus(frame.Id, frame.Status, frame.SlotSpan, singleW, singleH)) return;
 
         if (!_mediaAhead.ContainsKey(frame.Id) && _mediaAhead.Count >= MediaAheadCap)
             _mediaAhead.Remove(_mediaAhead.Keys.First());
@@ -581,7 +582,8 @@ public sealed class SyncEngine : IPushObserver
     {
         if (!_mediaAhead.TryGetValue(msgId, out var pending)) return;
         _mediaAhead.Remove(msgId);
-        _db.ApplyMediaStatus(pending.Id, pending.Status, pending.Media.Count);
+        var (singleW, singleH) = MediaSlot.SingleImageSize(pending.Media);
+        _db.ApplyMediaStatus(pending.Id, pending.Status, pending.Media.Count, singleW, singleH);
     }
 
     private void SetState(SyncState next)

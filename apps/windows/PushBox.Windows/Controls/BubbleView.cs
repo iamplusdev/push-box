@@ -375,7 +375,7 @@ public static class MediaStrip
 {
     public const double SingleWidth = 220;
 
-    /// <summary>还没解码出比例时的占位高：4:3，与 Android 的 <c>?: 4f / 3f</c> 同一个兜底。</summary>
+    /// <summary>还没解码出比例、库里也没带宽高时的占位高：4:3，与 Android 的 <c>?: 4f / 3f</c> 同一个兜底。</summary>
     public const double SingleHeight = 165;
 
     public const double CellSize = 88;
@@ -383,19 +383,31 @@ public static class MediaStrip
     public const int GridColumns = 3;
     public const int GridMax = 9;
 
+    /// <summary>单图那一格按原图宽高算出来的高度，两头（库里的宽高、解码出来的像素尺寸）用同一个式子，
+    /// 所以宽高先到时占位就是最终高度，字节回来那一刻不用再改一次版面。
+    /// 宽高缺一档就是还没抓到图，退回 4:3 那份兜底，而不是算出一个 NaN 高度。</summary>
+    public static double RatioHeight(double naturalWidth, double naturalHeight) =>
+        naturalWidth > 0 && naturalHeight > 0
+            ? Math.Max(CellSize, Math.Min(400, Math.Round(SingleWidth * naturalHeight / naturalWidth)))
+            : SingleHeight;
+
     /// <summary>
     /// <paramref name="fullLoad"/> 给了就在缩略图上加一次点击：大图走 <c>size=full</c> 那条端点，
     /// 不是把缩略图放大（§4.5 的缩略图是服务端降级的产物，放大只会糊）。
+    /// <paramref name="naturalWidth"/>/<paramref name="naturalHeight"/> 是库里那条消息第一槽的原图宽高：
+    /// 只有单图那一格用它（九宫格是定宽方格），拿到就能在字节之前把占位摆成最终高度。
     /// </summary>
     public static FrameworkElement Build(int count, Func<int, Task<MediaAsset>> load, MarkdownStyle style,
-        Func<int, Task<MediaAsset>>? fullLoad = null)
+        Func<int, Task<MediaAsset>>? fullLoad = null, int? naturalWidth = null, int? naturalHeight = null)
     {
         var column = new StackPanel();
         if (count <= 0) return column;
 
         if (count == 1)
         {
-            column.Children.Add(Slot(0, SingleWidth, SingleHeight, false, 0, fullLoad, load, style));
+            var known = naturalWidth > 0 && naturalHeight > 0;
+            column.Children.Add(Slot(0, SingleWidth,
+                RatioHeight(naturalWidth ?? 0, naturalHeight ?? 0), false, 0, fullLoad, load, style, known));
             return column;
         }
 
@@ -429,10 +441,12 @@ public static class MediaStrip
 
     /// <summary>
     /// 一个格子。<paramref name="crop"/> = true 是九宫格里的小方格（裁满），false 是单图大格（按原比例放全）。
+    /// <paramref name="sizedFromMetadata"/> = true 表示这一格的高已经是原图比例，字节回来时不用再改。
     /// </summary>
     private static Border Slot(int idx, double size, double fallbackHeight, bool crop, double leftMargin,
-        Func<int, Task<MediaAsset>>? fullLoad, Func<int, Task<MediaAsset>> load, MarkdownStyle style) =>
-        new MediaSlot(idx, size, fallbackHeight, crop, leftMargin, load, fullLoad, style);
+        Func<int, Task<MediaAsset>>? fullLoad, Func<int, Task<MediaAsset>> load, MarkdownStyle style,
+        bool sizedFromMetadata = false) =>
+        new MediaSlot(idx, size, fallbackHeight, crop, leftMargin, load, fullLoad, style, sizedFromMetadata);
 
     /// <summary>
     /// 把 <paramref name="root"/> 底下每一格子的取图叫醒一次；已经叫过的不会重复叫。
@@ -461,8 +475,8 @@ public static class MediaStrip
     /// <summary>
     /// 一格图。<b>在被装载之前不去取字节</b>：切会话那一下会重建整条时间线，几百条消息就是几百张图，
     /// 全在构造那一刻发车的话，网络请求和字节解码会挤在同一帧里落地。
-    /// 方框的宽高在构造时就按表定死了，所以晚点取不会让版面跳一下（唯一会长高的那次——单图按真实
-    /// 比例换算——本来也得等字节）。
+    /// 方框的宽高在构造时就定死：九宫格按表、单图按库里的原图宽高（没带到才退回 4:3 等字节解码后再长高），
+    /// 所以晚点取不会让版面跳一下。
     /// 一次装载只取一次：滚出屏幕再滚回来，Loaded 会第二次敲门，那时字节早就画上了。
     /// 只有点"重试"那条路绕开这个闸门，那是用户明确要求再取一遍。
     /// </summary>
@@ -473,16 +487,19 @@ public static class MediaStrip
         private readonly Func<int, Task<MediaAsset>>? _fullLoad;
         private readonly MarkdownStyle _style;
         private readonly bool _crop;
+        private readonly bool _sizedFromMetadata;
         private bool _fetched;
 
         public MediaSlot(int idx, double size, double fallbackHeight, bool crop, double leftMargin,
-            Func<int, Task<MediaAsset>> load, Func<int, Task<MediaAsset>>? fullLoad, MarkdownStyle style)
+            Func<int, Task<MediaAsset>> load, Func<int, Task<MediaAsset>>? fullLoad, MarkdownStyle style,
+            bool sizedFromMetadata = false)
         {
             _idx = idx;
             _load = load;
             _fullLoad = fullLoad;
             _style = style;
             _crop = crop;
+            _sizedFromMetadata = sizedFromMetadata;
 
             Width = size;
             Height = fallbackHeight;
@@ -507,7 +524,7 @@ public static class MediaStrip
         {
             if (_fetched) return;
             _fetched = true;
-            Fill(this, _idx, _load, _style, _crop, _fullLoad);
+            Fill(this, _idx, _load, _style, _crop, _fullLoad, _sizedFromMetadata);
         }
     }
 
@@ -515,9 +532,10 @@ public static class MediaStrip
     /// 异步填一个槽位。<c>async void</c> 在这里是对的：这是"元素自己把自己画出来"，
     /// 没人能 await 它，所以异常必须在本方法里咽干净——两条出口都给得出占位，绝不留下一个空白图框。
     /// 只有两个入口会走到这儿：格子被装载（<see cref="MediaSlot.Fetch"/>）和点"重试"。
+    /// <paramref name="keepHeight"/> 是"这一格的高已经按库里的宽高定过"，字节回来只换画进去的图，不再动高度。
     /// </summary>
     private static async void Fill(Border slot, int idx, Func<int, Task<MediaAsset>> load, MarkdownStyle style,
-        bool crop, Func<int, Task<MediaAsset>>? fullLoad)
+        bool crop, Func<int, Task<MediaAsset>>? fullLoad, bool keepHeight = false)
     {
         slot.Child = Label("加载中…", style, null);
         MediaAsset asset;
@@ -528,17 +546,17 @@ public static class MediaStrip
         catch (Exception)
         {
             slot.Child = Label("图片暂时取不到", style,
-                () => Fill(slot, idx, load, style, crop, fullLoad));
+                () => Fill(slot, idx, load, style, crop, fullLoad, keepHeight));
             return;
         }
 
         if (ImageSourceOf.FromBytes(asset.Bytes) is { } source)
         {
-            // 单图大格按真实比例长高（Android 那边是 aspectRatio(bmp 宽高比)），九宫格维持方格裁满
-            if (!crop && source.PixelHeight > 0 && source.PixelWidth > 0)
+            // 单图大格按真实比例长高（Android 那边是 aspectRatio(bmp 宽高比)），九宫格维持方格裁满。
+            // 库里已经带过宽高的那一格不再改：算出来是同一个数，但写它一下会把整行重新量排一遍。
+            if (!crop && !keepHeight && source.PixelHeight > 0 && source.PixelWidth > 0)
             {
-                slot.Height = Math.Max(CellSize,
-                    Math.Min(400, Math.Round(SingleWidth * source.PixelHeight / source.PixelWidth)));
+                slot.Height = RatioHeight(source.PixelWidth, source.PixelHeight);
             }
 
             slot.Child = new Image

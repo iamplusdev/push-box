@@ -52,6 +52,16 @@ public sealed record MediaSlot(int Idx, string Status, string? Key, string? Mime
     int? W, int? H, string? Thumb)
 {
     public bool Ready => Status == "ready";
+
+    /// <summary>
+    /// 单图那一格的原图宽高，只有 0 号槽有意义（2~9 张是定宽方格，不按比例长）。
+    /// 服务端抓到字节之后才回填 w/h，所以首帧通常是 <c>(null, null)</c>，等 media_ready 那一趟补上。
+    /// </summary>
+    public static (int? W, int? H) SingleImageSize(IReadOnlyList<MediaSlot> media)
+    {
+        var slot = media.FirstOrDefault(m => m.Idx == 0);
+        return slot?.W > 0 && slot?.H > 0 ? (slot.W, slot.H) : (null, null);
+    }
 }
 
 /// <summary>Downlink frame (§5.3) and history item (§5.2) share these names.</summary>

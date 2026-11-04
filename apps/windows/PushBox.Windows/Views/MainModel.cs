@@ -48,7 +48,8 @@ public sealed record DateDivider(string Label) : TimelineItem;
 public sealed record MessageItem(string MsgId, long Seq, string ChannelNo, string SenderId,
     string Text, string Level, string? MsgTypeLabel, long CreatedAt, int MediaCount, string? MediaStatus,
     string? LinkUrl, bool Truncated = false, bool Expanding = false,
-    string? SenderName = null, string? SenderAvatarToken = null, bool ShowTimestamp = true)
+    string? SenderName = null, string? SenderAvatarToken = null, bool ShowTimestamp = true,
+    int? MediaW = null, int? MediaH = null)
     : TimelineItem
 {
     public string StampText => TimeFormat.Stamp(CreatedAt);
@@ -738,7 +739,8 @@ public sealed class MainModel
             items.Add(new MessageItem(m.MsgId, m.Seq, m.ChannelNo, m.SenderId,
                 m.Body ?? m.Summary ?? m.Title ?? string.Empty, m.Level,
                 TimeFormat.TypeLabel(m.MsgType), m.CreatedAt, m.MediaCount, m.MediaStatus, m.LinkUrl,
-                m.Truncated, _expanding.Contains(m.MsgId), senderName, avatarToken, showTimestamp));
+                m.Truncated, _expanding.Contains(m.MsgId), senderName, avatarToken, showTimestamp,
+                m.MediaW, m.MediaH));
         }
         return items;
     }

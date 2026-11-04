@@ -11,7 +11,8 @@ namespace PushBox.Windows.Data;
 public sealed record MessageRow(
     string MsgId, long Seq, string ChannelNo, string SenderId, string MsgType, string? Title,
     string? Summary, string? Body, string Level, string? LinkUrl, string? MediaStatus,
-    int MediaCount, long CreatedAt, string? SenderAvatar, bool Truncated = false);
+    int MediaCount, long CreatedAt, string? SenderAvatar, bool Truncated = false,
+    int? MediaW = null, int? MediaH = null);
 
 /// <summary>
 /// §3.3 conversations：一个 (channel_no, sender_id) 就是一条会话线。
@@ -67,7 +68,7 @@ public sealed class DeviceStore : IDisposable
 
     private const string MessageColumns =
         "msg_id, seq, channel_no, sender_id, msg_type, title, summary, body, level, link_url, " +
-        "media_status, media_count, created_at, sender_avatar, truncated";
+        "media_status, media_count, created_at, sender_avatar, truncated, media_w, media_h";
 
     private static readonly string[] Schema =
     {
@@ -87,7 +88,9 @@ public sealed class DeviceStore : IDisposable
           media_count   INTEGER NOT NULL DEFAULT 0,
           created_at    INTEGER NOT NULL,
           sender_avatar TEXT,
-          truncated     INTEGER NOT NULL DEFAULT 0
+          truncated     INTEGER NOT NULL DEFAULT 0,
+          media_w       INTEGER,
+          media_h       INTEGER
         );
         """,
         "CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(channel_no, sender_id, seq);",
@@ -153,10 +156,10 @@ public sealed class DeviceStore : IDisposable
         """
         INSERT INTO messages (msg_id, seq, channel_no, sender_id, msg_type, title, summary, body,
                               level, link_url, media_status, media_count, created_at, sender_avatar,
-                              truncated)
+                              truncated, media_w, media_h)
         VALUES (:msg_id, :seq, :channel_no, :sender_id, :msg_type, :title, :summary, :body,
                 :level, :link_url, :media_status, :media_count, :created_at, :sender_avatar,
-                :truncated)
+                :truncated, :media_w, :media_h)
         ON CONFLICT(msg_id) DO NOTHING;
         """;
 
@@ -254,6 +257,8 @@ public sealed class DeviceStore : IDisposable
         // 新列只能靠这里补一次，否则旧库读一行就"no such column"（SQLite 没有 ADD COLUMN IF NOT EXISTS）
         EnsureColumn("messages", "truncated",
             "ALTER TABLE messages ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0");
+        EnsureColumn("messages", "media_w", "ALTER TABLE messages ADD COLUMN media_w INTEGER");
+        EnsureColumn("messages", "media_h", "ALTER TABLE messages ADD COLUMN media_h INTEGER");
     }
 
     /// <summary>按 PRAGMA table_info 决定补不补这一列。默认值必须与建表语句里那条一致，
@@ -401,6 +406,9 @@ public sealed class DeviceStore : IDisposable
                 insert.Parameters.AddWithValue(":created_at", frame.CreatedAt);
                 AddNullable(insert, ":sender_avatar", frame.SenderAvatar);
                 insert.Parameters.AddWithValue(":truncated", frame.Truncated ? 1L : 0L);
+                var (slotW, slotH) = MediaSlot.SingleImageSize(frame.Media);
+                AddNullable(insert, ":media_w", slotW);
+                AddNullable(insert, ":media_h", slotH);
                 if (insert.ExecuteNonQuery() == 0) return false;
             }
 
@@ -430,16 +438,21 @@ public sealed class DeviceStore : IDisposable
     /// <summary>
     /// §4.5 media_ready / media_failed 的回填：只改媒体终态，不动游标、不动正文。
     /// 槽数取 <c>MAX</c> 而不是覆盖：补发帧只带本次到终态的那几槽，覆盖会把"三张图"缩到后到那一帧的槽数。
+    /// 宽高取 <c>COALESCE</c> 而不是覆盖：首帧没抓到图时库里是 NULL，回填之后不该再被后来的帧清掉。
     /// 返回 false 表示那条消息还没落库（补拉与实时下发的竞态），调用方要把它暂存到消息到达。
     /// </summary>
-    public bool ApplyMediaStatus(string msgId, string status, int mediaCount)
+    public bool ApplyMediaStatus(string msgId, string status, int mediaCount, int? mediaW = null,
+        int? mediaH = null)
     {
         return RunTransaction(tx =>
         {
             using var cmd = Command(_db, tx,
-                "UPDATE messages SET media_status = :status, media_count = MAX(media_count, :count) WHERE msg_id = :msg_id;");
+                "UPDATE messages SET media_status = :status, media_count = MAX(media_count, :count), " +
+                "media_w = COALESCE(:w, media_w), media_h = COALESCE(:h, media_h) WHERE msg_id = :msg_id;");
             cmd.Parameters.AddWithValue(":status", status);
             cmd.Parameters.AddWithValue(":count", mediaCount);
+            AddNullable(cmd, ":w", mediaW);
+            AddNullable(cmd, ":h", mediaH);
             cmd.Parameters.AddWithValue(":msg_id", msgId);
             return cmd.ExecuteNonQuery() > 0;
         });
@@ -692,6 +705,8 @@ public sealed class DeviceStore : IDisposable
         cmd.Parameters.AddWithValue(":created_at", row.CreatedAt);
         AddNullable(cmd, ":sender_avatar", row.SenderAvatar);
         cmd.Parameters.AddWithValue(":truncated", row.Truncated ? 1L : 0L);
+        AddNullable(cmd, ":media_w", row.MediaW);
+        AddNullable(cmd, ":media_h", row.MediaH);
         cmd.ExecuteNonQuery();
     }
 
@@ -775,7 +790,7 @@ public sealed class DeviceStore : IDisposable
     private const string RestoreMessageSql =
         "INSERT INTO messages (" + MessageColumns + ") VALUES (:msg_id, :seq, :channel_no, :sender_id," +
         " :msg_type, :title, :summary, :body, :level, :link_url, :media_status, :media_count," +
-        " :created_at, :sender_avatar, :truncated) ON CONFLICT(msg_id) DO NOTHING;";
+        " :created_at, :sender_avatar, :truncated, :media_w, :media_h) ON CONFLICT(msg_id) DO NOTHING;";
 
     public IReadOnlyList<ConversationRow> Conversations()
     {
@@ -902,7 +917,9 @@ public sealed class DeviceStore : IDisposable
             reader.IsDBNull(10) ? null : reader.GetString(10),
             (int)reader.GetInt64(11), reader.GetInt64(12),
             reader.IsDBNull(13) ? null : reader.GetString(13),
-            reader.GetInt64(14) != 0);
+            reader.GetInt64(14) != 0,
+            reader.IsDBNull(15) ? null : (int)reader.GetInt64(15),
+            reader.IsDBNull(16) ? null : (int)reader.GetInt64(16));
 
     private void Execute(string sql)
     {
@@ -940,5 +957,9 @@ public sealed class DeviceStore : IDisposable
     }
 
     private static void AddNullable(SqliteCommand cmd, string name, string? value) =>
+        cmd.Parameters.AddWithValue(name, (object?)value ?? DBNull.Value);
+
+    /// <summary>整数那一档：media_w/media_h 没抓到图时是 NULL，不是 0——0 会被当成一个真实的宽高。</summary>
+    private static void AddNullable(SqliteCommand cmd, string name, long? value) =>
         cmd.Parameters.AddWithValue(name, (object?)value ?? DBNull.Value);
 }
