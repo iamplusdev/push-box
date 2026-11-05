@@ -69,17 +69,26 @@ public sealed record MediaAsset(MediaState State, byte[]? Bytes = null, string? 
 public sealed class MediaLoader
 {
     /// <summary>
-    /// 同一个发送者两次回源的最小间隔。头像按 (频道, 发送者) 覆盖写、token 不变，本机唯一的发现信号
-    /// 是"又收到这个人一条带 <c>sender_avatar</c> 的帧"；每条消息都回源等于给每个活跃发送者加一次 RTT。
-    /// 十分钟与 Android 的正缓存有效期同一条口径。
+    /// 同一个发送者两次<b>真回源</b>的最小间隔，两条路共用这一把尺子：帧那边"又收到这个人一条带
+    /// <c>sender_avatar</c> 的帧"的节流（<see cref="InvalidateAvatar"/>），以及手里那份旧字节什么时候
+    /// 该复核（<see cref="AvatarAsync"/>）。头像按 (频道, 发送者) 覆盖写、token 不变，本机分辨
+    /// "换没换"只有时间这一个信号；十分钟与 Android 的正缓存有效期同一条口径。
     /// </summary>
     public static readonly TimeSpan AvatarRevalidateInterval = TimeSpan.FromMinutes(10);
 
     private readonly DeviceClient _client;
     private readonly MediaCache _cache;
 
+    /// <summary>用例要把时间拨过去：真等十分钟没法跑，而这一档的语义就是"过没过"。</summary>
+    private readonly Func<DateTimeOffset> _now;
+
     /// <summary>每个 token 上一次作废的时刻（UTC ticks）。只用来节流，过期条目在下一次插入时清掉。</summary>
     private readonly Dictionary<string, long> _avatarSignals = new(StringComparer.Ordinal);
+
+    /// <summary>每个 token 上一次<b>从服务端真拿到字节</b>的时刻（UTC ticks）。TTL 复核认这把表，
+    /// 而命中缓存那一次不许记它——每画一次就把 deadline 往后推一格，那就永远过不了期。</summary>
+    private readonly Dictionary<string, long> _avatarLanded = new(StringComparer.Ordinal);
+
     private readonly object _signalGate = new();
 
     /// <summary>
@@ -94,10 +103,13 @@ public sealed class MediaLoader
     /// <summary>某个 token 的头像被作废了：画着它的控件要重新取一次字节。可能在帧线程上触发。</summary>
     public event Action<string>? AvatarInvalidated;
 
-    public MediaLoader(DeviceClient? client = null, MediaCache? cache = null)
+    public MediaLoader(DeviceClient? client = null, MediaCache? cache = null,
+        Func<DateTimeOffset>? clock = null)
     {
         _client = client ?? new DeviceClient();
         _cache = cache ?? new MediaCache();
+        // 匿名函数不能直接放在 ?? 右边，得包一层括号
+        _now = clock ?? (static () => DateTimeOffset.UtcNow);
     }
 
     public MediaCache Cache => _cache;
@@ -122,6 +134,10 @@ public sealed class MediaLoader
     ///
     /// 同一个 token 在这一屏被敲十几次（一行在建树那几轮里会重绑，实测打开一条会话敲 22 次）：
     /// 这些调用都排在同一个派发周期里，所以按 token 合流成一次回源，见 <see cref="_avatarFlight"/>。
+    ///
+    /// 手里有字节但已经过期：<b>先交旧字节，后台再复核一次</b>（<see cref="ServeStaleAndRevalidate"/>）。
+    /// 头像只有时间这一个"换没换"的信号，所以过期只能自己判；而判到过期就作废缓存的话，
+    /// 那一格在网络回话之前是空的——用户会看到满屏头像闪一下变成首字母。
     /// </summary>
     public Task<MediaAsset> AvatarAsync(DeviceIdentity identity, string? senderAvatar,
         CancellationToken ct = default)
@@ -130,6 +146,7 @@ public sealed class MediaLoader
         if (token == null) return Task.FromResult(new MediaAsset(MediaState.NoSource));
 
         var key = AvatarKey(token);
+        if (ServeStaleAndRevalidate(identity, token, key) is { } stale) return Task.FromResult(stale);
         TaskCompletionSource<MediaAsset> gate;
         lock (_flightGate)
         {
@@ -152,7 +169,8 @@ public sealed class MediaLoader
         try
         {
             var asset = await LoadAsync(key, false,
-                inner => _client.AvatarAsync(identity, token, inner), ct).ConfigureAwait(false);
+                inner => _client.AvatarAsync(identity, token, inner), ct,
+                landed: () => MarkLanded(token)).ConfigureAwait(false);
             gate.TrySetResult(asset);
         }
         catch (Exception e)
@@ -164,6 +182,73 @@ public sealed class MediaLoader
         {
             lock (_flightGate) _avatarFlight.Remove(key);
         }
+    }
+
+    /// <summary>
+    /// 缓存里有这个人的头像，但那份字节已经放超过 <see cref="AvatarRevalidateInterval"/>：
+    /// 立刻把旧字节交出去（这一格不能空着等网络），同时后台回源一次。
+    ///
+    /// 先记账再起飞：<c>_avatarLanded</c> 一写，后面同一屏那十几次敲进来看到的都是"还没过期"，
+    /// 于是一屏一次回源；如果反过来，回话之前每一格都会各自起一次复核，那就是把第 2 步省下来的
+    /// RTT 又加回去。这一格也不走 <see cref="_avatarFlight"/>：调用方已经拿到字节走人了，
+    /// 合流在这里没有意义，节流靠的是上面那笔记账。
+    /// </summary>
+    /// <returns>命中"旧字节可用"时返回要画的那一帧；没有缓存或还没过期时返回 null，交回正常的取链路。</returns>
+    private MediaAsset? ServeStaleAndRevalidate(DeviceIdentity identity, string token, string key)
+    {
+        var bytes = _cache.Get(key);
+        if (bytes is not { Length: > 0 }) return null;
+
+        var stamp = _now().UtcTicks;
+        lock (_signalGate)
+        {
+            if (_avatarLanded.TryGetValue(token, out var landed)
+                && stamp - landed < AvatarRevalidateInterval.Ticks) return null;
+            _avatarLanded[token] = stamp;
+        }
+
+        _ = RevalidateAsync(identity, token, key, bytes);
+        return MediaAsset.Ready(bytes, null);
+    }
+
+    /// <summary>后台那一次复核：新字节顶替旧的，只有<b>真的换了一张脸</b>才广播重画。
+    /// 广播是有代价的——画着同一个 token 的格子会全部重取一次，而字节没变时那次重画纯属白干。</summary>
+    private async Task RevalidateAsync(DeviceIdentity identity, string token, string key, byte[] served)
+    {
+        MediaAsset fresh;
+        try
+        {
+            fresh = await LoadAsync(key, false, inner => _client.AvatarAsync(identity, token, inner),
+                CancellationToken.None, landed: () => MarkLanded(token), bypass: true).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // 复核失败留着旧字节继续画：这一格有脸可看，比"因为回不了源而掉回首字母"好
+            return;
+        }
+
+        switch (fresh.State)
+        {
+            case MediaState.Ready when fresh.HasBytes:
+                _cache.Put(key, fresh.Bytes!, false);
+                if (!fresh.Bytes!.SequenceEqual(served)) AvatarInvalidated?.Invoke(token);
+                return;
+            case MediaState.Pending or MediaState.NetworkError:
+                return;
+            default:
+                // 服务端明说这张脸不会再有了（failed/deleted/purged/missing）：缓存里那份是过期的脸，
+                // 留着只会让人一直看到换掉之前的头像
+                _cache.Evict(key);
+                AvatarInvalidated?.Invoke(token);
+                return;
+        }
+    }
+
+    /// <summary>这一刻真的从服务端拿到了这个人的头像字节——TTL 从这儿起算。
+    /// 命中缓存那一次绝不许记它，否则每画一次就把 deadline 往后推一格，永远过不了期。</summary>
+    private void MarkLanded(string token)
+    {
+        lock (_signalGate) _avatarLanded[token] = _now().UtcTicks;
     }
 
     /// <summary>
@@ -179,7 +264,7 @@ public sealed class MediaLoader
         var token = DeviceClient.AvatarTokenOf(senderAvatar);
         if (token == null) return false;
 
-        var stamp = (now ?? DateTimeOffset.UtcNow).UtcTicks;
+        var stamp = (now ?? _now()).UtcTicks;
         lock (_signalGate)
         {
             if (_avatarSignals.TryGetValue(token, out var last) && last <= stamp
@@ -202,16 +287,25 @@ public sealed class MediaLoader
     /// <summary>消息被删（W14 的 tombstone / 清空）时连带清掉它的图。</summary>
     public void EvictMessage(string msgId) => _cache.EvictMessage(msgId);
 
+    /// <param name="bypass">true = 手里已经有一份旧字节正要画出来，这次是去核对它换没换，所以跳过缓存查询。
+    /// 不跳过就永远查到自己刚放进去的那份，复核等于没发生。</param>
+    /// <param name="landed">真的从服务端拿到字节时回调一次，给头像的 TTL 起表。传 null 的图位（消息里的图）
+    /// 有自己的键（<c>{msg_id}#idx</c>），内容不可变，不需要这条。</param>
     private async Task<MediaAsset> LoadAsync(string key, bool persist,
-        Func<CancellationToken, Task<MediaBytes>> fetch, CancellationToken ct)
+        Func<CancellationToken, Task<MediaBytes>> fetch, CancellationToken ct,
+        Action? landed = null, bool bypass = false)
     {
-        var cached = _cache.Get(key);
-        if (cached != null) return MediaAsset.Ready(cached, null);
+        if (!bypass)
+        {
+            var cached = _cache.Get(key);
+            if (cached != null) return MediaAsset.Ready(cached, null);
+        }
 
         try
         {
             var fresh = await fetch(ct).ConfigureAwait(false);
             _cache.Put(key, fresh.Bytes, persist);
+            landed?.Invoke();
             return MediaAsset.Ready(fresh.Bytes, fresh.ContentType);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

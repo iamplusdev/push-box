@@ -319,6 +319,126 @@ public sealed class MediaLoaderTest : IDisposable
         Assert.Equal(2, handler.Requests.Count);
     }
 
+    // ---- 头像 TTL 复核：过期先画旧的，后台再核对一次 --------------------------------------------
+
+    [Fact]
+    public async Task AnExpiredCachedFacePaintsAtOnceAndChecksWithTheServer()
+    {
+        // 服务端覆盖写头像不换 token、也没有 ETag，本机只剩"手里这份字节放了多久"这一个信号。
+        // 判过期就先把缓存作废等于让那一格空着等网络——用户看到的是满屏头像闪一下变成首字母再闪回来
+        var clock = new FakeClock(Stamp);
+        var handler = new Scripted(_ => Reply(Png(32), "image/png"));
+        var loader = Loader(handler, clock);
+        var avatar = "/api/v1/avatars/" + AvatarToken;
+
+        await loader.AvatarAsync(Device(), avatar);
+        Assert.Equal(1, handler.Count);
+
+        clock.JumpTo(Stamp.AddMinutes(11));
+        var shown = await loader.AvatarAsync(Device(), avatar);
+
+        Assert.Equal(MediaState.Ready, shown.State);
+        Assert.Equal(Png(32), shown.Bytes);
+        await Until(() => handler.Count >= 2, "过期的头像没起后台复核");
+    }
+
+    [Fact]
+    public async Task AScreenfulOfExpiredFacesStartsExactlyOneCheck()
+    {
+        // 一屏十二格是同一个人：先记账再起飞，所以那十二次只有第一次会真去核对，
+        // 否则第 2 步省下来的那些 RTT 又在每一次切会话时加回来
+        var clock = new FakeClock(Stamp);
+        var handler = new Scripted(_ => Reply(Png(32), "image/png"));
+        var loader = Loader(handler, clock);
+        var avatar = "/api/v1/avatars/" + AvatarToken;
+        await loader.AvatarAsync(Device(), avatar);
+
+        clock.JumpTo(Stamp.AddMinutes(11));
+        var cells = Enumerable.Range(0, 12).Select(_ => loader.AvatarAsync(Device(), avatar)).ToArray();
+        var shown = await Task.WhenAll(cells);
+        Assert.All(shown, asset => Assert.Equal(MediaState.Ready, asset.State));
+
+        await Until(() => handler.Count >= 2, "过期后一次复核都没发出去");
+        clock.JumpTo(Stamp.AddMinutes(12));
+        await loader.AvatarAsync(Device(), avatar);
+        Assert.Equal(2, handler.Count);
+    }
+
+    [Fact]
+    public async Task ACheckThatFoundADifferentFaceTellsTheCellsThatPaintIt()
+    {
+        var clock = new FakeClock(Stamp);
+        var handler = new Scripted(n => Reply(Png(n == 1 ? 32 : 64), "image/png"));
+        var loader = Loader(handler, clock);
+        var avatar = "/api/v1/avatars/" + AvatarToken;
+        await loader.AvatarAsync(Device(), avatar);
+
+        var invalidated = new List<string>();
+        loader.AvatarInvalidated += invalidated.Add;
+
+        clock.JumpTo(Stamp.AddMinutes(11));
+        await loader.AvatarAsync(Device(), avatar);
+
+        await Until(() => invalidated.Count > 0, "复核回来的新头像没通知画着它的格子");
+        Assert.Equal(new[] { AvatarToken }, invalidated);
+        // 新字节已经顶替旧的：重画那一次取到的是新脸，而不是又回一次源
+        Assert.Equal(Png(64), (await loader.AvatarAsync(Device(), avatar)).Bytes);
+        Assert.Equal(2, handler.Count);
+    }
+
+    [Fact]
+    public async Task ACheckThatFoundTheSameFaceRepaintsNothing()
+    {
+        // 广播是有代价的：画着同一个 token 的格子会全部重取一遍。字节没变时那次重画纯属白干
+        var clock = new FakeClock(Stamp);
+        var handler = new Scripted(_ => Reply(Png(32), "image/png"));
+        var loader = Loader(handler, clock);
+        var avatar = "/api/v1/avatars/" + AvatarToken;
+        await loader.AvatarAsync(Device(), avatar);
+        var paintedBefore = loader.Cache.Get(MediaLoader.AvatarKey(AvatarToken));
+
+        var invalidated = new List<string>();
+        loader.AvatarInvalidated += invalidated.Add;
+
+        clock.JumpTo(Stamp.AddMinutes(11));
+        await loader.AvatarAsync(Device(), avatar);
+
+        // "复核跑完了"的信号是缓存里那份换成了这一次读回来的那个数组（同样的内容、新的实例）。
+        // 只断言"没广播"的话，一次都还没落地后台复核也能让它通过
+        await Until(() => !ReferenceEquals(paintedBefore, loader.Cache.Get(MediaLoader.AvatarKey(AvatarToken))),
+            "后台复核没把字节放回缓存");
+        Assert.Empty(invalidated);
+    }
+
+    [Fact]
+    public async Task AFailedCheckLeavesTheFaceOnScreenAndIsTriedAgainNextWindow()
+    {
+        // 回不了源不该让人掉回首字母：旧字节继续画、不广播、也不写进负缓存。
+        // 下一个窗口还会再试——节流用的是同一把十分钟尺子，不是"这条永远不用再看"
+        var clock = new FakeClock(Stamp);
+        var handler = new Scripted(n => n == 1
+            ? Reply(Png(32), "image/png")
+            : Support.Reply((HttpStatusCode)503, Support.ErrorBody("server_error")));
+        var loader = Loader(handler, clock);
+        var avatar = "/api/v1/avatars/" + AvatarToken;
+        await loader.AvatarAsync(Device(), avatar);
+
+        var invalidated = new List<string>();
+        loader.AvatarInvalidated += invalidated.Add;
+
+        clock.JumpTo(Stamp.AddMinutes(11));
+        var shown = await loader.AvatarAsync(Device(), avatar);
+        Assert.Equal(Png(32), shown.Bytes);
+
+        await Until(() => handler.Count >= 2, "过期后没起后台复核");
+        Assert.Equal(MediaState.Ready, (await loader.AvatarAsync(Device(), avatar)).State);
+        Assert.Empty(invalidated);
+
+        clock.JumpTo(Stamp.AddMinutes(22));
+        await loader.AvatarAsync(Device(), avatar);
+        await Until(() => handler.Count >= 3, "下一个窗口没重试——失败被当成永久结果存下来了");
+    }
+
     // ---- 清理 ----------------------------------------------------------------------------------
 
     [Fact]
@@ -431,6 +551,51 @@ public sealed class MediaLoaderTest : IDisposable
             await _hold.Task.ConfigureAwait(false);
             return _reply();
         }
+    }
+
+    /// <summary>
+    /// 按"这是第几次请求"给回答，并且能数出到底发了几次。TTL 那一档要判的是"过没过期"，
+    /// 回答必须能变（第一次旧脸、第二次新脸），而 <see cref="FakeHandler"/> 那个 List 在
+    /// 后台复核那条线程上会和测试线程打架，所以这里用 Interlocked。
+    /// </summary>
+    private sealed class Scripted : HttpMessageHandler
+    {
+        private readonly Func<int, HttpResponseMessage> _reply;
+        private int _count;
+
+        public Scripted(Func<int, HttpResponseMessage> reply) => _reply = reply;
+
+        public int Count => Volatile.Read(ref _count);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var index = Interlocked.Increment(ref _count);
+            return Task.FromResult(_reply(index));
+        }
+    }
+
+    /// <summary>用例自己拨的钟：真等十分钟没法跑，而这一档的语义就只剩"过没过"。</summary>
+    private sealed class FakeClock
+    {
+        private long _ticks;
+
+        public FakeClock(DateTimeOffset start) => _ticks = start.UtcTicks;
+
+        public void JumpTo(DateTimeOffset now) => Volatile.Write(ref _ticks, now.UtcTicks);
+
+        public DateTimeOffset Now() => new(Volatile.Read(ref _ticks), TimeSpan.Zero);
+    }
+
+    private MediaLoader Loader(HttpMessageHandler handler, FakeClock clock) =>
+        new(new DeviceClient(new HttpClient(handler)), new MediaCache(_dir), clock.Now);
+
+    /// <summary>等后台那条复核跑到：它是不挡路的（旧字节已经交出去了），所以只能等它的副作用，
+    /// 而不是等一个能被 await 的任务。超时就红，别把它睡成偶发绿。</summary>
+    private static async Task Until(Func<bool> condition, string because, int timeoutMs = 4000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(10);
+        Assert.True(condition(), because);
     }
 
     private static HttpResponseMessage Reply(byte[] bytes, string contentType)
