@@ -6,14 +6,16 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using PushBox.Windows.Media;
+using PushBox.Windows.Themes;
 using PushBox.Windows.Views;
 
 namespace PushBox.Windows.Controls;
 
 /// <summary>
 /// 会话行左边那一个头像（§7.3/§7.4）。三种形态按优先级来：本机"设头像"落的那个文件、
-/// 服务端转存的发送者头像（<c>/api/v1/avatars/{token}</c>）、最后才是首字 + 名字定色的占位——
-/// 与 Android 的 <c>Avatar()</c>（MainActivity.kt:2899-2944）同一张顺序表。
+/// 服务端转存的发送者头像（<c>/api/v1/avatars/{token}</c>）、最后才是首字占位——
+/// 取图的顺序表与 Android 的 <c>Avatar()</c>（MainActivity.kt:2899-2944）一致，
+/// 只有占位那张脸按档分开：浅色是白底配名字色首字，深色沿用 Android 那种定色底配白字。
 ///
 /// 它是一个控件而不是 XAML 里的一段模板，因为头像字节是<b>异步</b>取回来的：
 /// 绑定的值没有"稍后再填一次"这一说，而这里要的就是"先画占位、字节到了再盖上去"。
@@ -48,8 +50,8 @@ public sealed class AvatarBox : Grid
     public static readonly DependencyProperty SideProperty = DependencyProperty.Register(
         nameof(Side), typeof(double), typeof(AvatarBox), new PropertyMetadata(44d, OnShapeChanged));
 
-    /// <summary>显示名：首字取它、占位底色也由它定（与 <see cref="AvatarVisual"/> 同一张表）。
-    /// 不叫 <c>Name</c> 是因为 <c>FrameworkElement.Name</c> 已经占了那个名字。</summary>
+    /// <summary>显示名：首字取它，占位那一格的颜色也由它定（浅色主题落在首字上、深色主题落在底上，
+    /// 与 <see cref="AvatarVisual"/> 同一张表）。不叫 <c>Name</c> 是因为 <c>FrameworkElement.Name</c> 已经占了那个名字。</summary>
     public string? DisplayName
     {
         get => (string?)GetValue(DisplayNameProperty);
@@ -87,8 +89,29 @@ public sealed class AvatarBox : Grid
         {
             Invalidated -= OnInvalidated;
             Invalidated += OnInvalidated;
+            ThemeManager.Changed -= OnThemeChanged;
+            ThemeManager.Changed += OnThemeChanged;
         };
-        Unloaded += (_, _) => Invalidated -= OnInvalidated;
+        Unloaded += (_, _) =>
+        {
+            Invalidated -= OnInvalidated;
+            ThemeManager.Changed -= OnThemeChanged;
+        };
+    }
+
+    /// <summary>
+    /// 换档时把自己重画一遍。窗口那次 <c>Refresh()</c> 救不了这里：虚拟化的会话行是<b>复用</b>的，
+    /// 复用出来的格子 <see cref="DisplayName"/> 没变，依赖属性回调不会来，于是一屏旧脸配一屏新色。
+    /// </summary>
+    private void OnThemeChanged()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(OnThemeChanged));
+            return;
+        }
+
+        Render();
     }
 
     private static void OnShapeChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
@@ -113,18 +136,26 @@ public sealed class AvatarBox : Grid
         // 重画就是"这一格换了人"：还在飞的那一次回来时 _waiting 已经不是它了，直接扔
         _waiting = null;
 
+        var tint = new SolidColorBrush(AvatarVisual.ColorOf(DisplayName));
+        // 两档各一张脸：浅色主题这一格是白的（首字改用名字那支色，否则白字压在白底上什么都看不见），
+        // 深色主题沿用"定色底 + 白首字"——一块 #FFFFFF 落在 #1A1A1A 的页面上是闪光灯，不是头像。
+        // 描边只在浅色出现：会话列表那一栏本身接近白，白方块不勾一圈就糊成背景的一部分。
+        var light = !ThemeManager.IsDarkTheme;
+        var divider = light ? BrushOf("Divider") : null;
         var shell = new Border
         {
             Width = Side,
             Height = Side,
             CornerRadius = new CornerRadius(Side * 6 / 44),
-            Background = new SolidColorBrush(AvatarVisual.ColorOf(DisplayName)),
+            Background = light ? BrushOf("Bg.Elevated") ?? Brushes.White : tint,
+            BorderBrush = divider,
+            BorderThickness = divider == null ? new Thickness() : new Thickness(1),
             ClipToBounds = true
         };
         shell.Child = new TextBlock
         {
             Text = AvatarVisual.Initial(DisplayName),
-            Foreground = Brushes.White,
+            Foreground = light ? tint : Brushes.White,
             FontSize = Side * 16 / 44,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
@@ -169,6 +200,12 @@ public sealed class AvatarBox : Grid
         Source = source,
         Stretch = Stretch.UniformToFill
     };
+
+    /// <summary>
+    /// 从 token 字典取画刷。取不到就返回 null：用例里常常没有 App 实例，而"描边有没有"这件事
+    /// 不该由一个凭空编出来的灰底冒充。
+    /// </summary>
+    private static Brush? BrushOf(string key) => Application.Current?.TryFindResource(key) as Brush;
 
     /// <summary>本机头像文件的解码：坏文件回 null，落回首字占位而不是把列表带崩。</summary>
     private static BitmapImage? FromPath(string? path)

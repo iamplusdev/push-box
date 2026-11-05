@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using Microsoft.Win32;
 
@@ -23,13 +24,36 @@ public static class ThemeManager
     private const string PersonalizePath = @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
     private const string LightValue = "AppsUseLightTheme";
 
-    private static readonly Uri Light =
-        new("pack://application:,,,/PushBox.Windows;component/Themes/Tokens.xaml");
+    private static readonly Uri Light = TokenDictionary("Tokens.xaml");
 
-    private static readonly Uri Dark =
-        new("pack://application:,,,/PushBox.Windows;component/Themes/Tokens.Dark.xaml");
+    private static readonly Uri Dark = TokenDictionary("Tokens.Dark.xaml");
+
+    /// <summary>
+    /// pack:// 这个 scheme 是 <see cref="Application"/> 的静态构造注册的，而这两个地址在
+    /// ThemeManager 被第一次碰到的那一刻就要解析。以前不显式注册，于是"谁第一个碰 ThemeManager"
+    /// 决定成败：2026-11-04 实测同一份代码有一跑 39 条用例红在 `UriFormatException: Invalid port`
+    /// （静态构造抛过一次，这个类型就永久废了），重跑又全绿——这种靠顺序成立的绿不能用。
+    /// <para>
+    /// 注册必须写在<b>这里</b>、而不是 <c>static ThemeManager()</c> 里：C# 把字段初始化放在静态构造体
+    /// <b>之前</b>跑，写在静态构造里等于在 `new Uri` 失败之后才补救——单跑 ThemeTest 那一组仍然全红，
+    /// 只有放在这两个地址的取数路径上才是"解析之前先注册"。它不建实例，
+    /// <see cref="Application.Current"/> 仍然是 null，<c>MarkdownStyle.FromResources</c> 那套兜底照旧。
+    /// </para>
+    /// </summary>
+    private static Uri TokenDictionary(string file)
+    {
+        RuntimeHelpers.RunClassConstructor(typeof(Application).TypeHandle);
+        return new Uri($"pack://application:,,,/PushBox.Windows;component/Themes/{file}");
+    }
 
     private static UserPreferenceChangedEventHandler? _watching;
+
+    /// <summary>
+    /// 现在铺的是不是深色那一份。<b>只给"颜色不是纯令牌"的那几处看</b>（目前是头像占位：浅色是白底配
+    /// 名字色首字，深色仍是定色底配白字），画刷能走 <c>DynamicResource</c> 的地方一律不许读它。
+    /// 名字不叫 <c>IsDark</c>：那已经是<b>读注册表值</b>的那个判定（<see cref="IsDark(object?)</see>）。
+    /// </summary>
+    public static bool IsDarkTheme { get; private set; }
 
     /// <summary>当前档位。系统事件不带"现在是哪一档"，所以只能由这里记着。</summary>
     private static ThemeChoice _choice = ThemeChoice.System;
@@ -60,18 +84,24 @@ public static class ThemeManager
         }
     }
 
-    /// <summary>把深色/浅色那份挪到最后（WPF 里后加入的字典覆盖先加入的同名键）。</summary>
+    /// <summary>把深色/浅色那份挪到最后（WPF 里后加入的字典覆盖先加入的同名键），并广播一次"换档了"。</summary>
     public static void Apply(bool dark)
     {
+        IsDarkTheme = dark;
         var owner = Application.Current?.Resources;
-        if (owner is null) return;
-        var previous = dark ? Light : Dark;
-        var current = dark ? Dark : Light;
-        owner.MergedDictionaries.Clear();
-        // 两份都留在里面、只换顺序：这样切换是幂等的，切回浅色也不用重新解析 XAML
-        owner.MergedDictionaries.Add(new ResourceDictionary { Source = previous });
-        owner.MergedDictionaries.Add(new ResourceDictionary { Source = current });
-        // 首启那一次也广播：窗口先 Show 后应用主题的话，它会错过一次重建，而它需要的正是"按现在这套色重画"
+        if (owner is not null)
+        {
+            var previous = dark ? Light : Dark;
+            var current = dark ? Dark : Light;
+            owner.MergedDictionaries.Clear();
+            // 两份都留在里面、只换顺序：这样切换是幂等的，切回浅色也不用重新解析 XAML
+            owner.MergedDictionaries.Add(new ResourceDictionary { Source = previous });
+            owner.MergedDictionaries.Add(new ResourceDictionary { Source = current });
+        }
+
+        // 广播看的是"档位变了"，不是"字典换了"：没有 App 实例的那条路（用例）也要收到，
+        // 否则那些按档自绘的控件在没有字典的世界里就永远画不出另一档。
+        // 首启那一次同样广播：窗口先 Show 后应用主题的话，它会错过一次重建，而它需要的正是"按现在这套色重画"
         Changed?.Invoke();
     }
 

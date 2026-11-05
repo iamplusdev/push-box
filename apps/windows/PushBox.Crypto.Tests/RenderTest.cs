@@ -14,6 +14,7 @@ using System.Windows.Threading;
 using PushBox.Windows.Controls;
 using PushBox.Windows.Data;
 using PushBox.Windows.Media;
+using PushBox.Windows.Themes;
 using PushBox.Windows.Views;
 // WPF 的控件体系里也有一个 MediaState，测试里要的始终是 PushBox 那一个
 using MediaState = PushBox.Windows.Media.MediaState;
@@ -353,6 +354,48 @@ public class MarkdownViewTest
             var rest = string.Concat(body.Inlines.OfType<Run>().Select(r => r.Text));
             Assert.Contains("部署完成", rest);
             Assert.DoesNotContain("\U0001F389", rest);
+        });
+    }
+
+    /// <summary>
+    /// 替换前那道"这一串里有没有 emoji"的预筛不能漏。一个都没命中时库仍然要把逐字符的
+    /// TextPointer 走查跑完（实测一条 1200 字的正文 14ms，替换 0 次；一屏十几条气泡各建两棵树，
+    /// 冷开一条会话就有 60ms 花在这里），所以 <see cref="EmojiText"/> 先问库自己那支正则。
+    /// 这条钉的是**等价**：同一串字，走预筛的树和直接进库的树，换出来的彩色字形个数必须一样。
+    /// 哪天库的判据和正则分叉了（升级、码位表换版），这里就红。
+    /// </summary>
+    [Fact]
+    public void TheEmojiPreScreenLetsThroughExactlyWhatTheLibraryWouldReplace()
+    {
+        Sta.Run(() =>
+        {
+            var samples = new[]
+            {
+                "部署完成", "第 12 条：disk /var 使用率 87%，节点 node-03",
+                "12:34:56 ERROR java.lang.NullPointerException at Foo.bar(Foo.java:42)",
+                "版本 v1.1.6 (2026-11-04) 已发布", "…「」《》、。？！——", "© 2026 iamplus",
+                "收到 \U0001F389", "构建失败 ⚠️ 磁盘余量 3%", "\U0001F468‍\U0001F469‍\U0001F467‍\U0001F466 一家四口",
+                "\U0001F1E8\U0001F1F3 上线", "1️⃣ 第一步", "\U0001F44D\U0001F3FB 带肤色",
+            };
+            foreach (var sample in samples)
+            {
+                var guarded = new TextBlock();
+                var direct = new TextBlock();
+                var a = new Run(sample);
+                var b = new Run(sample);
+                guarded.Inlines.Add(a);
+                direct.Inlines.Add(b);
+
+                EmojiText.Substitute(a);
+                Emoji.Wpf.FlowDocumentExtensions.SubstituteGlyphs(b);
+
+                Assert.Equal(direct.Inlines.OfType<InlineUIContainer>().Count(),
+                    guarded.Inlines.OfType<InlineUIContainer>().Count());
+            }
+
+            Assert.False(EmojiText.MatchesEmoji("第 12 条：使用率 87%"));
+            Assert.False(EmojiText.MatchesEmoji(string.Empty));
+            Assert.True(EmojiText.MatchesEmoji("收到 \U0001F389"));
         });
     }
 
@@ -992,16 +1035,59 @@ public class AvatarTest
         Sta.Run(() =>
         {
             // 没有 Loader（还没注册、或跑用例的这台机器根本没身份）时，这一格必须自己站住：
-            // 首字 + 名字定色的底，跟 Android 的 Avatar() 落不到图时是同一张脸
-            var box = new AvatarBox { DisplayName = "Grafana 告警", Side = 44 };
-            var shell = Assert.IsType<Border>(box.Children[0]);
-            Assert.Equal(new SolidColorBrush(AvatarVisual.ColorOf("Grafana 告警")).Color,
-                ((SolidColorBrush)shell.Background).Color);
-            Assert.Equal("G", ((TextBlock)shell.Child).Text);
+            // 首字永远在，颜色按档分家——浅色白底配名字色的字，深色定色底配白字（与 Android 同脸）
+            var tint = new SolidColorBrush(AvatarVisual.ColorOf("Grafana 告警"));
+            try
+            {
+                ThemeManager.Apply(true);
+                var dark = (Border)new AvatarBox { DisplayName = "Grafana 告警", Side = 44 }.Children[0];
+                Assert.Equal(tint.Color, ((SolidColorBrush)dark.Background).Color);
+                Assert.Equal("G", ((TextBlock)dark.Child).Text);
+                Assert.Equal(Colors.White, ((SolidColorBrush)((TextBlock)dark.Child).Foreground).Color);
+                Assert.Null(dark.BorderBrush);
 
-            // 换人重画：底色与首字跟着新的显示名走，而不是留着上一张
+                ThemeManager.Apply(false);
+                var light = (Border)new AvatarBox { DisplayName = "Grafana 告警", Side = 44 }.Children[0];
+                Assert.Equal(Colors.White, ((SolidColorBrush)light.Background).Color);
+                Assert.Equal(tint.Color, ((SolidColorBrush)((TextBlock)light.Child).Foreground).Color);
+            }
+            finally
+            {
+                ThemeManager.Apply(false);
+            }
+
+            // 换人重画：首字与那支颜色都跟着新的显示名走，而不是留着上一张
+            var box = new AvatarBox { DisplayName = "Grafana 告警", Side = 44 };
             box.DisplayName = "push-bot";
-            Assert.Equal("P", ((TextBlock)((Border)box.Children[0]).Child).Text);
+            var repainted = (TextBlock)((Border)box.Children[0]).Child;
+            Assert.Equal("P", repainted.Text);
+            Assert.Equal(new SolidColorBrush(AvatarVisual.ColorOf("push-bot")).Color,
+                ((SolidColorBrush)repainted.Foreground).Color);
+        });
+    }
+
+    [Fact]
+    public void AnAvatarAlreadyPaintedRepaintsWhenTheThemeSwitches()
+    {
+        Sta.Run(() =>
+        {
+            // 深浅色切换时窗口的 Refresh() 只重排数据：虚拟化的会话行是**复用**的，格子里的 DisplayName
+            // 没变就不会触发依赖属性回调。白底/定色底这一翻必须由控件自己跟着 ThemeManager.Changed 走
+            var box = new AvatarBox { DisplayName = "Grafana 告警", Side = 44 };
+            box.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+            var painted = box.Children[0];
+            try
+            {
+                ThemeManager.Apply(true);
+                var shell = Assert.IsType<Border>(box.Children[0]);
+                Assert.NotSame(painted, shell);
+                Assert.Equal(new SolidColorBrush(AvatarVisual.ColorOf("Grafana 告警")).Color,
+                    ((SolidColorBrush)shell.Background).Color);
+            }
+            finally
+            {
+                ThemeManager.Apply(false);
+            }
         });
     }
 
