@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
@@ -35,7 +36,27 @@ public sealed class AvatarBox : Grid
     public static event Action<string>? Invalidated;
 
     /// <summary>装配层收到"帧里带着 sender_avatar"时调这里（另一端是 <see cref="MediaLoader.AvatarInvalidated"/>）。</summary>
-    public static void Invalidate(string token) => Invalidated?.Invoke(token);
+    public static void Invalidate(string token)
+    {
+        // 记一笔代数再广播：退订中的那些格子中不了这一枪，只能在回到屏上时靠这个数发现自己画旧了
+        lock (RevisionGate)
+            Revisions[token] = Revisions.TryGetValue(token, out var revision) ? revision + 1 : 1;
+        Invalidated?.Invoke(token);
+    }
+
+    /// <summary>
+    /// 每个 token 作废过几次。<b>缓存里那棵气泡树离开可视树时就退订了</b>（订阅跟着进出走，
+    /// 见构造函数那段），而 <c>BubbleCache</c> 把它接回屏上时 <c>Token</c> 一个字都没变，
+    /// 依赖属性回调也不会来——没有这份代数的话，换掉之前的那张脸会一直挂在那一格上。
+    /// 只记"被作废过"的 token，所以这张表的大小就是"本机见过换头像的发送者数"。
+    /// </summary>
+    private static readonly Dictionary<string, int> Revisions = new(StringComparer.Ordinal);
+    private static readonly object RevisionGate = new();
+
+    private static int RevisionOf(string token)
+    {
+        lock (RevisionGate) return Revisions.TryGetValue(token, out var revision) ? revision : 0;
+    }
 
     public static readonly DependencyProperty DisplayNameProperty = DependencyProperty.Register(
         nameof(DisplayName), typeof(string), typeof(AvatarBox), new PropertyMetadata(string.Empty, OnShapeChanged));
@@ -81,6 +102,9 @@ public sealed class AvatarBox : Grid
     /// <summary>这一次请求是为哪个 token 发的：续延回来时换人了就把那份字节丢掉。</summary>
     private string? _waiting;
 
+    /// <summary>这一格上一次开画时那个 token 的代数。与当前代数对不上就是"画着换掉之前那张脸"。</summary>
+    private int _paintedRevision;
+
     public AvatarBox()
     {
         // 订阅跟着可视树的进出走：会话列表每次重画都换一批格子，构造函数里订阅而不在这里退订，
@@ -91,6 +115,9 @@ public sealed class AvatarBox : Grid
             Invalidated += OnInvalidated;
             ThemeManager.Changed -= OnThemeChanged;
             ThemeManager.Changed += OnThemeChanged;
+            // 出去那一趟错过的广播在这儿补：气泡树在 <c>BubbleCache</c> 里躺着的时候是退订状态，
+            // 回屏时 Token 没变、依赖属性回调不来，只有这一个时机还能救那一格
+            if (RevisionOf((Token ?? string.Empty).Trim()) != _paintedRevision) Render();
         };
         Unloaded += (_, _) =>
         {
@@ -135,6 +162,9 @@ public sealed class AvatarBox : Grid
         Children.Clear();
         // 重画就是"这一格换了人"：还在飞的那一次回来时 _waiting 已经不是它了，直接扔
         _waiting = null;
+        var token = (Token ?? string.Empty).Trim();
+        // 开画这一刻的代数要记下：下一次进可视树时靠它判"这一格要不要重来"
+        _paintedRevision = RevisionOf(token);
 
         var tint = new SolidColorBrush(AvatarVisual.ColorOf(DisplayName));
         // 两档各一张脸：浅色主题这一格是白的（首字改用名字那支色，否则白字压在白底上什么都看不见），
@@ -168,7 +198,6 @@ public sealed class AvatarBox : Grid
             return;
         }
 
-        var token = (Token ?? string.Empty).Trim();
         if (token.Length == 0 || Loader == null) return;
         _waiting = token;
         FetchAsync(shell, token);

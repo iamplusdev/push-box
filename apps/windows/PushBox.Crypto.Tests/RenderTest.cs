@@ -1120,6 +1120,42 @@ public class AvatarTest
         });
     }
 
+    [Fact]
+    public void ACachedBubbleThatMissedTheBroadcastRepaintsWhenItComesBack()
+    {
+        Sta.Run(() =>
+        {
+            // 订阅跟着可视树进出走，所以躺在 BubbleCache 里的那棵树是聋的。切回那条会话时它是被
+            // **原样接回屏上**的：Token 一个字没变、依赖属性回调不来，没有 token 代数的话，
+            // 那一格会把换掉之前那张脸一直挂着，直到用户重启进程
+            var file = WritePng();
+            var token = "re-attached-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                var box = new AvatarBox { DisplayName = "Grafana", Token = token, LocalPath = file };
+                box.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+                var painted = box.Children[0];
+
+                box.RaiseEvent(new RoutedEventArgs(FrameworkElement.UnloadedEvent));
+                AvatarBox.Invalidate(token);
+                Assert.Same(painted, box.Children[0]);
+
+                box.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+                Assert.NotSame(painted, box.Children[0]);
+
+                // 代数追平之后不该再重画：每次滚进滚出都重取一次字节等于把第 2 步省的活又加回来
+                var repainted = box.Children[0];
+                box.RaiseEvent(new RoutedEventArgs(FrameworkElement.UnloadedEvent));
+                box.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+                Assert.Same(repainted, box.Children[0]);
+            }
+            finally
+            {
+                File.Delete(file);
+            }
+        });
+    }
+
     /// <summary>一张能解开的小 PNG：走本地头像那条路要真的解出像素，落到占位分支就不算数了。</summary>
     private static string WritePng()
     {
