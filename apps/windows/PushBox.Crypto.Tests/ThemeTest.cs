@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using PushBox.Windows.Controls;
 using PushBox.Windows.Themes;
 using Xunit;
 
@@ -90,8 +91,8 @@ public class ThemeTest
         // 选中行是比列表底深一档的灰（微信 PC 那档），整行染绿太吵；accent 只留在 3px 竖条上
         ["Bg.Selected"] = "#E2E2E2",
         ["Bg.AccentTint"] = "#E6F9EF",
-        // 正文拖选的底：独立一支偏蓝的浅底，不再复用上面那支淡绿
-        ["Bg.TextSelection"] = "#BFE0FF",
+        // 正文拖选的底：饱和蓝，靠 SelectableBody 那层 0.35 的不透明度透出来（淡 tint 盖不住字也淡不出边界）
+        ["Bg.TextSelection"] = "#1A73E8",
         ["Fg.Primary"] = "#19191A",
         // 13px 次要字要落在页面/卡片/列表三种底上，4.5:1 的门槛由这个深度兜住
         ["Fg.Secondary"] = "#5F5F5F",
@@ -136,8 +137,8 @@ public class ThemeTest
         ["Bg.SenderList"] = "#1E1E1E",
         ["Bg.Selected"] = "#2E2E2E",
         ["Bg.AccentTint"] = "#223B2C",
-        // 深色那一边同理偏蓝，而且要压得住 #E0E0E0 的正文
-        ["Bg.TextSelection"] = "#2F5C8E",
+        // 深色那一边同理走蓝，但要更亮一档：叠在 #2A2A2C 上出来是 #425A75，正文 #E0E0E0 还剩 4.5:1
+        ["Bg.TextSelection"] = "#6FB4FF",
         ["Fg.Primary"] = "#E0E0E0",
         ["Fg.Secondary"] = "#9E9E9E",
         // 深底上 #0A8F4A 只有 3.7:1，得提亮到 #3FBF7A（6.6:1）才能当正文色
@@ -223,25 +224,44 @@ public class ThemeTest
     }
 
     /// <summary>
-    /// 正文拖选的高亮底要同时满足两件事，缺一件就是"选了看不出选了哪里"：
-    /// ① 正文色压上去够得着 4.5:1（WCAG AA，选中期间字还要能读）；
-    /// ② 与底色拉开色相——判据取"蓝减红 ≥ 0x20"，因为它专门拦住淡绿/淡灰那一族：
-    /// 原来复用 <c>Bg.AccentTint</c>（浅 #E6F9EF、深 #223B2C）时这个差只有 9 和 10，
-    /// 和气泡底只差一档色相偏移，肉眼分不出边界（2026-10-27 的实测抱怨）。
+    /// 正文拖选那一层要同时满足三件事，缺一件屏幕上就不对：
+    /// ① <b>选中期间字还读得清</b>——WPF 把高亮画在<b>字形之上</b>，所以"字那一格"是选择底色按
+    /// <see cref="SelectableBody.SelectionHighlightOpacity"/> 压在正文色上、"空白那一格"是同一支压在气泡底上，
+    /// 两者对比度要够得着 4.5:1（WCAG AA）。原来这条判据写的是"token 色对 Fg.Primary ≥ 4.5"，
+    /// 那是按"字铺在高亮上"算的，方向反了——所以它一直绿着，屏幕上字却被纯色盖住（2026-11-04 的实测抱怨）。
+    /// ② 边界够拉开：带底对气泡底 ≥ 1.4:1；
+    /// ③ 色相也拉开——"蓝减红 ≥ 0x20"专门拦淡绿/淡灰那一族：原来复用 <c>Bg.AccentTint</c>
+    /// （浅 #E6F9EF、深 #223B2C）时这个差只有 9 和 10，肉眼分不出边界（2026-10-27 的实测抱怨）。
+    /// 真正"字在不在"的那一帧由 SelectableBodyTest.SelectedGlyphsSurviveTheHighlight 逐像素量，
+    /// 这里算的是这笔账能不能在改 token 或改不透明度时立刻响。
     /// </summary>
     [Fact]
-    public void TheDragSelectionBackgroundStaysReadableOverBodyText()
+    public void TheDragSelectionWashLeavesTheBodyTextReadable()
     {
         foreach (var file in new[] { Light, Dark })
         {
             var tokens = TokenFiles.Read(file);
-            var selection = tokens["Bg.TextSelection"];
-            var ratio = Contrast(selection, tokens["Fg.Primary"]);
-            Assert.True(ratio >= 4.5, $"{file}: 正文压在选择底上只有 {ratio:0.0}:1");
-            var blueMinusRed = Convert.ToInt32(selection.Substring(5, 2), 16)
-                             - Convert.ToInt32(selection.Substring(1, 2), 16);
+            var opacity = SelectableBody.SelectionHighlightOpacity;
+            var wash = tokens["Bg.TextSelection"];
+            var glyph = Overlay(wash, tokens["Fg.Primary"], opacity);
+            var band = Overlay(wash, tokens["Bg.Bubble.In"], opacity);
+
+            var readable = Contrast(glyph, band);
+            Assert.True(readable >= 4.5, $"{file}: 选中期间正文只有 {readable:0.0}:1（字形格 {glyph} vs 带底格 {band}，不透明度 {opacity}）");
+            var edge = Contrast(band, tokens["Bg.Bubble.In"]);
+            Assert.True(edge >= 1.4, $"{file}: 选区边界只有 {edge:0.00}:1（{band} vs 气泡底），看不出选了哪里");
+            var blueMinusRed = Convert.ToInt32(band.Substring(5, 2), 16)
+                             - Convert.ToInt32(band.Substring(1, 2), 16);
             Assert.True(blueMinusRed >= 0x20, $"{file}: 选择底没跟底色拉开色相，蓝减红只有 {blueMinusRed}");
         }
+    }
+
+    /// <summary>一层半透明的颜色叠在某种底上，屏幕上那一格出来是什么色——就是按不透明度做一次加权。</summary>
+    private static string Overlay(string top, string under, double opacity)
+    {
+        static byte Channel(string hex, int at) => Convert.ToByte(hex.Substring(at, 2), 16);
+        byte Mix(int at) => (byte)Math.Round(opacity * Channel(top, at) + (1 - opacity) * Channel(under, at));
+        return $"#{Mix(1):X2}{Mix(3):X2}{Mix(5):X2}";
     }
 
     /// <summary>WCAG 的相对亮度：三通道先线性化再加权。上面的 <see cref="Luminance"/> 直接按 0-255 加权，

@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using PushBox.Windows.Controls;
 using PushBox.Windows.Data;
 using Xunit;
@@ -230,11 +231,10 @@ public class SelectableBodyTest
         });
     }
 
-    /// <summary>拖选底色用的是它自己那一支，不是角标的淡绿。
-    /// 这一条只锁"从 MarkdownStyle 走到了 FlowDocumentScrollViewer"，够不够蓝由
-    /// <see cref="ThemeTest.TheDragSelectionBackgroundStaysReadableOverBodyText"/> 那头按 token 值断。</summary>
+    /// <summary>拖选底色用的是它自己那一支，不是角标的淡绿，而且必须停在"字留得下来"的那一档不透明度。
+    /// 配色够不够蓝由 <see cref="ThemeTest"/> 按 token 值算，屏幕上字在不在由下面那条逐像素量。</summary>
     [Fact]
-    public void TheSelectionHighlightIsItsOwnBrushAtFullOpacity()
+    public void TheSelectionHighlightIsItsOwnBrushAndStaysTranslucent()
     {
         Sta.Run(() =>
         {
@@ -242,9 +242,154 @@ public class SelectableBodyTest
             Assert.Same(Style.TextSelection, body.SelectionBrush);
             // 反向判据：这一轮之前挂的就是角标那支淡绿，压在气泡底上看不出选了哪里
             Assert.NotSame(Style.BadgeBackground, body.SelectionBrush);
-            // 默认那支是半透明的，叠在气泡底上会褪成没有边界
-            Assert.Equal(1d, body.SelectionOpacity);
+            // 高亮画在字形之上：这一层一旦不透明，整段字就被刷成选择底色（2026-11-04 的实测抱怨）
+            Assert.Equal(SelectableBody.SelectionHighlightOpacity, body.SelectionOpacity);
+            Assert.True(body.SelectionOpacity <= 0.5, $"不透明度 {body.SelectionOpacity} 高到会把字盖掉");
         });
+    }
+
+    /// <summary>
+    /// 屏幕上真实那一帧：把气泡摆进一扇离屏窗口、选满整段正文，逐像素数"选之前是字的像素里有多少还是字"。
+    /// 判据落在像素上而不是配色表上，因为这一轮的坑正是"token 的对比度算着够、屏幕上字却没了"——
+    /// WPF 把选区高亮画在<b>字形之上</b>，不透明度 1 时浅色与深色两档都有 100% 的字形像素被刷成选择底色。
+    /// 焦点那一路也单独量：失焦时走的是 <c>IsInactiveSelectionHighlightEnabled</c> 那一支，
+    /// 它一旦改用系统的 InactiveSelectionHighlight（不透明蓝），字同样会没。
+    /// </summary>
+    [Fact]
+    public void SelectedGlyphsSurviveTheHighlight()
+    {
+        foreach (var file in new[] { "Themes/Tokens.xaml", "Themes/Tokens.Dark.xaml" })
+        {
+            foreach (var withFocus in new[] { true, false })
+            {
+                (int survived, int total) measured = default;
+                Sta.Run(() => measured = GlyphsUnderHighlight(file, withFocus));
+                Assert.True(measured.total > 500, $"{file}: 这一帧没量到字（{measured.total} 个像素），是测量本身坏了");
+                Assert.True(measured.survived >= measured.total * 0.9,
+                    $"{file} 焦点={withFocus}：选中后 {measured.total - measured.survived}/{measured.total} " +
+                    "个字形像素被高亮刷掉了，屏幕上就是'字被纯色盖住'");
+            }
+        }
+    }
+
+    /// <summary>用两份 token 各自的真实配色渲一帧，比"选之前/选之后"的字形像素。</summary>
+    private static (int survived, int total) GlyphsUnderHighlight(string tokenFile, bool withFocus)
+    {
+        var tokens = TokenFiles.Read(tokenFile);
+        Color Hex(string key) => (Color)ColorConverter.ConvertFromString(tokens[key]);
+        var (ink, bubble, wash) = (Hex("Fg.Primary"), Hex("Bg.Bubble.In"), Hex("Bg.TextSelection"));
+        var style = Paint.Style() with { Text = Opaque(ink), TextSelection = Opaque(wash) };
+
+        // 八遍而不是四遍：这一格句子在 400px 宽、Display 排版下每字只留 5 个笔画核心像素，
+        // 四遍（68 字）量到 365 个，落不进"总量 >500 才算量到了"那条判据——不是字少了，是样本少了。
+        var body = new SelectableBody(new MarkdownBlock[]
+        {
+            new MarkdownParagraph(string.Concat(Enumerable.Repeat("拖选的这一行要有边界，正文要能读清。", 8)))
+        }, style);
+        var window = new Window
+        {
+            WindowStyle = WindowStyle.None,
+            ShowInTaskbar = false,
+            ShowActivated = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -10000,
+            Top = -10000,
+            Width = 400,
+            Height = 300,
+            Background = Opaque(bubble),
+            Content = new Grid { Background = Opaque(bubble), Children = { body } }
+        };
+        // 与窗口那一路同一套排版开关：标尺与文档都按 Display 取整，字形像素才对得上
+        TextOptions.SetTextFormattingMode(window, TextFormattingMode.Display);
+        window.UseLayoutRounding = true;
+        try
+        {
+            window.Show();
+            Sta.PumpUntil(() => window.IsLoaded && body.ActualHeight > 0);
+            WaitForFrames(4);
+            var before = Capture(window, out var w, out var h, out var stride);
+
+            var viewer = Tree.First<FlowDocumentScrollViewer>(body);
+            if (withFocus) viewer.Focus();
+            body.Selection.Select(body.Document.ContentStart, body.Document.ContentEnd);
+            WaitForFrames(4);
+            var after = Capture(window, out _, out _, out var strideAfter);
+
+            var total = 0;
+            var survived = 0;
+            for (var y = 0; y < h; y++)
+            {
+                for (var x = 0; x < w; x++)
+                {
+                    if (!IsGlyphCore(before, stride, x, y, ink)) continue;
+                    total++;
+                    if (ReadsAsGlyph(after, strideAfter, x, y, ink, wash)) survived++;
+                }
+            }
+
+            return (survived, total);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static SolidColorBrush Opaque(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
+    }
+
+    private static byte[] Capture(Window window, out int width, out int height, out int stride)
+    {
+        var root = (FrameworkElement)PresentationSource.FromVisual(window)!.RootVisual;
+        width = (int)Math.Ceiling(root.ActualWidth);
+        height = (int)Math.Ceiling(root.ActualHeight);
+        stride = width * 4;
+        var pixels = new byte[height * stride];
+        var target = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+        target.Render(root);
+        target.CopyPixels(pixels, stride, 0);
+        return pixels;
+    }
+
+    /// <summary>等几帧真的合成出来：只泵 dispatcher 会抓到"选区刚失效、文字还没重画"的那一帧。</summary>
+    private static void WaitForFrames(int count)
+    {
+        var frames = 0;
+        void Handler(object? sender, EventArgs args) => frames++;
+        CompositionTarget.Rendering += Handler;
+        Sta.PumpUntil(() => frames >= count);
+        CompositionTarget.Rendering -= Handler;
+    }
+
+    private static Color Pixel(byte[] pixels, int stride, int x, int y)
+    {
+        var i = y * stride + x * 4;
+        return Color.FromArgb(pixels[i + 3], pixels[i + 2], pixels[i + 1], pixels[i]);
+    }
+
+    private static int Distance(Color a, Color b) =>
+        Math.Abs(a.R - b.R) + Math.Abs(a.G - b.G) + Math.Abs(a.B - b.B);
+
+    /// <summary>基线里"笔画中间那一格"：几乎就是正文色本身的像素。挑这一批而不是所有偏暗的像素，
+    /// 是因为抗锯齿的边缘格在两帧之间本来就会抖，只有笔画中间这一格是"字在不在"的硬证据。
+    /// 透明像素（没画到的那一圈）在 Pbgra32 里读出来是纯黑，不排掉就会把窗口边角当成字。</summary>
+    private static bool IsGlyphCore(byte[] pixels, int stride, int x, int y, Color ink)
+    {
+        var c = Pixel(pixels, stride, x, y);
+        return c.A > 250 && Distance(c, ink) <= 45;
+    }
+
+    /// <summary>选中之后这一格更像字、还是更像选择底色？高亮一旦不透明，笔画中间就被整格刷成后者——
+    /// 屏幕上就是"字被纯色盖住"（2026-11-04 的实测抱怨）。判据必须拿选择底色一起比：
+    /// 只拿正文色和气泡底比的话，#1A73E8 这一支饱和蓝离正文更近，会被错算成"字还在"。</summary>
+    private static bool ReadsAsGlyph(byte[] pixels, int stride, int x, int y, Color ink, Color wash)
+    {
+        var c = Pixel(pixels, stride, x, y);
+        return c.A > 250 && Distance(c, ink) < Distance(c, wash);
     }
 
     [Fact]

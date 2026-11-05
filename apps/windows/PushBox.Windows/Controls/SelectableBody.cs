@@ -31,6 +31,22 @@ public sealed class SelectableBody : Decorator
     /// </summary>
     private const double HugSlack = 1;
 
+    /// <summary>
+    /// 拖选高亮叠在正文上的那层不透明度。
+    /// <para>
+    /// WPF 把选区高亮画在<b>字形之上</b>（实测：离屏窗口选满一段正文再逐像素比对，
+    /// <c>SelectionOpacity = 1</c> 时浅色与深色两档都有 <b>100%</b> 的字形像素被刷成选择底色本身，
+    /// 屏幕上"选中字=无"；把不透明度降到 0.35 以下，同一批像素一行不少地留在原处）。
+    /// 所以这一层必须半透明，"选中之后字还在"没有第二条路。
+    /// </para>
+    /// <para>
+    /// 0.35 是两头一起量的结果：边界（带底对气泡底）浅色 1.54:1、深色 2.02:1，够看出选了哪里；
+    /// 可读性（字对带底）浅色 6.2:1、深色 4.5:1，都还在 WCAG AA 之上。再往 0.5 走可读性就掉到 4.1
+    /// 以下，再往 0.25 走边界就淡回去了。这两笔账由 ThemeTest 按同一个常数算，改这里它一定跟着响。
+    /// </para>
+    /// </summary>
+    public const double SelectionHighlightOpacity = 0.35;
+
     private readonly FrameworkElement _ruler;
     private readonly FlowDocument _document;
     private readonly FlowDocumentScrollViewer _viewer;
@@ -48,9 +64,10 @@ public sealed class SelectableBody : Decorator
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
             IsSelectionEnabled = true,
             IsInactiveSelectionHighlightEnabled = true,
-            // 选中底色走独立的拖选 token，且不透明：默认那层半透明叠在气泡底上几乎看不出选到哪儿了
+            // 选择底色是一支饱和蓝（不是淡 tint）：它要透过 0.35 的不透明度还跟气泡底拉开色相，
+            // 而字靠这层半透明留在下面，见 SelectionHighlightOpacity
             SelectionBrush = style.TextSelection,
-            SelectionOpacity = 1,
+            SelectionOpacity = SelectionHighlightOpacity,
             IsTabStop = false,
             Focusable = true,
             Padding = new Thickness(0),
@@ -79,7 +96,8 @@ public sealed class SelectableBody : Decorator
     /// <summary>这一棵树实际用到的选中底色。用例据此断"配色从 token 走到了控件"，而不是只停在字典里。</summary>
     public Brush SelectionBrush => _viewer.SelectionBrush;
 
-    /// <summary>选中底的不透明度。默认那支是半透明的，叠在气泡底上会褪成看不出边界，所以这里必须是 1。</summary>
+    /// <summary>选中底的不透明度。高亮画在字形之上，所以这个数就是"选中后字还读不读得清"本身，
+    /// 见 <see cref="SelectionHighlightOpacity"/>。</summary>
     public double SelectionOpacity => _viewer.SelectionOpacity;
 
     /// <summary>当前拖选到的文字（空选 = 空串）。尾部的段落换行去掉——用户复制走的不是那两个字符。</summary>

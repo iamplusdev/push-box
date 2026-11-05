@@ -24,10 +24,12 @@
     <SolidColorBrush x:Key="Bg.Selected" Color="#E2E2E2" />
     <!-- 选中项/开关的浅绿底：accent 只做圆点与文字，整块铺绿太吵 -->
     <SolidColorBrush x:Key="Bg.AccentTint" Color="#E6F9EF" />
-    <!-- 正文拖选的高亮底。不复用 Bg.AccentTint：那支绿和气泡底 #E8E8EA 只差一档色相偏移，
-         铺在正文上"选中了哪里"根本读不出来（2026-10-27 的实测抱怨）。走偏蓝是因为选中态在
-         任何主题里都不该和"品牌绿"或"底色"混在一起，且 #19191A 的正文压上去仍有 12.8:1。 -->
-    <SolidColorBrush x:Key="Bg.TextSelection" Color="#BFE0FF" />
+    <!-- 正文拖选的高亮底。WPF 把这层高亮画在字形之上，所以它只能是"一支饱和色 + 半透明"：
+         淡 tint 要够淡才看得清字，够淡就又贴不回气泡底（2026-10-27 抱怨看不出边界、2026-11-04 抱怨
+         纯色盖住字，两头其实是同一条没认清的机制）。这里给饱和的蓝，叠上去之后带底对气泡底 1.54:1、
+         字对带底 6.2:1，不透明度那一档由 SelectableBody.SelectionHighlightOpacity 定，ThemeTest 按它算账。
+         不复用 Bg.AccentTint：那支绿和气泡底 #E8E8EA 只差一档色相偏移，铺在正文上读不出选了哪里。 -->
+    <SolidColorBrush x:Key="Bg.TextSelection" Color="#1A73E8" />
 
     <!-- 文字颜色。#5F5F5F 是对比度兜底：13px 次要字落在 #E0E0E0 那类底上时，
          原来的 #757575 只有 3.5:1；#5F5F5F 在页面/卡片/列表三种底上都在 5:1 以上 -->
